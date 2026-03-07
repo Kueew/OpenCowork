@@ -9,10 +9,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com).
 - **Agent change tracking** — new file change tracking system that records all file modifications during agent runs, enabling review, accept, and rollback operations.
 - **RunChangeReviewCard component** — dedicated UI for reviewing changes made by agents with accept/rollback controls.
 - **Change tracking integration** — file write operations now automatically track changes via IPC handlers.
+- **SSH change tracking** — extended change tracking to support SSH remote file operations, enabling review and rollback of changes made on remote hosts.
 
 ### Changed
 - **Code formatting** — cleaned up code formatting and improved readability across multiple files including `agent-change-handlers.ts`, `fs-handlers.ts`, and various React components.
 - **State management** — enhanced `useAgentStore` to manage run change sets with methods for accepting and rolling back changes.
+- **Change status workflow** — added `partial`, `reverting`, and `conflicted` states to handle complex change scenarios like merge conflicts during rollback.
+- **Plugin auto-reply integration** — integrated change tracking into plugin auto-reply workflow for better oversight of automated file modifications.
+- **System prompt SSH context** — improved environment context detection for SSH sessions with path style inference.
 
 ## [0.4.4] - 2026-03-07
 
