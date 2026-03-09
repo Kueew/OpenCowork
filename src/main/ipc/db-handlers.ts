@@ -5,6 +5,7 @@ import * as projectsDao from '../db/projects-dao'
 import * as messagesDao from '../db/messages-dao'
 import * as plansDao from '../db/plans-dao'
 import * as tasksDao from '../db/tasks-dao'
+import * as drawRunsDao from '../db/draw-runs-dao'
 
 export function registerDbHandlers(): void {
   // Initialize DB on registration
@@ -111,7 +112,8 @@ export function registerDbHandlers(): void {
         const project = projectsDao.getProject(projectId)
         if (project) {
           if (workingFolder === undefined) workingFolder = project.working_folder ?? undefined
-          if (sshConnectionId === undefined) sshConnectionId = project.ssh_connection_id ?? undefined
+          if (sshConnectionId === undefined)
+            sshConnectionId = project.ssh_connection_id ?? undefined
         }
       }
 
@@ -119,7 +121,7 @@ export function registerDbHandlers(): void {
         ...session,
         projectId,
         workingFolder,
-        sshConnectionId,
+        sshConnectionId
       })
       return { success: true }
     }
@@ -196,7 +198,7 @@ export function registerDbHandlers(): void {
           updatedAt: msg.createdAt,
           projectId: project.id,
           workingFolder: project.working_folder ?? undefined,
-          sshConnectionId: project.ssh_connection_id ?? undefined,
+          sshConnectionId: project.ssh_connection_id ?? undefined
         })
       }
       messagesDao.addMessage(msg)
@@ -227,6 +229,43 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle('db:messages:count', (_event, sessionId: string) => {
     return messagesDao.getMessageCount(sessionId)
+  })
+
+  // --- Draw Runs ---
+
+  ipcMain.handle('db:draw-runs:list', () => {
+    return drawRunsDao.listDrawRuns()
+  })
+
+  ipcMain.handle(
+    'db:draw-runs:save',
+    (
+      _event,
+      run: {
+        id: string
+        prompt: string
+        providerName: string
+        modelName: string
+        createdAt: number
+        isGenerating: boolean
+        imagesJson: string
+        errorJson?: string | null
+        updatedAt: number
+      }
+    ) => {
+      drawRunsDao.saveDrawRun(run)
+      return { success: true }
+    }
+  )
+
+  ipcMain.handle('db:draw-runs:delete', (_event, id: string) => {
+    drawRunsDao.deleteDrawRun(id)
+    return { success: true }
+  })
+
+  ipcMain.handle('db:draw-runs:clear', () => {
+    drawRunsDao.clearDrawRuns()
+    return { success: true }
   })
 
   // --- Plans ---

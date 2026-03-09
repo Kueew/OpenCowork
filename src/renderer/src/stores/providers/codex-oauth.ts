@@ -214,7 +214,6 @@ export const codexOAuthPreset: BuiltinProviderPreset = {
         reasoningEffortLevels: ['minimal', 'low', 'medium', 'high', 'xhigh'],
         defaultReasoningEffort: 'medium'
       },
-      responseSummary: 'detailed',
       enablePromptCache: true,
       enableSystemPromptCache: true,
       type: 'openai-responses'

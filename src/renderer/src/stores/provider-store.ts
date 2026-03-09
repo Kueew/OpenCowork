@@ -497,16 +497,19 @@ export const useProviderStore = create<ProviderStore>()(
         if (!provider) return null
         const activeModel = provider.models.find((m) => m.id === activeModelId)
 
-        // Override provider type for image category models
+        // Image models should respect explicit protocol overrides (e.g. Gemini).
+        // Fall back to OpenAI Images only when an image model has no explicit type.
         let requestType = activeModel?.type ?? provider.type
-        if (activeModel?.category === 'image') {
+        if (activeModel?.category === 'image' && !activeModel?.type) {
           requestType = 'openai-images'
-          console.log('[Provider Store] Image model detected, routing to openai-images provider', {
-            modelId: activeModelId,
-            originalType: activeModel?.type,
-            providerType: provider.type,
-            finalType: requestType
-          })
+          console.log(
+            '[Provider Store] Image model without explicit type, routing to openai-images provider',
+            {
+              modelId: activeModelId,
+              providerType: provider.type,
+              finalType: requestType
+            }
+          )
         }
 
         const normalizedBaseUrl = provider.baseUrl
@@ -590,15 +593,15 @@ export const useProviderStore = create<ProviderStore>()(
         if (!provider) return null
         const model = provider.models.find((m) => m.id === modelId)
 
-        // Override provider type for image category models
+        // Image models should respect explicit protocol overrides (e.g. Gemini).
+        // Fall back to OpenAI Images only when an image model has no explicit type.
         let requestType = model?.type ?? provider.type
-        if (model?.category === 'image') {
+        if (model?.category === 'image' && !model?.type) {
           requestType = 'openai-images'
           console.log(
-            '[Provider Store] Image model detected in getProviderConfigById, routing to openai-images provider',
+            '[Provider Store] Image model without explicit type in getProviderConfigById, routing to openai-images provider',
             {
               modelId,
-              originalType: model?.type,
               providerType: provider.type,
               finalType: requestType
             }
@@ -650,15 +653,15 @@ export const useProviderStore = create<ProviderStore>()(
               resolveProviderDefaultModelId(provider)) || ''
         const fastModel = provider.models.find((m) => m.id === model)
 
-        // Override provider type for image category models
+        // Image models should respect explicit protocol overrides (e.g. Gemini).
+        // Fall back to OpenAI Images only when an image model has no explicit type.
         let requestType = fastModel?.type ?? provider.type
-        if (fastModel?.category === 'image') {
+        if (fastModel?.category === 'image' && !fastModel?.type) {
           requestType = 'openai-images'
           console.log(
-            '[Provider Store] Image model detected in getFastProviderConfig, routing to openai-images provider',
+            '[Provider Store] Image model without explicit type in getFastProviderConfig, routing to openai-images provider',
             {
               modelId: model,
-              originalType: fastModel?.type,
               providerType: provider.type,
               finalType: requestType
             }

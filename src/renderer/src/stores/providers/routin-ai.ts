@@ -613,7 +613,6 @@ export const routinAiPreset: BuiltinProviderPreset = {
         reasoningEffortLevels: ['minimal', 'low', 'medium', 'high', 'xhigh'],
         defaultReasoningEffort: 'medium'
       },
-      responseSummary: 'detailed',
       enablePromptCache: true,
       enableSystemPromptCache: true,
       type: 'openai-responses'
@@ -751,6 +750,50 @@ export const routinAiPreset: BuiltinProviderPreset = {
       supportsFunctionCall: true,
       inputPrice: 2,
       outputPrice: 12
+    },
+    {
+      id: 'gemini-3-flash-preview',
+      name: 'Gemini 3 flash Preview',
+      icon: 'gemini',
+      enabled: true,
+      contextLength: 1_048_576,
+      maxOutputTokens: 65_536,
+      supportsVision: true,
+      supportsFunctionCall: true,
+      inputPrice: 0.5,
+      outputPrice: 3
+    },
+    {
+      id: 'gemini-3.1-flash-lite-preview',
+      name: 'Gemini 3.1 flash Lite Preview',
+      icon: 'gemini',
+      enabled: true,
+      contextLength: 1_048_576,
+      maxOutputTokens: 65_536,
+      supportsVision: true,
+      supportsFunctionCall: true,
+      inputPrice: 0.2,
+      outputPrice: 1.5
+    },
+    {
+      id: 'gemini-3.1-flash-image-preview',
+      name: 'Gemini 3.1 Flash Image Preview',
+      icon: 'gemini',
+      enabled: true,
+      category: 'image',
+      type: 'gemini',
+      supportsVision: true,
+      supportsFunctionCall: false,
+    },
+    {
+      id: 'gemini-3-pro-image-preview',
+      name: 'Gemini 3 Pro Image Preview',
+      icon: 'gemini',
+      enabled: true,
+      category: 'image',
+      type: 'gemini',
+      supportsVision: true,
+      supportsFunctionCall: false,
     },
     // ── ByteDance Doubao ──
     {

@@ -20,7 +20,7 @@ export class ApiStreamError extends Error {
 
 export function maskHeaders(headers: Record<string, string>): Record<string, string> {
   const masked: Record<string, string> = {}
-  const sensitiveKeys = ['authorization', 'x-api-key', 'api-key']
+  const sensitiveKeys = ['authorization', 'x-api-key', 'api-key', 'x-goog-api-key']
   for (const [k, v] of Object.entries(headers)) {
     if (sensitiveKeys.includes(k.toLowerCase()) && v.length > 8) {
       masked[k] = v.slice(0, 4) + '****' + v.slice(-4)
@@ -47,7 +47,8 @@ export async function* ipcStreamRequest(params: {
   providerBuiltinId?: string
 }): AsyncIterable<SSEEvent> {
   const requestId = nanoid()
-  const { url, method, headers, body, signal, useSystemProxy, providerId, providerBuiltinId } = params
+  const { url, method, headers, body, signal, useSystemProxy, providerId, providerBuiltinId } =
+    params
 
   // Queue to bridge IPC callbacks → async iterator
   type QueueItem =
@@ -109,7 +110,7 @@ export async function* ipcStreamRequest(params: {
     body,
     useSystemProxy,
     providerId,
-    providerBuiltinId,
+    providerBuiltinId
   })
 
   // SSE line parser state
@@ -131,8 +132,10 @@ export async function* ipcStreamRequest(params: {
             const parsed: SSEEvent = { data: '' }
             const dataLines: string[] = []
             for (const line of lines) {
-              if (line.startsWith('event:')) parsed.event = line.slice(line.charAt(6) === ' ' ? 7 : 6)
-              else if (line.startsWith('data:')) dataLines.push(line.slice(line.charAt(5) === ' ' ? 6 : 5))
+              if (line.startsWith('event:'))
+                parsed.event = line.slice(line.charAt(6) === ' ' ? 7 : 6)
+              else if (line.startsWith('data:'))
+                dataLines.push(line.slice(line.charAt(5) === ' ' ? 6 : 5))
             }
             parsed.data = dataLines.join('\n')
             if (parsed.data) yield parsed
@@ -148,7 +151,7 @@ export async function* ipcStreamRequest(params: {
             method,
             headers: maskHeaders(headers),
             body,
-            timestamp: Date.now(),
+            timestamp: Date.now()
           })
         }
 
@@ -163,7 +166,8 @@ export async function* ipcStreamRequest(params: {
           const dataLines: string[] = []
           for (const line of lines) {
             if (line.startsWith('event:')) parsed.event = line.slice(line.charAt(6) === ' ' ? 7 : 6)
-            else if (line.startsWith('data:')) dataLines.push(line.slice(line.charAt(5) === ' ' ? 6 : 5))
+            else if (line.startsWith('data:'))
+              dataLines.push(line.slice(line.charAt(5) === ' ' ? 6 : 5))
           }
           parsed.data = dataLines.join('\n')
           if (parsed.data) yield parsed

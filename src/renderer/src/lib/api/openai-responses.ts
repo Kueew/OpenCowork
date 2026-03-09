@@ -88,7 +88,10 @@ class OpenAIResponsesProvider implements APIProvider {
       if (config.thinkingConfig.reasoningEffortLevels && config.reasoningEffort) {
         reasoning.effort = config.reasoningEffort
       }
-      reasoning.summary = config.responseSummary ?? 'auto'
+
+      if (body.model !== "gpt-5.3-codex-spark") {
+        reasoning.summary = config.responseSummary ?? 'auto'
+      }
       if (Object.keys(reasoning).length > 0) {
         body.reasoning = reasoning
       }
@@ -330,16 +333,16 @@ class OpenAIResponsesProvider implements APIProvider {
             stopReason: data.response.status,
             usage: data.response.usage
               ? {
-                  inputTokens: rawInputTokens,
-                  outputTokens: data.response.usage.output_tokens ?? 0,
-                  contextTokens: rawInputTokens,
-                  ...(cachedTokens > 0 ? { cacheReadTokens: cachedTokens } : {}),
-                  ...(data.response.usage.output_tokens_details?.reasoning_tokens
-                    ? {
-                        reasoningTokens: data.response.usage.output_tokens_details.reasoning_tokens
-                      }
-                    : {})
-                }
+                inputTokens: rawInputTokens,
+                outputTokens: data.response.usage.output_tokens ?? 0,
+                contextTokens: rawInputTokens,
+                ...(cachedTokens > 0 ? { cacheReadTokens: cachedTokens } : {}),
+                ...(data.response.usage.output_tokens_details?.reasoning_tokens
+                  ? {
+                    reasoningTokens: data.response.usage.output_tokens_details.reasoning_tokens
+                  }
+                  : {})
+              }
               : undefined,
             timing: {
               totalMs: requestCompletedAt - requestStartedAt,

@@ -9,16 +9,12 @@ const DB_PATH = path.join(DATA_DIR, 'data.db')
 
 let db: Database.Database | null = null
 
-function hasColumn(
-  database: Database.Database,
-  tableName: string,
-  columnName: string,
-): boolean {
+function hasColumn(database: Database.Database, tableName: string, columnName: string): boolean {
   try {
     const safeTable = tableName.replace(/"/g, '""')
-    const rows = database
-      .prepare(`PRAGMA table_info("${safeTable}")`)
-      .all() as Array<{ name: string }>
+    const rows = database.prepare(`PRAGMA table_info("${safeTable}")`).all() as Array<{
+      name: string
+    }>
     return rows.some((row) => row.name === columnName)
   } catch {
     return false
@@ -102,7 +98,7 @@ function ensureDefaultLocalProject(database: Database.Database): ProjectRecord {
     ssh_connection_id: null,
     plugin_id: null,
     created_at: now,
-    updated_at: now,
+    updated_at: now
   }
 
   database
@@ -133,13 +129,13 @@ function migrateSessionsToProjects(database: Database.Database): void {
         WHERE project_id IS NULL`
     )
     .all() as Array<{
-      id: string
-      working_folder: string | null
-      ssh_connection_id: string | null
-      plugin_id: string | null
-      created_at: number
-      updated_at: number
-    }>
+    id: string
+    working_folder: string | null
+    ssh_connection_id: string | null
+    plugin_id: string | null
+    created_at: number
+    updated_at: number
+  }>
 
   const defaultProject = ensureDefaultLocalProject(database)
   if (sessionsWithoutProject.length === 0) {
@@ -164,9 +160,7 @@ function migrateSessionsToProjects(database: Database.Database): void {
     `INSERT INTO projects (id, name, working_folder, ssh_connection_id, plugin_id, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)`
   )
-  const setSessionProjectStmt = database.prepare(
-    `UPDATE sessions SET project_id = ? WHERE id = ?`
-  )
+  const setSessionProjectStmt = database.prepare(`UPDATE sessions SET project_id = ? WHERE id = ?`)
   const setSessionDefaultProjectStmt = database.prepare(
     `UPDATE sessions
         SET project_id = ?,
@@ -201,7 +195,7 @@ function migrateSessionsToProjects(database: Database.Database): void {
           ssh_connection_id: session.ssh_connection_id ?? null,
           plugin_id: session.plugin_id ?? null,
           created_at: createdAt,
-          updated_at: updatedAt,
+          updated_at: updatedAt
         }
 
         insertProjectStmt.run(
@@ -312,8 +306,16 @@ export function getDb(): Database.Database {
   }
 
   // Migration: add provider_id and model_id columns for per-session provider binding
-  try { db.exec(`ALTER TABLE sessions ADD COLUMN provider_id TEXT`) } catch { /* exists */ }
-  try { db.exec(`ALTER TABLE sessions ADD COLUMN model_id TEXT`) } catch { /* exists */ }
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN provider_id TEXT`)
+  } catch {
+    /* exists */
+  }
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN model_id TEXT`)
+  } catch {
+    /* exists */
+  }
 
   // --- Plans table ---
   db.exec(`
@@ -356,6 +358,23 @@ export function getDb(): Database.Database {
 
     CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_plan ON tasks(plan_id);
+  `)
+
+  // --- Draw Runs table ---
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS draw_runs (
+      id TEXT PRIMARY KEY,
+      prompt TEXT NOT NULL,
+      provider_name TEXT NOT NULL,
+      model_name TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      is_generating INTEGER NOT NULL DEFAULT 0,
+      images_json TEXT NOT NULL DEFAULT '[]',
+      error_json TEXT,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_draw_runs_created_at ON draw_runs(created_at DESC);
   `)
 
   // --- Cron Jobs table ---
@@ -461,12 +480,20 @@ export function getDb(): Database.Database {
 
   // Migration: add ssh_connection_id to sessions for remote working directory
   if (!hasColumn(db, 'sessions', 'ssh_connection_id')) {
-    try { db.exec(`ALTER TABLE sessions ADD COLUMN ssh_connection_id TEXT`) } catch { /* exists */ }
+    try {
+      db.exec(`ALTER TABLE sessions ADD COLUMN ssh_connection_id TEXT`)
+    } catch {
+      /* exists */
+    }
   }
 
   // Migration: add project_id to sessions
   if (!hasColumn(db, 'sessions', 'project_id')) {
-    try { db.exec(`ALTER TABLE sessions ADD COLUMN project_id TEXT`) } catch { /* exists */ }
+    try {
+      db.exec(`ALTER TABLE sessions ADD COLUMN project_id TEXT`)
+    } catch {
+      /* exists */
+    }
   }
   if (hasColumn(db, 'sessions', 'project_id')) {
     db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_project_id ON sessions(project_id)`)
@@ -478,10 +505,22 @@ export function getDb(): Database.Database {
   migrateSessionsToProjects(db)
 
   // Migration: add plugin columns to cron_jobs if missing
-  try { db.exec(`ALTER TABLE cron_jobs ADD COLUMN plugin_id TEXT`) } catch { /* exists */ }
-  try { db.exec(`ALTER TABLE cron_jobs ADD COLUMN plugin_chat_id TEXT`) } catch { /* exists */ }
+  try {
+    db.exec(`ALTER TABLE cron_jobs ADD COLUMN plugin_id TEXT`)
+  } catch {
+    /* exists */
+  }
+  try {
+    db.exec(`ALTER TABLE cron_jobs ADD COLUMN plugin_chat_id TEXT`)
+  } catch {
+    /* exists */
+  }
   if (!hasColumn(db, 'cron_jobs', 'session_id')) {
-    try { db.exec(`ALTER TABLE cron_jobs ADD COLUMN session_id TEXT`) } catch { /* ignore */ }
+    try {
+      db.exec(`ALTER TABLE cron_jobs ADD COLUMN session_id TEXT`)
+    } catch {
+      /* ignore */
+    }
   }
   if (hasColumn(db, 'cron_jobs', 'session_id')) {
     db.exec(`CREATE INDEX IF NOT EXISTS idx_cron_jobs_session ON cron_jobs(session_id)`)

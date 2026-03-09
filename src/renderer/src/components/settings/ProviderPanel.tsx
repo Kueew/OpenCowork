@@ -17,7 +17,7 @@ import {
   Mic,
   Shapes,
   Sparkles,
-  Copy,
+  Copy
 } from 'lucide-react'
 import { nanoid } from 'nanoid'
 import { toast } from 'sonner'
@@ -30,20 +30,20 @@ import {
   DialogContent,
   DialogDescription,
   DialogHeader,
-  DialogTitle,
+  DialogTitle
 } from '@renderer/components/ui/dialog'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
+  SelectValue
 } from '@renderer/components/ui/select'
 import {
   useProviderStore,
   builtinProviderPresets,
   modelSupportsVision,
-  normalizeProviderBaseUrl,
+  normalizeProviderBaseUrl
 } from '@renderer/stores/provider-store'
 import { useQuotaStore, type CodexQuota, type CodexQuotaWindow } from '@renderer/stores/quota-store'
 import {
@@ -55,14 +55,14 @@ import {
   sendProviderChannelCode,
   verifyProviderChannelCode,
   refreshProviderChannelUserInfo,
-  clearProviderChannelAuth,
+  clearProviderChannelAuth
 } from '@renderer/lib/auth/provider-auth'
 import type {
   ProviderType,
   AIModelConfig,
   AIProvider,
   ThinkingConfig,
-  ModelCategory,
+  ModelCategory
 } from '@renderer/lib/api/types'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { ipcStreamRequest } from '@renderer/lib/ipc/api-stream'
@@ -70,10 +70,29 @@ import { loadPrompt } from '@renderer/lib/prompts/prompt-loader'
 import { ProviderIcon, ModelIcon } from './provider-icons'
 
 const MODEL_ICON_OPTIONS = [
-  'openai', 'claude', 'anthropic', 'gemini', 'deepseek', 'qwen',
-  'chatglm', 'minimax', 'kimi', 'moonshot', 'grok', 'meta', 'llama',
-  'mistral', 'baidu', 'hunyuan', 'nvidia', 'stepfun', 'doubao',
-  'ollama', 'siliconcloud', 'mimo', 'bigmodel',
+  'openai',
+  'claude',
+  'anthropic',
+  'gemini',
+  'deepseek',
+  'qwen',
+  'chatglm',
+  'minimax',
+  'kimi',
+  'moonshot',
+  'grok',
+  'meta',
+  'llama',
+  'mistral',
+  'baidu',
+  'hunyuan',
+  'nvidia',
+  'stepfun',
+  'doubao',
+  'ollama',
+  'siliconcloud',
+  'mimo',
+  'bigmodel'
 ] as const
 
 // --- Fetch models from provider API ---
@@ -90,7 +109,7 @@ async function fetchModelsFromProvider(
       url: 'https://openrouter.ai/api/frontend/models/find',
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
-      useSystemProxy,
+      useSystemProxy
     })
     if (result?.error) throw new Error(result.error)
     const data = JSON.parse(result.body)
@@ -100,7 +119,7 @@ async function fetchModelsFromProvider(
       id: m.slug ?? m.id,
       name: m.name ?? m.slug ?? m.id,
       enabled: true,
-      contextLength: m.context_length,
+      contextLength: m.context_length
     }))
   }
 
@@ -108,14 +127,14 @@ async function fetchModelsFromProvider(
   if (type === 'openai-chat' || type === 'openai-responses') {
     const url = `${(baseUrl || 'https://api.openai.com').replace(/\/+$/, '')}/models`
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
+      'Content-Type': 'application/json'
     }
     if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
     const result = await window.electron.ipcRenderer.invoke('api:request', {
       url,
       method: 'GET',
       headers,
-      useSystemProxy,
+      useSystemProxy
     })
     if (result?.error) throw new Error(result.error)
     if (result?.statusCode && result.statusCode >= 400) {
@@ -127,7 +146,7 @@ async function fetchModelsFromProvider(
     return models.map((m: any) => ({
       id: m.id,
       name: m.id,
-      enabled: true,
+      enabled: true
     }))
   }
 
@@ -146,7 +165,7 @@ async function fetchModelsFromProvider(
 
 function AddProviderDialog({
   open,
-  onOpenChange,
+  onOpenChange
 }: {
   open: boolean
   onOpenChange: (v: boolean) => void
@@ -167,10 +186,12 @@ function AddProviderDialog({
       baseUrl: baseUrl.trim(),
       enabled: false,
       models: [],
-      createdAt: Date.now(),
+      createdAt: Date.now()
     })
     toast.success(t('provider.addedProvider', { name: name.trim() }))
-    setName(''); setBaseUrl(''); setType('openai-chat')
+    setName('')
+    setBaseUrl('')
+    setType('openai-chat')
     onOpenChange(false)
   }
 
@@ -201,6 +222,7 @@ function AddProviderDialog({
                 <SelectItem value="openai-chat">{t('provider.openaiChatCompat')}</SelectItem>
                 <SelectItem value="openai-responses">{t('provider.openaiResponses')}</SelectItem>
                 <SelectItem value="anthropic">{t('provider.anthropicMessages')}</SelectItem>
+                <SelectItem value="gemini">Gemini</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -214,8 +236,12 @@ function AddProviderDialog({
             <p className="text-xs text-muted-foreground">{t('provider.baseUrlHint')}</p>
           </div>
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="ghost" onClick={() => onOpenChange(false)}>{t('action.cancel', { ns: 'common' })}</Button>
-            <Button disabled={!name.trim()} onClick={handleAdd}>{t('provider.add')}</Button>
+            <Button variant="ghost" onClick={() => onOpenChange(false)}>
+              {t('action.cancel', { ns: 'common' })}
+            </Button>
+            <Button disabled={!name.trim()} onClick={handleAdd}>
+              {t('provider.add')}
+            </Button>
           </div>
         </div>
       </DialogContent>
@@ -230,7 +256,7 @@ function ModelFormDialog({
   onOpenChange,
   providerType,
   initial,
-  onSave,
+  onSave
 }: {
   open: boolean
   onOpenChange: (v: boolean) => void
@@ -249,32 +275,56 @@ function ModelFormDialog({
   const [maxOutputTokens, setMaxOutputTokens] = useState(initial?.maxOutputTokens?.toString() ?? '')
   const [inputPrice, setInputPrice] = useState(initial?.inputPrice?.toString() ?? '')
   const [outputPrice, setOutputPrice] = useState(initial?.outputPrice?.toString() ?? '')
-  const [cacheCreationPrice, setCacheCreationPrice] = useState(initial?.cacheCreationPrice?.toString() ?? '')
+  const [cacheCreationPrice, setCacheCreationPrice] = useState(
+    initial?.cacheCreationPrice?.toString() ?? ''
+  )
   const [cacheHitPrice, setCacheHitPrice] = useState(initial?.cacheHitPrice?.toString() ?? '')
   const [supportsVision, setSupportsVision] = useState(initial?.supportsVision ?? false)
-  const [supportsFunctionCall, setSupportsFunctionCall] = useState(initial?.supportsFunctionCall ?? true)
+  const [supportsFunctionCall, setSupportsFunctionCall] = useState(
+    initial?.supportsFunctionCall ?? true
+  )
   const [icon, setIcon] = useState(initial?.icon ?? '')
-  const [responseSummary, setResponseSummary] = useState<
-    'auto' | 'concise' | 'detailed' | 'none'
-  >(initial?.responseSummary ?? 'none')
+  const [responseSummary, setResponseSummary] = useState<'auto' | 'concise' | 'detailed' | 'none'>(
+    initial?.responseSummary ?? 'none'
+  )
   const [enablePromptCache, setEnablePromptCache] = useState(initial?.enablePromptCache ?? true)
-  const [enableSystemPromptCache, setEnableSystemPromptCache] = useState(initial?.enableSystemPromptCache ?? true)
+  const [enableSystemPromptCache, setEnableSystemPromptCache] = useState(
+    initial?.enableSystemPromptCache ?? true
+  )
 
   const handleSave = (): void => {
     if (!id.trim()) return
     const model: AIModelConfig = {
       id: id.trim(),
       name: name.trim() || id.trim(),
-      enabled: initial?.enabled ?? true,
+      enabled: initial?.enabled ?? true
     }
     model.category = category
     if (typeOverride && typeOverride !== 'none') model.type = typeOverride
-    if (contextLength.trim()) { const v = parseInt(contextLength); if (!isNaN(v)) model.contextLength = v }
-    if (maxOutputTokens.trim()) { const v = parseInt(maxOutputTokens); if (!isNaN(v)) model.maxOutputTokens = v }
-    if (inputPrice.trim()) { const v = parseFloat(inputPrice); if (!isNaN(v)) model.inputPrice = v }
-    if (outputPrice.trim()) { const v = parseFloat(outputPrice); if (!isNaN(v)) model.outputPrice = v }
-    if (cacheCreationPrice.trim()) { const v = parseFloat(cacheCreationPrice); if (!isNaN(v)) model.cacheCreationPrice = v }
-    if (cacheHitPrice.trim()) { const v = parseFloat(cacheHitPrice); if (!isNaN(v)) model.cacheHitPrice = v }
+    if (contextLength.trim()) {
+      const v = parseInt(contextLength)
+      if (!isNaN(v)) model.contextLength = v
+    }
+    if (maxOutputTokens.trim()) {
+      const v = parseInt(maxOutputTokens)
+      if (!isNaN(v)) model.maxOutputTokens = v
+    }
+    if (inputPrice.trim()) {
+      const v = parseFloat(inputPrice)
+      if (!isNaN(v)) model.inputPrice = v
+    }
+    if (outputPrice.trim()) {
+      const v = parseFloat(outputPrice)
+      if (!isNaN(v)) model.outputPrice = v
+    }
+    if (cacheCreationPrice.trim()) {
+      const v = parseFloat(cacheCreationPrice)
+      if (!isNaN(v)) model.cacheCreationPrice = v
+    }
+    if (cacheHitPrice.trim()) {
+      const v = parseFloat(cacheHitPrice)
+      if (!isNaN(v)) model.cacheHitPrice = v
+    }
     if (supportsVision) model.supportsVision = true
     if (!supportsFunctionCall) model.supportsFunctionCall = false
     if (icon.trim()) model.icon = icon.trim()
@@ -292,9 +342,13 @@ function ModelFormDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{isEdit ? t('provider.editModel') : t('provider.addModelTitle')}</DialogTitle>
+          <DialogTitle>
+            {isEdit ? t('provider.editModel') : t('provider.addModelTitle')}
+          </DialogTitle>
           <DialogDescription>
-            {isEdit ? t('provider.editModelDesc', { name: initial?.name }) : t('provider.addModelDesc')}
+            {isEdit
+              ? t('provider.editModelDesc', { name: initial?.name })
+              : t('provider.addModelDesc')}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 pt-2">
@@ -326,16 +380,32 @@ function ModelFormDialog({
           {/* Protocol type override */}
           <div className="space-y-1.5">
             <label className="text-xs font-medium">{t('provider.modelTypeOverride')}</label>
-            <p className="text-[11px] text-muted-foreground">{t('provider.modelTypeOverrideHint', { type: providerType })}</p>
-            <Select value={typeOverride} onValueChange={(v) => setTypeOverride(v as ProviderType | 'none')}>
+            <p className="text-[11px] text-muted-foreground">
+              {t('provider.modelTypeOverrideHint', { type: providerType })}
+            </p>
+            <Select
+              value={typeOverride}
+              onValueChange={(v) => setTypeOverride(v as ProviderType | 'none')}
+            >
               <SelectTrigger className="text-xs">
                 <SelectValue placeholder={t('provider.modelTypeOverridePlaceholder')} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="none" className="text-xs">{t('provider.modelTypeOverridePlaceholder')}</SelectItem>
-                <SelectItem value="openai-chat" className="text-xs">{t('provider.openaiChatCompat')}</SelectItem>
-                <SelectItem value="openai-responses" className="text-xs">{t('provider.openaiResponses')}</SelectItem>
-                <SelectItem value="anthropic" className="text-xs">Anthropic</SelectItem>
+                <SelectItem value="none" className="text-xs">
+                  {t('provider.modelTypeOverridePlaceholder')}
+                </SelectItem>
+                <SelectItem value="openai-chat" className="text-xs">
+                  {t('provider.openaiChatCompat')}
+                </SelectItem>
+                <SelectItem value="openai-responses" className="text-xs">
+                  {t('provider.openaiResponses')}
+                </SelectItem>
+                <SelectItem value="anthropic" className="text-xs">
+                  Anthropic
+                </SelectItem>
+                <SelectItem value="gemini" className="text-xs">
+                  Gemini
+                </SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -349,10 +419,18 @@ function ModelFormDialog({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="chat" className="text-xs">{t('provider.modelCategoryChat')}</SelectItem>
-                <SelectItem value="speech" className="text-xs">{t('provider.modelCategorySpeech')}</SelectItem>
-                <SelectItem value="embedding" className="text-xs">{t('provider.modelCategoryEmbedding')}</SelectItem>
-                <SelectItem value="image" className="text-xs">{t('provider.modelCategoryImage')}</SelectItem>
+                <SelectItem value="chat" className="text-xs">
+                  {t('provider.modelCategoryChat')}
+                </SelectItem>
+                <SelectItem value="speech" className="text-xs">
+                  {t('provider.modelCategorySpeech')}
+                </SelectItem>
+                <SelectItem value="embedding" className="text-xs">
+                  {t('provider.modelCategoryEmbedding')}
+                </SelectItem>
+                <SelectItem value="image" className="text-xs">
+                  {t('provider.modelCategoryImage')}
+                </SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -383,23 +461,58 @@ function ModelFormDialog({
 
           {/* Pricing */}
           <div className="space-y-1.5">
-            <label className="text-xs font-medium">{t('provider.pricing')} <span className="text-muted-foreground font-normal">({t('provider.pricingUnit')})</span></label>
+            <label className="text-xs font-medium">
+              {t('provider.pricing')}{' '}
+              <span className="text-muted-foreground font-normal">
+                ({t('provider.pricingUnit')})
+              </span>
+            </label>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
                 <p className="text-[11px] text-muted-foreground">{t('provider.inputPrice')}</p>
-                <Input type="number" step="0.01" placeholder="0.00" value={inputPrice} onChange={(e) => setInputPrice(e.target.value)} className="text-xs" />
+                <Input
+                  type="number"
+                  step="0.01"
+                  placeholder="0.00"
+                  value={inputPrice}
+                  onChange={(e) => setInputPrice(e.target.value)}
+                  className="text-xs"
+                />
               </div>
               <div className="space-y-1">
                 <p className="text-[11px] text-muted-foreground">{t('provider.outputPrice')}</p>
-                <Input type="number" step="0.01" placeholder="0.00" value={outputPrice} onChange={(e) => setOutputPrice(e.target.value)} className="text-xs" />
+                <Input
+                  type="number"
+                  step="0.01"
+                  placeholder="0.00"
+                  value={outputPrice}
+                  onChange={(e) => setOutputPrice(e.target.value)}
+                  className="text-xs"
+                />
               </div>
               <div className="space-y-1">
-                <p className="text-[11px] text-muted-foreground">{t('provider.cacheCreationPrice')}</p>
-                <Input type="number" step="0.01" placeholder="0.00" value={cacheCreationPrice} onChange={(e) => setCacheCreationPrice(e.target.value)} className="text-xs" />
+                <p className="text-[11px] text-muted-foreground">
+                  {t('provider.cacheCreationPrice')}
+                </p>
+                <Input
+                  type="number"
+                  step="0.01"
+                  placeholder="0.00"
+                  value={cacheCreationPrice}
+                  onChange={(e) => setCacheCreationPrice(e.target.value)}
+                  className="text-xs"
+                />
               </div>
               <div className="space-y-1">
                 <p className="text-[11px] text-muted-foreground">{t('provider.cacheHitPrice')}</p>
-                <Input type="number" step="0.01" placeholder="0.00" value={cacheHitPrice} onChange={(e) => setCacheHitPrice(e.target.value)} className="text-xs" />
+                <Input
+                  type="number"
+                  step="0.01"
+                  placeholder="0.00"
+                  value={cacheHitPrice}
+                  onChange={(e) => setCacheHitPrice(e.target.value)}
+                  className="text-xs"
+                />
               </div>
             </div>
           </div>
@@ -412,7 +525,9 @@ function ModelFormDialog({
                 type="button"
                 onClick={() => setIcon('')}
                 className={`size-7 flex items-center justify-center rounded border transition-colors ${
-                  icon === '' ? 'border-primary bg-primary/10' : 'border-border hover:border-muted-foreground/50 hover:bg-muted/40'
+                  icon === ''
+                    ? 'border-primary bg-primary/10'
+                    : 'border-border hover:border-muted-foreground/50 hover:bg-muted/40'
                 }`}
                 title={t('provider.modelIconAuto')}
               >
@@ -424,7 +539,9 @@ function ModelFormDialog({
                   type="button"
                   onClick={() => setIcon(key)}
                   className={`size-7 flex items-center justify-center rounded border transition-colors ${
-                    icon === key ? 'border-primary bg-primary/10' : 'border-border hover:border-muted-foreground/50 hover:bg-muted/40'
+                    icon === key
+                      ? 'border-primary bg-primary/10'
+                      : 'border-border hover:border-muted-foreground/50 hover:bg-muted/40'
                   }`}
                   title={key}
                 >
@@ -432,7 +549,11 @@ function ModelFormDialog({
                 </button>
               ))}
             </div>
-            {icon && <p className="text-[11px] text-muted-foreground">{t('provider.modelIconSelected', { icon })}</p>}
+            {icon && (
+              <p className="text-[11px] text-muted-foreground">
+                {t('provider.modelIconSelected', { icon })}
+              </p>
+            )}
           </div>
 
           {/* Responses config */}
@@ -440,16 +561,31 @@ function ModelFormDialog({
             <label className="text-xs font-medium">{t('provider.responsesConfig')}</label>
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between">
-                <span className="text-xs text-muted-foreground">{t('provider.responsesSummary')}</span>
-                <Select value={responseSummary} onValueChange={(v) => setResponseSummary(v as 'auto' | 'concise' | 'detailed' | 'none')}>
+                <span className="text-xs text-muted-foreground">
+                  {t('provider.responsesSummary')}
+                </span>
+                <Select
+                  value={responseSummary}
+                  onValueChange={(v) =>
+                    setResponseSummary(v as 'auto' | 'concise' | 'detailed' | 'none')
+                  }
+                >
                   <SelectTrigger className="h-7 w-36 text-[11px]">
                     <SelectValue placeholder={t('provider.responsesSummaryAuto')} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none" className="text-[11px]">{t('provider.responsesSummaryNone')}</SelectItem>
-                    <SelectItem value="auto" className="text-[11px]">{t('provider.responsesSummaryAuto')}</SelectItem>
-                    <SelectItem value="concise" className="text-[11px]">{t('provider.responsesSummaryConcise')}</SelectItem>
-                    <SelectItem value="detailed" className="text-[11px]">{t('provider.responsesSummaryDetailed')}</SelectItem>
+                    <SelectItem value="none" className="text-[11px]">
+                      {t('provider.responsesSummaryNone')}
+                    </SelectItem>
+                    <SelectItem value="auto" className="text-[11px]">
+                      {t('provider.responsesSummaryAuto')}
+                    </SelectItem>
+                    <SelectItem value="concise" className="text-[11px]">
+                      {t('provider.responsesSummaryConcise')}
+                    </SelectItem>
+                    <SelectItem value="detailed" className="text-[11px]">
+                      {t('provider.responsesSummaryDetailed')}
+                    </SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -458,8 +594,13 @@ function ModelFormDialog({
                 <Switch checked={enablePromptCache} onCheckedChange={setEnablePromptCache} />
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-xs text-muted-foreground">{t('provider.systemPromptCache')}</span>
-                <Switch checked={enableSystemPromptCache} onCheckedChange={setEnableSystemPromptCache} />
+                <span className="text-xs text-muted-foreground">
+                  {t('provider.systemPromptCache')}
+                </span>
+                <Switch
+                  checked={enableSystemPromptCache}
+                  onCheckedChange={setEnableSystemPromptCache}
+                />
               </div>
             </div>
           </div>
@@ -469,19 +610,27 @@ function ModelFormDialog({
             <label className="text-xs font-medium">{t('provider.capabilities')}</label>
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between">
-                <span className="text-xs text-muted-foreground">{t('provider.supportsVision')}</span>
+                <span className="text-xs text-muted-foreground">
+                  {t('provider.supportsVision')}
+                </span>
                 <Switch checked={supportsVision} onCheckedChange={setSupportsVision} />
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-xs text-muted-foreground">{t('provider.supportsFunctionCall')}</span>
+                <span className="text-xs text-muted-foreground">
+                  {t('provider.supportsFunctionCall')}
+                </span>
                 <Switch checked={supportsFunctionCall} onCheckedChange={setSupportsFunctionCall} />
               </div>
             </div>
           </div>
 
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>{t('action.cancel', { ns: 'common' })}</Button>
-            <Button size="sm" disabled={!id.trim()} onClick={handleSave}>{t('action.save', { ns: 'common' })}</Button>
+            <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
+              {t('action.cancel', { ns: 'common' })}
+            </Button>
+            <Button size="sm" disabled={!id.trim()} onClick={handleSave}>
+              {t('action.save', { ns: 'common' })}
+            </Button>
           </div>
         </div>
       </DialogContent>
@@ -531,11 +680,16 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
   const [testing, setTesting] = useState(false)
   const [modelSearch, setModelSearch] = useState('')
   const [editingThinkingModel, setEditingThinkingModel] = useState<AIModelConfig | null>(null)
-  const [testModelId, setTestModelId] = useState(provider.models.find((m) => m.enabled)?.id ?? provider.models[0]?.id ?? '')
+  const [testModelId, setTestModelId] = useState(
+    provider.models.find((m) => m.enabled)?.id ?? provider.models[0]?.id ?? ''
+  )
   const [oauthLoginTab, setOauthLoginTab] = useState<'connect' | 'manual'>('connect')
   const [fetchingQuota, setFetchingQuota] = useState(false)
   const builtinPreset = useMemo(
-    () => (provider.builtinId ? builtinProviderPresets.find((p) => p.builtinId === provider.builtinId) : undefined),
+    () =>
+      provider.builtinId
+        ? builtinProviderPresets.find((p) => p.builtinId === provider.builtinId)
+        : undefined,
     [provider.builtinId]
   )
   const oauthAbortRef = useRef<AbortController | null>(null)
@@ -622,24 +776,29 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
   }, [provider.id])
 
   useEffect(() => {
-    const nextType = provider.channel?.channelType ?? provider.channelConfig?.defaultChannelType ?? 'sms'
+    const nextType =
+      provider.channel?.channelType ?? provider.channelConfig?.defaultChannelType ?? 'sms'
     setChannelType(nextType)
     setChannelMobile('')
     setChannelEmail('')
     setChannelCode('')
     setManualOAuthJson('')
     setManualOAuthError('')
-  }, [provider.id])
+  }, [provider.id, provider.channel?.channelType, provider.channelConfig?.defaultChannelType])
 
   const oauthConfig = provider.oauthConfig ?? { authorizeUrl: '', tokenUrl: '', clientId: '' }
   const oauthClientIdLocked = oauthConfig.clientIdLocked === true
   const hideOAuthSettings = provider.ui?.hideOAuthSettings === true
-  const oauthConfigReady = !!(oauthConfig.authorizeUrl && oauthConfig.tokenUrl && oauthConfig.clientId)
+  const oauthConfigReady = !!(
+    oauthConfig.authorizeUrl &&
+    oauthConfig.tokenUrl &&
+    oauthConfig.clientId
+  )
   const channelRequiresAppToken = provider.channelConfig?.requiresAppToken !== false
   const channelAppIdLocked = provider.channelConfig?.appIdLocked === true
   const channelAppIdValue = channelAppIdLocked
     ? provider.channelConfig?.defaultAppId || provider.channel?.appId || ''
-    : provider.channel?.appId ?? ''
+    : (provider.channel?.appId ?? '')
   const authReadyForUi = isApiKeyAuth
     ? provider.requiresApiKey === false || !!provider.apiKey
     : isOAuthAuth
@@ -674,7 +833,9 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
   const filteredModels = useMemo(() => {
     if (!modelSearch) return provider.models
     const q = modelSearch.toLowerCase()
-    return provider.models.filter((m) => m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q))
+    return provider.models.filter(
+      (m) => m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q)
+    )
   }, [provider.models, modelSearch])
 
   const getLatestProvider = (): AIProvider =>
@@ -699,8 +860,7 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
     return getLatestProvider()
   }
 
-  const isAbortError = (err: unknown): boolean =>
-    err instanceof Error && err.name === 'AbortError'
+  const isAbortError = (err: unknown): boolean => err instanceof Error && err.name === 'AbortError'
 
   const handleOAuthConnect = async (): Promise<void> => {
     if (!oauthConfigReady && !hideOAuthSettings) {
@@ -718,7 +878,7 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
     } catch (err) {
       if (!isAbortError(err)) {
         toast.error(t('provider.oauthConnectFailed'), {
-          description: err instanceof Error ? err.message : String(err),
+          description: err instanceof Error ? err.message : String(err)
         })
       }
     } finally {
@@ -744,7 +904,7 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
       }
     } catch (err) {
       toast.error(t('provider.oauthRefreshFailed'), {
-        description: err instanceof Error ? err.message : String(err),
+        description: err instanceof Error ? err.message : String(err)
       })
     } finally {
       setOauthRefreshing(false)
@@ -789,12 +949,12 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
         providerId: provider.id,
         channelType,
         mobile: channelMobile.trim() || undefined,
-        email: channelEmail.trim() || undefined,
+        email: channelEmail.trim() || undefined
       })
       toast.success(t('provider.channelCodeSent'))
     } catch (err) {
       toast.error(t('provider.channelSendFailed'), {
-        description: err instanceof Error ? err.message : String(err),
+        description: err instanceof Error ? err.message : String(err)
       })
     } finally {
       setChannelSending(false)
@@ -809,13 +969,13 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
         channelType,
         code: channelCode.trim(),
         mobile: channelMobile.trim() || undefined,
-        email: channelEmail.trim() || undefined,
+        email: channelEmail.trim() || undefined
       })
       setChannelCode('')
       toast.success(t('provider.channelVerified'))
     } catch (err) {
       toast.error(t('provider.channelVerifyFailed'), {
-        description: err instanceof Error ? err.message : String(err),
+        description: err instanceof Error ? err.message : String(err)
       })
     } finally {
       setChannelVerifying(false)
@@ -829,7 +989,7 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
       toast.success(t('provider.channelUserRefreshed'))
     } catch (err) {
       toast.error(t('provider.channelUserRefreshFailed'), {
-        description: err instanceof Error ? err.message : String(err),
+        description: err instanceof Error ? err.message : String(err)
       })
     } finally {
       setChannelRefreshing(false)
@@ -847,7 +1007,10 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
     try {
       const activeProvider = await ensureAuthForRequest()
       if (!activeProvider) return
-      const model = activeProvider.models.find((m) => m.enabled)?.id ?? activeProvider.models[0]?.id ?? 'gpt-5.1-codex'
+      const model =
+        activeProvider.models.find((m) => m.enabled)?.id ??
+        activeProvider.models[0]?.id ??
+        'gpt-5.1-codex'
       const baseUrl = normalizeProviderBaseUrl(
         activeProvider.baseUrl?.trim() || 'https://chatgpt.com/backend-api/codex',
         'openai-responses'
@@ -861,7 +1024,10 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
       if (overrides) {
         const sid = `quota-${Date.now()}`
         for (const [key, raw] of Object.entries(overrides)) {
-          const val = String(raw).replace(/\{\{\s*sessionId\s*\}\}/g, sid).replace(/\{\{\s*model\s*\}\}/g, model).trim()
+          const val = String(raw)
+            .replace(/\{\{\s*sessionId\s*\}\}/g, sid)
+            .replace(/\{\{\s*model\s*\}\}/g, model)
+            .trim()
           if (val) headers[key] = val
         }
       }
@@ -870,7 +1036,7 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
         model,
         input: [{ type: 'message', role: 'user', content: 'Hi' }],
         stream: true,
-        ...(activeProvider.requestOverrides?.body ?? {}),
+        ...(activeProvider.requestOverrides?.body ?? {})
       }
       const promptName = activeProvider.instructionsPrompt ?? 'codex-instructions'
       const instructions = await loadPrompt(promptName)
@@ -886,7 +1052,7 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
           signal: controller.signal,
           useSystemProxy: activeProvider.useSystemProxy,
           providerId: activeProvider.id,
-          providerBuiltinId: activeProvider.builtinId,
+          providerBuiltinId: activeProvider.builtinId
         })) {
           if (ev.data) {
             setTimeout(() => controller.abort(), 500)
@@ -902,7 +1068,7 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
         toast.success(t('provider.quotaFetched'))
       } else {
         toast.error(t('provider.quotaFetchFailed'), {
-          description: err instanceof Error ? err.message : String(err),
+          description: err instanceof Error ? err.message : String(err)
         })
       }
     } finally {
@@ -915,7 +1081,8 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
     if (isOAuthAuth && provider.oauth?.accessToken) {
       payload = { access_token: provider.oauth.accessToken }
       if (provider.oauth.refreshToken) payload.refresh_token = provider.oauth.refreshToken
-      if (provider.oauth.expiresAt) payload.expires_at = new Date(provider.oauth.expiresAt).toISOString()
+      if (provider.oauth.expiresAt)
+        payload.expires_at = new Date(provider.oauth.expiresAt).toISOString()
     } else if (isChannelAuth && provider.channel?.accessToken) {
       payload = { access_token: provider.channel.accessToken }
     } else {
@@ -956,7 +1123,11 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
       } else if (isResponses) {
         url = `${baseUrl}/responses`
         if (activeProvider.apiKey) headers['Authorization'] = `Bearer ${activeProvider.apiKey}`
-        const bodyObj: Record<string, unknown> = { model, input: [{ type: 'message', role: 'user', content: 'Hi' }], stream: true }
+        const bodyObj: Record<string, unknown> = {
+          model,
+          input: [{ type: 'message', role: 'user', content: 'Hi' }],
+          stream: true
+        }
         if (activeProvider.builtinId === 'codex-oauth') {
           const promptName = activeProvider.instructionsPrompt ?? 'codex-instructions'
           const instructions = await loadPrompt(promptName)
@@ -968,17 +1139,29 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
         if (activeProvider.apiKey) headers['Authorization'] = `Bearer ${activeProvider.apiKey}`
         body = JSON.stringify({ model, max_tokens: 1, messages: [{ role: 'user', content: 'Hi' }] })
       }
-      const result = await window.electron.ipcRenderer.invoke('api:request', { url, method: 'POST', headers, body, useSystemProxy: activeProvider.useSystemProxy })
+      const result = await window.electron.ipcRenderer.invoke('api:request', {
+        url,
+        method: 'POST',
+        headers,
+        body,
+        useSystemProxy: activeProvider.useSystemProxy
+      })
       if (result?.error) {
         toast.error(t('provider.connectionFailed'), { description: result.error })
       } else {
         const status = result?.statusCode ?? 0
         if (status >= 200 && status < 300) toast.success(t('provider.connectionSuccess'))
-        else if (status === 401 || status === 403) toast.error(t('provider.invalidApiKey'), { description: `HTTP ${status}` })
-        else toast.warning(t('provider.abnormalStatus', { status }), { description: result?.body?.slice(0, 200) })
+        else if (status === 401 || status === 403)
+          toast.error(t('provider.invalidApiKey'), { description: `HTTP ${status}` })
+        else
+          toast.warning(t('provider.abnormalStatus', { status }), {
+            description: result?.body?.slice(0, 200)
+          })
       }
     } catch (err) {
-      toast.error(t('provider.connectionFailed'), { description: err instanceof Error ? err.message : String(err) })
+      toast.error(t('provider.connectionFailed'), {
+        description: err instanceof Error ? err.message : String(err)
+      })
     } finally {
       setTesting(false)
     }
@@ -996,7 +1179,10 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
         activeProvider.builtinId,
         activeProvider.useSystemProxy
       )
-      if (models.length === 0) { toast.info(t('provider.noModelsFound')); return }
+      if (models.length === 0) {
+        toast.info(t('provider.noModelsFound'))
+        return
+      }
       const existingMap = new Map(provider.models.map((m) => [m.id, m]))
       // Build a map of built-in preset models for this provider (highest priority)
       const presetMap = new Map(builtinPreset?.defaultModels.map((m) => [m.id, m]) ?? [])
@@ -1016,7 +1202,9 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
       setProviderModels(provider.id, merged)
       toast.success(t('provider.fetchedModels', { count: models.length }))
     } catch (err) {
-      toast.error(t('provider.fetchModelsFailed'), { description: err instanceof Error ? err.message : String(err) })
+      toast.error(t('provider.fetchModelsFailed'), {
+        description: err instanceof Error ? err.message : String(err)
+      })
     } finally {
       setFetchingModels(false)
     }
@@ -1031,9 +1219,11 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
           <div>
             <h3 className="text-sm font-semibold">{provider.name}</h3>
             <p className="text-[11px] text-muted-foreground">
-              {provider.type === 'anthropic' ? 'Anthropic Messages API'
-                : provider.type === 'openai-responses' ? 'OpenAI Responses API'
-                : t('provider.openaiChatCompat')}
+              {provider.type === 'anthropic'
+                ? 'Anthropic Messages API'
+                : provider.type === 'openai-responses'
+                  ? 'OpenAI Responses API'
+                  : t('provider.openaiChatCompat')}
             </p>
           </div>
         </div>
@@ -1046,7 +1236,7 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
               onClick={async () => {
                 const ok = await confirm({
                   title: t('provider.deleteConfirm', { name: provider.name }),
-                  variant: 'destructive',
+                  variant: 'destructive'
                 })
                 if (!ok) return
                 removeProvider(provider.id)
@@ -1073,7 +1263,9 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
                   variant="ghost"
                   size="sm"
                   className="h-7 gap-1 px-2 text-[11px] text-muted-foreground"
-                  onClick={() => void window.electron.ipcRenderer.invoke('shell:openExternal', apiKeyUrl)}
+                  onClick={() =>
+                    void window.electron.ipcRenderer.invoke('shell:openExternal', apiKeyUrl)
+                  }
                 >
                   <ExternalLink className="size-3" />
                   {t('provider.getApiKey')}
@@ -1125,8 +1317,12 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
             <div className="flex items-center justify-between">
               <label className="text-sm font-medium">{t('provider.oauthLogin')}</label>
               <div className="flex items-center gap-2">
-                <span className={`text-xs ${provider.oauth?.accessToken ? 'text-emerald-600' : 'text-muted-foreground'}`}>
-                  {provider.oauth?.accessToken ? t('provider.oauthConnected') : t('provider.oauthNotConnected')}
+                <span
+                  className={`text-xs ${provider.oauth?.accessToken ? 'text-emerald-600' : 'text-muted-foreground'}`}
+                >
+                  {provider.oauth?.accessToken
+                    ? t('provider.oauthConnected')
+                    : t('provider.oauthNotConnected')}
                 </span>
                 {provider.oauth?.accessToken && (
                   <Button
@@ -1147,58 +1343,68 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
               </p>
             )}
             {(!isCodexProvider || oauthLoginTab === 'connect') && (
-            <>
-            <div className="flex flex-wrap items-center gap-2">
-              {!provider.oauth?.accessToken && (
-                <>
-                  <Button
-                    size="sm"
-                    className="h-8 gap-1 text-xs"
-                    disabled={oauthConnecting || (!oauthConfigReady && !hideOAuthSettings)}
-                    onClick={handleOAuthConnect}
-                  >
-                    {oauthConnecting && <Loader2 className="size-3 animate-spin" />}
-                    {oauthConnecting ? t('provider.oauthConnecting') : t('provider.oauthConnect')}
-                  </Button>
-                  {oauthConnecting && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 text-xs"
-                      onClick={handleOAuthCancel}
-                    >
-                      {t('action.cancel', { ns: 'common' })}
-                    </Button>
+              <>
+                <div className="flex flex-wrap items-center gap-2">
+                  {!provider.oauth?.accessToken && (
+                    <>
+                      <Button
+                        size="sm"
+                        className="h-8 gap-1 text-xs"
+                        disabled={oauthConnecting || (!oauthConfigReady && !hideOAuthSettings)}
+                        onClick={handleOAuthConnect}
+                      >
+                        {oauthConnecting && <Loader2 className="size-3 animate-spin" />}
+                        {oauthConnecting
+                          ? t('provider.oauthConnecting')
+                          : t('provider.oauthConnect')}
+                      </Button>
+                      {oauthConnecting && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 text-xs"
+                          onClick={handleOAuthCancel}
+                        >
+                          {t('action.cancel', { ns: 'common' })}
+                        </Button>
+                      )}
+                    </>
                   )}
-                </>
-              )}
-              {provider.oauth?.accessToken && (
-                <>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 gap-1 text-xs"
-                    disabled={oauthRefreshing}
-                    onClick={handleOAuthRefresh}
-                  >
-                    {oauthRefreshing ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3" />}
-                    {oauthRefreshing ? t('provider.oauthRefreshing') : t('provider.oauthRefresh')}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-8 text-xs"
-                    onClick={handleOAuthDisconnect}
-                  >
-                    {t('provider.oauthDisconnect')}
-                  </Button>
-                </>
-              )}
-            </div>
-            {!hideOAuthSettings && !oauthConfigReady && (
-              <p className="text-[11px] text-muted-foreground">{t('provider.oauthConfigMissing')}</p>
-            )}
-            </>
+                  {provider.oauth?.accessToken && (
+                    <>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 gap-1 text-xs"
+                        disabled={oauthRefreshing}
+                        onClick={handleOAuthRefresh}
+                      >
+                        {oauthRefreshing ? (
+                          <Loader2 className="size-3 animate-spin" />
+                        ) : (
+                          <RefreshCw className="size-3" />
+                        )}
+                        {oauthRefreshing
+                          ? t('provider.oauthRefreshing')
+                          : t('provider.oauthRefresh')}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 text-xs"
+                        onClick={handleOAuthDisconnect}
+                      >
+                        {t('provider.oauthDisconnect')}
+                      </Button>
+                    </>
+                  )}
+                </div>
+                {!hideOAuthSettings && !oauthConfigReady && (
+                  <p className="text-[11px] text-muted-foreground">
+                    {t('provider.oauthConfigMissing')}
+                  </p>
+                )}
+              </>
             )}
           </section>
         )}
@@ -1217,9 +1423,7 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
               className="w-full h-28 rounded-md border bg-muted/30 px-3 py-2 font-mono text-xs resize-none focus:outline-none focus:ring-1 focus:ring-ring"
               spellCheck={false}
             />
-            {manualOAuthError && (
-              <p className="text-[11px] text-destructive">{manualOAuthError}</p>
-            )}
+            {manualOAuthError && <p className="text-[11px] text-destructive">{manualOAuthError}</p>}
             <div className="flex items-center gap-2">
               <Button
                 size="sm"
@@ -1255,7 +1459,11 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
                 disabled={!authReadyForUi || fetchingQuota}
                 onClick={() => void handleFetchQuota()}
               >
-                {fetchingQuota ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3" />}
+                {fetchingQuota ? (
+                  <Loader2 className="size-3 animate-spin" />
+                ) : (
+                  <RefreshCw className="size-3" />
+                )}
                 {fetchingQuota ? t('provider.fetchingQuota') : t('provider.fetchQuota')}
               </Button>
             </div>
@@ -1280,13 +1488,15 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
                 {codexQuota.primaryOverSecondaryLimitPercent !== undefined && (
                   <div className="text-muted-foreground">
                     {t('provider.codexQuotaLimitOver', {
-                      percent: formatPercent(codexQuota.primaryOverSecondaryLimitPercent) ?? '-',
+                      percent: formatPercent(codexQuota.primaryOverSecondaryLimitPercent) ?? '-'
                     })}
                   </div>
                 )}
               </div>
             ) : (
-              <p className="text-[11px] text-muted-foreground">{t('provider.codexQuotaUnavailable')}</p>
+              <p className="text-[11px] text-muted-foreground">
+                {t('provider.codexQuotaUnavailable')}
+              </p>
             )}
           </section>
         )}
@@ -1343,7 +1553,9 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
                   <Input
                     placeholder="/auth/callback"
                     value={oauthConfig.redirectPath ?? ''}
-                    onChange={(e) => updateOAuthConfig({ redirectPath: e.target.value || undefined })}
+                    onChange={(e) =>
+                      updateOAuthConfig({ redirectPath: e.target.value || undefined })
+                    }
                     className="text-xs"
                   />
                 </div>
@@ -1356,7 +1568,9 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
                     onChange={(e) => {
                       const value = e.target.value.trim()
                       const nextPort = value ? Number(value) : undefined
-                      updateOAuthConfig({ redirectPort: Number.isFinite(nextPort) ? nextPort : undefined })
+                      updateOAuthConfig({
+                        redirectPort: Number.isFinite(nextPort) ? nextPort : undefined
+                      })
                     }}
                     className="text-xs"
                   />
@@ -1378,8 +1592,12 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
             <div className="flex items-center justify-between">
               <label className="text-sm font-medium">{t('provider.channelLogin')}</label>
               <div className="flex items-center gap-2">
-                <span className={`text-xs ${provider.channel?.accessToken ? 'text-emerald-600' : 'text-muted-foreground'}`}>
-                  {provider.channel?.accessToken ? t('provider.channelConnected') : t('provider.channelNotConnected')}
+                <span
+                  className={`text-xs ${provider.channel?.accessToken ? 'text-emerald-600' : 'text-muted-foreground'}`}
+                >
+                  {provider.channel?.accessToken
+                    ? t('provider.channelConnected')
+                    : t('provider.channelNotConnected')}
                 </span>
                 {provider.channel?.accessToken && (
                   <Button
@@ -1406,7 +1624,9 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
                   disabled={channelAppIdLocked}
                 />
                 {channelAppIdLocked && (
-                  <p className="text-[11px] text-muted-foreground">{t('provider.channelAppIdLocked')}</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    {t('provider.channelAppIdLocked')}
+                  </p>
                 )}
               </div>
               {channelRequiresAppToken ? (
@@ -1426,7 +1646,11 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
                       className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                       tabIndex={-1}
                     >
-                      {showChannelToken ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+                      {showChannelToken ? (
+                        <EyeOff className="size-3.5" />
+                      ) : (
+                        <Eye className="size-3.5" />
+                      )}
                     </button>
                   </div>
                 </div>
@@ -1440,22 +1664,35 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <label className="text-xs font-medium">{t('provider.channelType')}</label>
-                <Select value={channelType} onValueChange={(v) => handleChannelTypeChange(v as 'sms' | 'email')}>
+                <Select
+                  value={channelType}
+                  onValueChange={(v) => handleChannelTypeChange(v as 'sms' | 'email')}
+                >
                   <SelectTrigger className="text-xs">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="sms" className="text-xs">{t('provider.channelSms')}</SelectItem>
-                    <SelectItem value="email" className="text-xs">{t('provider.channelEmail')}</SelectItem>
+                    <SelectItem value="sms" className="text-xs">
+                      {t('provider.channelSms')}
+                    </SelectItem>
+                    <SelectItem value="email" className="text-xs">
+                      {t('provider.channelEmail')}
+                    </SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-1.5">
                 <label className="text-xs font-medium">
-                  {channelType === 'sms' ? t('provider.channelMobile') : t('provider.channelEmailAddress')}
+                  {channelType === 'sms'
+                    ? t('provider.channelMobile')
+                    : t('provider.channelEmailAddress')}
                 </label>
                 <Input
-                  placeholder={channelType === 'sms' ? t('provider.channelMobilePlaceholder') : t('provider.channelEmailPlaceholder')}
+                  placeholder={
+                    channelType === 'sms'
+                      ? t('provider.channelMobilePlaceholder')
+                      : t('provider.channelEmailPlaceholder')
+                  }
                   value={channelType === 'sms' ? channelMobile : channelEmail}
                   onChange={(e) => {
                     if (channelType === 'sms') setChannelMobile(e.target.value)
@@ -1509,8 +1746,14 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
                     disabled={channelRefreshing}
                     onClick={handleChannelRefreshUser}
                   >
-                    {channelRefreshing ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3" />}
-                    {channelRefreshing ? t('provider.channelRefreshing') : t('provider.channelRefreshUser')}
+                    {channelRefreshing ? (
+                      <Loader2 className="size-3 animate-spin" />
+                    ) : (
+                      <RefreshCw className="size-3" />
+                    )}
+                    {channelRefreshing
+                      ? t('provider.channelRefreshing')
+                      : t('provider.channelRefreshUser')}
                   </Button>
                   <Button
                     variant="ghost"
@@ -1536,9 +1779,7 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
         <section className="space-y-2 mt-5">
           <label className="text-sm font-medium">{t('provider.proxyUrl')}</label>
           <Input
-            placeholder={
-              builtinPreset?.defaultBaseUrl || 'https://api.example.com'
-            }
+            placeholder={builtinPreset?.defaultBaseUrl || 'https://api.example.com'}
             value={provider.baseUrl}
             onChange={(e) => updateProvider(provider.id, { baseUrl: e.target.value })}
             className="text-xs"
@@ -1550,16 +1791,20 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
         <section className="space-y-2 mt-5">
           <label className="text-sm font-medium">{t('provider.connectionCheck')}</label>
           <div className="flex items-center gap-2">
-            <Select
-              value={testModelId}
-              onValueChange={(v) => setTestModelId(v)}
-            >
+            <Select value={testModelId} onValueChange={(v) => setTestModelId(v)}>
               <SelectTrigger className="flex-1 text-xs">
-                <SelectValue placeholder={provider.models[0]?.id || t('provider.noAvailableModels')} />
+                <SelectValue
+                  placeholder={provider.models[0]?.id || t('provider.noAvailableModels')}
+                />
               </SelectTrigger>
               <SelectContent>
-                {(provider.models.some((m) => m.enabled) ? provider.models.filter((m) => m.enabled) : provider.models).map((m) => (
-                  <SelectItem key={m.id} value={m.id} className="text-xs">{m.name}</SelectItem>
+                {(provider.models.some((m) => m.enabled)
+                  ? provider.models.filter((m) => m.enabled)
+                  : provider.models
+                ).map((m) => (
+                  <SelectItem key={m.id} value={m.id} className="text-xs">
+                    {m.name}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -1588,9 +1833,18 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="openai-chat" className="text-xs">{t('provider.openaiChatCompat')}</SelectItem>
-                <SelectItem value="openai-responses" className="text-xs">{t('provider.openaiResponses')}</SelectItem>
-                <SelectItem value="anthropic" className="text-xs">Anthropic</SelectItem>
+                <SelectItem value="openai-chat" className="text-xs">
+                  {t('provider.openaiChatCompat')}
+                </SelectItem>
+                <SelectItem value="openai-responses" className="text-xs">
+                  {t('provider.openaiResponses')}
+                </SelectItem>
+                <SelectItem value="anthropic" className="text-xs">
+                  Anthropic
+                </SelectItem>
+                <SelectItem value="gemini" className="text-xs">
+                  Gemini
+                </SelectItem>
               </SelectContent>
             </Select>
           </section>
@@ -1604,7 +1858,10 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
             <div>
               <label className="text-sm font-medium">{t('provider.modelList')}</label>
               <p className="text-[11px] text-muted-foreground">
-                {t('provider.modelCount', { total: provider.models.length, enabled: provider.models.filter((m) => m.enabled).length })}
+                {t('provider.modelCount', {
+                  total: provider.models.length,
+                  enabled: provider.models.filter((m) => m.enabled).length
+                })}
               </p>
             </div>
             <div className="flex items-center gap-1.5">
@@ -1626,10 +1883,19 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
                 disabled={fetchingModels}
                 onClick={handleFetchModels}
               >
-                {fetchingModels ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3" />}
+                {fetchingModels ? (
+                  <Loader2 className="size-3 animate-spin" />
+                ) : (
+                  <RefreshCw className="size-3" />
+                )}
                 {t('provider.fetchModels')}
               </Button>
-              <Button variant="outline" size="sm" className="h-7 w-7 p-0" onClick={() => setAddModelOpen(true)}>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 w-7 p-0"
+                onClick={() => setAddModelOpen(true)}
+              >
                 <Plus className="size-3.5" />
               </Button>
             </div>
@@ -1638,117 +1904,164 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
           <div className="flex min-h-0 flex-1 flex-col rounded-lg border overflow-hidden">
             {filteredModels.length === 0 ? (
               <div className="flex flex-1 items-center justify-center p-6 text-center text-xs text-muted-foreground">
-                {provider.models.length === 0 ? t('provider.noModels') : t('provider.noMatchResults')}
+                {provider.models.length === 0
+                  ? t('provider.noModels')
+                  : t('provider.noMatchResults')}
               </div>
             ) : (
               <div className="flex-1 overflow-y-auto divide-y">
                 {filteredModels.map((model) => {
-                  const capabilityIndicators: Array<{ key: string; icon: React.ComponentType<{ className?: string }>; label: string }> = []
+                  const capabilityIndicators: Array<{
+                    key: string
+                    icon: React.ComponentType<{ className?: string }>
+                    label: string
+                  }> = []
                   if (model.category === 'image') {
-                    capabilityIndicators.push({ key: 'category-image', icon: ImageIcon, label: t('provider.modelCategoryImage') })
+                    capabilityIndicators.push({
+                      key: 'category-image',
+                      icon: ImageIcon,
+                      label: t('provider.modelCategoryImage')
+                    })
                   } else if (model.category === 'speech') {
-                    capabilityIndicators.push({ key: 'category-speech', icon: Mic, label: t('provider.modelCategorySpeech') })
+                    capabilityIndicators.push({
+                      key: 'category-speech',
+                      icon: Mic,
+                      label: t('provider.modelCategorySpeech')
+                    })
                   } else if (model.category === 'embedding') {
-                    capabilityIndicators.push({ key: 'category-embedding', icon: Shapes, label: t('provider.modelCategoryEmbedding') })
+                    capabilityIndicators.push({
+                      key: 'category-embedding',
+                      icon: Shapes,
+                      label: t('provider.modelCategoryEmbedding')
+                    })
                   }
                   if (modelSupportsVision(model, provider.type)) {
-                    capabilityIndicators.push({ key: 'vision', icon: Eye, label: t('provider.supportsVision') })
+                    capabilityIndicators.push({
+                      key: 'vision',
+                      icon: Eye,
+                      label: t('provider.supportsVision')
+                    })
                   }
                   if (model.supportsFunctionCall !== false) {
-                    capabilityIndicators.push({ key: 'function', icon: Code2, label: t('provider.supportsFunctionCall') })
+                    capabilityIndicators.push({
+                      key: 'function',
+                      icon: Code2,
+                      label: t('provider.supportsFunctionCall')
+                    })
                   }
                   if (model.supportsThinking) {
-                    capabilityIndicators.push({ key: 'thinking', icon: Sparkles, label: t('provider.supportsThinking') })
+                    capabilityIndicators.push({
+                      key: 'thinking',
+                      icon: Sparkles,
+                      label: t('provider.supportsThinking')
+                    })
                   }
 
                   return (
-                  <div
-                    key={model.id}
-                    className="flex items-center gap-3 px-3 py-2 hover:bg-muted/30 transition-colors group"
-                  >
-                    <ModelIcon icon={model.icon} modelId={model.id} providerBuiltinId={provider.builtinId} size={16} className="shrink-0 opacity-40" />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <p className="text-xs font-medium truncate">{model.name}</p>
-                        <span className="text-[10px] text-muted-foreground/50 truncate">{model.id}</span>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted-foreground/40">
-                        {model.contextLength && (
-                          <span>{Math.round(model.contextLength / 1024)}K context</span>
-                        )}
-                        {(model.inputPrice != null || model.outputPrice != null) && (
-                          <span>
-                            ${model.inputPrice ?? '?'} → ${model.outputPrice ?? '?'}
-                          </span>
-                        )}
-                        {(model.cacheCreationPrice != null || model.cacheHitPrice != null) && (
-                          <span className="text-emerald-500/60">
-                            cache: {model.cacheCreationPrice != null ? `写 $${model.cacheCreationPrice}` : ''}{model.cacheCreationPrice != null && model.cacheHitPrice != null ? ' / ' : ''}{model.cacheHitPrice != null ? `读 $${model.cacheHitPrice}` : ''}
-                          </span>
-                        )}
-                        {capabilityIndicators.length > 0 && (
-                          <span className="flex items-center gap-1 text-muted-foreground/60">
-                            {capabilityIndicators.map(({ key, icon: Icon, label }) => (
-                              <Tooltip key={`${model.id}-${key}`}>
-                                <TooltipTrigger asChild>
-                                  <span className="inline-flex items-center justify-center rounded-full bg-muted/60 px-1.5 py-0.5 text-[9px] text-muted-foreground hover:bg-muted/80">
-                                    <Icon className="size-3" />
-                                  </span>
-                                </TooltipTrigger>
-                                <TooltipContent side="top" className="text-[11px]">
-                                  {label}
-                                </TooltipContent>
-                              </Tooltip>
-                            ))}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          className="size-5 flex items-center justify-center rounded transition-colors text-muted-foreground/20 hover:text-muted-foreground/70 hover:bg-muted/40 opacity-0 group-hover:opacity-100"
-                          onClick={() => setEditingModel(model)}
-                        >
-                          <Pencil className="size-3" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="text-[11px]">
-                        {t('provider.editModel')}
-                      </TooltipContent>
-                    </Tooltip>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          className={`size-5 flex items-center justify-center rounded transition-colors ${
-                            model.supportsThinking
-                              ? 'text-violet-500 hover:bg-violet-500/10'
-                              : 'text-muted-foreground/20 hover:text-muted-foreground/50 hover:bg-muted/40'
-                          } opacity-0 group-hover:opacity-100`}
-                          onClick={() => setEditingThinkingModel(model)}
-                        >
-                          <Brain className="size-3" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="text-[11px]">
-                        {model.supportsThinking ? t('provider.editThinkConfig') : t('provider.configThinkSupport')}
-                      </TooltipContent>
-                    </Tooltip>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all"
-                      onClick={() => removeModel(provider.id, model.id)}
+                    <div
+                      key={model.id}
+                      className="flex items-center gap-3 px-3 py-2 hover:bg-muted/30 transition-colors group"
                     >
-                      <Trash2 className="size-3" />
-                    </Button>
-                    <Switch
-                      checked={model.enabled}
-                      onCheckedChange={() => toggleModelEnabled(provider.id, model.id)}
-                    />
-                  </div>
+                      <ModelIcon
+                        icon={model.icon}
+                        modelId={model.id}
+                        providerBuiltinId={provider.builtinId}
+                        size={16}
+                        className="shrink-0 opacity-40"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <p className="text-xs font-medium truncate">{model.name}</p>
+                          <span className="text-[10px] text-muted-foreground/50 truncate">
+                            {model.id}
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted-foreground/40">
+                          {model.contextLength && (
+                            <span>{Math.round(model.contextLength / 1024)}K context</span>
+                          )}
+                          {(model.inputPrice != null || model.outputPrice != null) && (
+                            <span>
+                              ${model.inputPrice ?? '?'} → ${model.outputPrice ?? '?'}
+                            </span>
+                          )}
+                          {(model.cacheCreationPrice != null || model.cacheHitPrice != null) && (
+                            <span className="text-emerald-500/60">
+                              cache:{' '}
+                              {model.cacheCreationPrice != null
+                                ? `写 $${model.cacheCreationPrice}`
+                                : ''}
+                              {model.cacheCreationPrice != null && model.cacheHitPrice != null
+                                ? ' / '
+                                : ''}
+                              {model.cacheHitPrice != null ? `读 $${model.cacheHitPrice}` : ''}
+                            </span>
+                          )}
+                          {capabilityIndicators.length > 0 && (
+                            <span className="flex items-center gap-1 text-muted-foreground/60">
+                              {capabilityIndicators.map(({ key, icon: Icon, label }) => (
+                                <Tooltip key={`${model.id}-${key}`}>
+                                  <TooltipTrigger asChild>
+                                    <span className="inline-flex items-center justify-center rounded-full bg-muted/60 px-1.5 py-0.5 text-[9px] text-muted-foreground hover:bg-muted/80">
+                                      <Icon className="size-3" />
+                                    </span>
+                                  </TooltipTrigger>
+                                  <TooltipContent side="top" className="text-[11px]">
+                                    {label}
+                                  </TooltipContent>
+                                </Tooltip>
+                              ))}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            className="size-5 flex items-center justify-center rounded transition-colors text-muted-foreground/20 hover:text-muted-foreground/70 hover:bg-muted/40 opacity-0 group-hover:opacity-100"
+                            onClick={() => setEditingModel(model)}
+                          >
+                            <Pencil className="size-3" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="text-[11px]">
+                          {t('provider.editModel')}
+                        </TooltipContent>
+                      </Tooltip>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            className={`size-5 flex items-center justify-center rounded transition-colors ${
+                              model.supportsThinking
+                                ? 'text-violet-500 hover:bg-violet-500/10'
+                                : 'text-muted-foreground/20 hover:text-muted-foreground/50 hover:bg-muted/40'
+                            } opacity-0 group-hover:opacity-100`}
+                            onClick={() => setEditingThinkingModel(model)}
+                          >
+                            <Brain className="size-3" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="text-[11px]">
+                          {model.supportsThinking
+                            ? t('provider.editThinkConfig')
+                            : t('provider.configThinkSupport')}
+                        </TooltipContent>
+                      </Tooltip>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all"
+                        onClick={() => removeModel(provider.id, model.id)}
+                      >
+                        <Trash2 className="size-3" />
+                      </Button>
+                      <Switch
+                        checked={model.enabled}
+                        onCheckedChange={() => toggleModelEnabled(provider.id, model.id)}
+                      />
+                    </div>
                   )
                 })}
               </div>
@@ -1769,7 +2082,9 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
       {editingModel && (
         <ModelFormDialog
           open={!!editingModel}
-          onOpenChange={(v) => { if (!v) setEditingModel(null) }}
+          onOpenChange={(v) => {
+            if (!v) setEditingModel(null)
+          }}
           providerType={provider.type}
           initial={editingModel}
           onSave={(model) => {
@@ -1784,11 +2099,13 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
         <ThinkingConfigDialog
           model={editingThinkingModel}
           open={!!editingThinkingModel}
-          onOpenChange={(v) => { if (!v) setEditingThinkingModel(null) }}
+          onOpenChange={(v) => {
+            if (!v) setEditingThinkingModel(null)
+          }}
           onSave={(supportsThinking, thinkingConfig) => {
             updateModel(provider.id, editingThinkingModel.id, {
               supportsThinking,
-              thinkingConfig: supportsThinking ? thinkingConfig : undefined,
+              thinkingConfig: supportsThinking ? thinkingConfig : undefined
             })
             setEditingThinkingModel(null)
           }}
@@ -1804,7 +2121,7 @@ function ThinkingConfigDialog({
   model,
   open,
   onOpenChange,
-  onSave,
+  onSave
 }: {
   model: AIModelConfig
   open: boolean
@@ -1814,13 +2131,17 @@ function ThinkingConfigDialog({
   const { t } = useTranslation('settings')
   const [enabled, setEnabled] = useState(model.supportsThinking ?? false)
   const [bodyParamsJson, setBodyParamsJson] = useState(
-    model.thinkingConfig?.bodyParams ? JSON.stringify(model.thinkingConfig.bodyParams, null, 2) : '{\n  \n}'
+    model.thinkingConfig?.bodyParams
+      ? JSON.stringify(model.thinkingConfig.bodyParams, null, 2)
+      : '{\n  \n}'
   )
   const [forceTemp, setForceTemp] = useState(
     model.thinkingConfig?.forceTemperature?.toString() ?? ''
   )
   const [disabledBodyParamsJson, setDisabledBodyParamsJson] = useState(
-    model.thinkingConfig?.disabledBodyParams ? JSON.stringify(model.thinkingConfig.disabledBodyParams, null, 2) : ''
+    model.thinkingConfig?.disabledBodyParams
+      ? JSON.stringify(model.thinkingConfig.disabledBodyParams, null, 2)
+      : ''
   )
   const [jsonError, setJsonError] = useState('')
 
@@ -1839,7 +2160,11 @@ function ThinkingConfigDialog({
       if (disabledBodyParamsJson.trim()) {
         try {
           const disabledParsed = JSON.parse(disabledBodyParamsJson)
-          if (typeof disabledParsed === 'object' && disabledParsed !== null && !Array.isArray(disabledParsed)) {
+          if (
+            typeof disabledParsed === 'object' &&
+            disabledParsed !== null &&
+            !Array.isArray(disabledParsed)
+          ) {
             config.disabledBodyParams = disabledParsed
           } else {
             setJsonError(t('provider.thinkJsonObjError'))
@@ -1879,20 +2204,32 @@ function ThinkingConfigDialog({
             <>
               <div className="space-y-2">
                 <label className="text-sm font-medium">{t('provider.thinkBodyParams')}</label>
-                <p className="text-[11px] text-muted-foreground">{t('provider.thinkBodyParamsHint')}</p>
+                <p className="text-[11px] text-muted-foreground">
+                  {t('provider.thinkBodyParamsHint')}
+                </p>
                 <textarea
                   value={bodyParamsJson}
-                  onChange={(e) => { setBodyParamsJson(e.target.value); setJsonError('') }}
+                  onChange={(e) => {
+                    setBodyParamsJson(e.target.value)
+                    setJsonError('')
+                  }}
                   className="w-full h-24 rounded-md border bg-muted/30 px-3 py-2 font-mono text-xs resize-none focus:outline-none focus:ring-1 focus:ring-ring"
                   spellCheck={false}
                 />
               </div>
               <div className="space-y-2">
-                <label className="text-sm font-medium">{t('provider.thinkDisabledBodyParams')}</label>
-                <p className="text-[11px] text-muted-foreground">{t('provider.thinkDisabledBodyParamsHint')}</p>
+                <label className="text-sm font-medium">
+                  {t('provider.thinkDisabledBodyParams')}
+                </label>
+                <p className="text-[11px] text-muted-foreground">
+                  {t('provider.thinkDisabledBodyParamsHint')}
+                </p>
                 <textarea
                   value={disabledBodyParamsJson}
-                  onChange={(e) => { setDisabledBodyParamsJson(e.target.value); setJsonError('') }}
+                  onChange={(e) => {
+                    setDisabledBodyParamsJson(e.target.value)
+                    setJsonError('')
+                  }}
                   className="w-full h-24 rounded-md border bg-muted/30 px-3 py-2 font-mono text-xs resize-none focus:outline-none focus:ring-1 focus:ring-ring"
                   spellCheck={false}
                   placeholder={t('provider.leaveEmpty')}
@@ -1901,7 +2238,9 @@ function ThinkingConfigDialog({
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-medium">{t('provider.forceTemperature')}</label>
-                <p className="text-[11px] text-muted-foreground">{t('provider.forceTemperatureHint')}</p>
+                <p className="text-[11px] text-muted-foreground">
+                  {t('provider.forceTemperatureHint')}
+                </p>
                 <Input
                   type="number"
                   step="0.1"
@@ -1917,8 +2256,12 @@ function ThinkingConfigDialog({
           )}
 
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>{t('action.cancel', { ns: 'common' })}</Button>
-            <Button size="sm" onClick={handleSave}>{t('action.save', { ns: 'common' })}</Button>
+            <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
+              {t('action.cancel', { ns: 'common' })}
+            </Button>
+            <Button size="sm" onClick={handleSave}>
+              {t('action.save', { ns: 'common' })}
+            </Button>
           </div>
         </div>
       </DialogContent>
@@ -1941,11 +2284,19 @@ export function ProviderPanel(): React.JSX.Element {
   const selectedProvider = providers.find((p) => p.id === selectedId) ?? null
 
   const enabledProviders = useMemo(
-    () => providers.filter((p) => p.enabled && (!searchQuery || p.name.toLowerCase().includes(searchQuery.toLowerCase()))),
+    () =>
+      providers.filter(
+        (p) =>
+          p.enabled && (!searchQuery || p.name.toLowerCase().includes(searchQuery.toLowerCase()))
+      ),
     [providers, searchQuery]
   )
   const disabledProviders = useMemo(
-    () => providers.filter((p) => !p.enabled && (!searchQuery || p.name.toLowerCase().includes(searchQuery.toLowerCase()))),
+    () =>
+      providers.filter(
+        (p) =>
+          !p.enabled && (!searchQuery || p.name.toLowerCase().includes(searchQuery.toLowerCase()))
+      ),
     [providers, searchQuery]
   )
 
@@ -1985,7 +2336,9 @@ export function ProviderPanel(): React.JSX.Element {
           <div className="flex-1 overflow-y-auto py-1">
             {enabledProviders.length > 0 && (
               <div className="px-2 pt-1.5 pb-1">
-                <p className="text-[10px] font-medium text-muted-foreground/50 uppercase tracking-wider px-1">{t('provider.enabled')}</p>
+                <p className="text-[10px] font-medium text-muted-foreground/50 uppercase tracking-wider px-1">
+                  {t('provider.enabled')}
+                </p>
                 {enabledProviders.map((p) => (
                   <button
                     key={p.id}
@@ -2006,7 +2359,9 @@ export function ProviderPanel(): React.JSX.Element {
 
             {disabledProviders.length > 0 && (
               <div className="px-2 pt-2 pb-1">
-                <p className="text-[10px] font-medium text-muted-foreground/50 uppercase tracking-wider px-1">{t('provider.disabled')}</p>
+                <p className="text-[10px] font-medium text-muted-foreground/50 uppercase tracking-wider px-1">
+                  {t('provider.disabled')}
+                </p>
                 {disabledProviders.map((p) => (
                   <button
                     key={p.id}

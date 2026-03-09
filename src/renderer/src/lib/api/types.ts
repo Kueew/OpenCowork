@@ -185,7 +185,7 @@ export interface ThinkingConfig {
 
 // --- AI Provider Management ---
 
-export type ProviderType = 'anthropic' | 'openai-chat' | 'openai-responses' | 'openai-images'
+export type ProviderType = 'anthropic' | 'openai-chat' | 'openai-responses' | 'openai-images' | 'gemini'
 export type ResponseSummary = 'auto' | 'concise' | 'detailed'
 
 export type AuthMode = 'apiKey' | 'oauth' | 'channel'
