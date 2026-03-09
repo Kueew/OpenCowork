@@ -62,16 +62,16 @@ const staggerContainer = {
 
 const staggerItem = {
   hidden: { opacity: 0, y: 20 },
-  show: { 
-    opacity: 1, 
+  show: {
+    opacity: 1,
     y: 0,
     transition: {
-      type: "spring",
+      type: 'spring' as const,
       stiffness: 300,
       damping: 24
     }
   }
-};
+}
 
 const platforms = [
   { name: 'Feishu', label: '飞书' },
