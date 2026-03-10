@@ -3,6 +3,14 @@
 All notable changes to **OpenCowork** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com).
 
+## [0.5.2] - 2026-03-10
+
+### Added
+- Added draw prompt optimizer module for enhanced image generation workflows.
+
+### Changed
+- Bumped main application version from 0.5.1 → 0.5.2
+
 ## [0.5.1] - 2026-03-10
 
 ### Added
