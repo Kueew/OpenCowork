@@ -22,7 +22,7 @@ import { Textarea } from '@renderer/components/ui/textarea'
 import { Spinner } from '@renderer/components/ui/spinner'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { useProviderStore, modelSupportsVision } from '@renderer/stores/provider-store'
-import type { AIModelConfig } from '@renderer/lib/api/types'
+import type { AIModelConfig, UnifiedMessage } from '@renderer/lib/api/types'
 import { useSettingsStore } from '@renderer/stores/settings-store'
 import { updateWebSearchToolRegistration } from '@renderer/lib/tools'
 import { useUIStore, type AppMode } from '@renderer/stores/ui-store'
@@ -208,7 +208,7 @@ interface InputHistoryDraft {
 }
 
 const EMPTY_QUEUED_MESSAGES: PendingSessionMessageItem[] = []
-const EMPTY_SESSION_MESSAGES = [] as const
+const EMPTY_SESSION_MESSAGES: UnifiedMessage[] = []
 const INPUT_HISTORY_LIMIT = 30
 const PENDING_HISTORY_KEY = '__pending_session__'
 const MIN_INPUT_HEIGHT = 120

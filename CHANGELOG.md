@@ -3,6 +3,20 @@
 All notable changes to **OpenCowork** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com).
 
+## [0.5.3] - 2026-03-11
+
+### Added
+- Added prompt recommendations in chat input along with a dedicated clarify-mode option to auto-accept recommended `AskUserQuestion` answers.
+- Added appearance controls for enabling/disabling UI animations and choosing whether the left toolbar starts collapsed by default.
+- Added an `Open in system app` action in the preview panel for local files.
+- Added direct OpenCoWork Skills marketplace API key entry points, including dashboard/docs links inside the skills page.
+
+### Changed
+- Refined OpenCoWork Skills marketplace handling with richer metadata support, refreshed branding, and a smoother browse/install experience.
+- Improved UI transition behavior so layout and preview interactions respect the global animation setting.
+- Bumped main application version from 0.5.2 → 0.5.3
+- Updated documentation homepage version display from v0.5.1 → v0.5.3
+
 ## [0.5.2] - 2026-03-10
 
 ### Added

@@ -17,6 +17,9 @@ import { useSettingsStore } from './settings-store'
 export { builtinProviderPresets }
 export type { BuiltinProviderPreset }
 
+const DEFAULT_FAST_PROVIDER_BUILTIN_ID = 'routin-ai'
+const DEFAULT_FAST_MODEL_ID = 'doubao-seed-2-0-mini-260215'
+
 // --- Helper: create AIProvider from preset ---
 
 function createProviderFromPreset(preset: BuiltinProviderPreset): AIProvider {
@@ -193,6 +196,40 @@ function resolveProviderDefaultModelIdByCategory(
   const categoryModels = provider.models.filter((m) => (m.category ?? 'chat') === category)
   const enabledModels = categoryModels.filter((m) => m.enabled)
   return enabledModels[0]?.id ?? categoryModels[0]?.id ?? ''
+}
+
+function resolveDefaultFastSelection(
+  providers: AIProvider[]
+): { providerId: string; modelId: string } | null {
+  const preferredProvider = providers.find(
+    (provider) =>
+      provider.enabled &&
+      provider.builtinId === DEFAULT_FAST_PROVIDER_BUILTIN_ID &&
+      provider.models.some((model) => model.enabled && (model.category ?? 'chat') === 'chat')
+  )
+
+  if (preferredProvider) {
+    const preferredModel = preferredProvider.models.find(
+      (model) => model.enabled && model.id === DEFAULT_FAST_MODEL_ID
+    )
+    const fallbackModelId =
+      resolveProviderDefaultModelIdByCategory(preferredProvider, 'chat') ||
+      resolveProviderDefaultModelId(preferredProvider)
+    const modelId = preferredModel?.id ?? fallbackModelId
+    if (modelId) {
+      return { providerId: preferredProvider.id, modelId }
+    }
+  }
+
+  const fallbackProviderId = resolveFirstProviderIdByCategory(providers, 'chat')
+  if (!fallbackProviderId) return null
+  const fallbackProvider = providers.find((provider) => provider.id === fallbackProviderId)
+  if (!fallbackProvider) return null
+  const modelId =
+    resolveProviderDefaultModelIdByCategory(fallbackProvider, 'chat') ||
+    resolveProviderDefaultModelId(fallbackProvider)
+  if (!modelId) return null
+  return { providerId: fallbackProvider.id, modelId }
 }
 
 function resolveFirstProviderIdByCategory(
@@ -898,6 +935,12 @@ function ensureBuiltinPresets(): void {
   }
 
   const state = useProviderStore.getState()
+  const defaultFastSelection = resolveDefaultFastSelection(state.providers)
+  const shouldAdoptDefaultFastSelection =
+    Boolean(defaultFastSelection) &&
+    (!state.activeFastProviderId ||
+      (state.activeFastProviderId === state.activeProviderId &&
+        state.activeFastModelId === state.activeModelId))
   const activeProvider = state.activeProviderId
     ? state.providers.find((provider) => provider.id === state.activeProviderId)
     : null
@@ -933,12 +976,23 @@ function ensureBuiltinPresets(): void {
     }
   }
 
-  const fastProviderId = state.activeFastProviderId ?? state.activeProviderId
+  const fastProviderId = shouldAdoptDefaultFastSelection
+    ? defaultFastSelection?.providerId ?? state.activeFastProviderId ?? state.activeProviderId
+    : state.activeFastProviderId ?? state.activeProviderId
   if (fastProviderId) {
     const fastProvider = state.providers.find((provider) => provider.id === fastProviderId)
     if (fastProvider) {
-      if (!state.activeFastProviderId) {
-        state.setActiveFastProvider(fastProvider.id)
+      if (shouldAdoptDefaultFastSelection) {
+        if (state.activeFastProviderId !== fastProvider.id) {
+          state.setActiveFastProvider(fastProvider.id)
+        }
+        const preferredFastModelId =
+          defaultFastSelection?.providerId === fastProvider.id
+            ? defaultFastSelection.modelId
+            : resolveValidModelIdByCategory(fastProvider, '', 'chat')
+        if (preferredFastModelId && preferredFastModelId !== state.activeFastModelId) {
+          state.setActiveFastModel(preferredFastModelId)
+        }
       } else {
         const nextFastModelId = resolveValidModelIdByCategory(
           fastProvider,
