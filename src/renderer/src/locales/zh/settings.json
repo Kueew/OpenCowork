@@ -473,7 +473,6 @@
     "removed": "频道已移除",
     "botName": "机器人名称",
     "systemPrompt": "系统提示词",
-    "systemPromptPlaceholder": "可选：为该频道的自动回复设置专用系统提示词...",
     "model": "回复模型",
     "modelDefault": "使用全局默认",
     "modelHint": "频道自动回复所用模型。保留默认将使用当前全局模型。",

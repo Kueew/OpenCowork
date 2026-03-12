@@ -473,7 +473,6 @@
     "removed": "Channle removed",
     "botName": "Bot Name",
     "systemPrompt": "System Prompt",
-    "systemPromptPlaceholder": "Optional: set a custom system prompt for this channle's auto-replies...",
     "model": "Reply Model",
     "modelDefault": "Use global default",
     "modelHint": "Model used for channle auto-reply. Leave default to use the globally active model.",

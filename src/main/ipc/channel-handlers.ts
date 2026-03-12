@@ -147,6 +147,28 @@ export function registerChannelHandlers(channelManager: ChannelManager): void {
           changed = true
         }
       }
+      // Remove legacy top-level fields that are no longer supported
+      for (const key of Object.keys(p)) {
+        if (
+          ![
+            'id',
+            'type',
+            'name',
+            'enabled',
+            'builtin',
+            'config',
+            'createdAt',
+            'tools',
+            'providerId',
+            'model',
+            'features',
+            'permissions'
+          ].includes(key)
+        ) {
+          delete ((p as unknown) as Record<string, unknown>)[key]
+          changed = true
+        }
+      }
       // Ensure tools map matches descriptor
       const nextTools = buildToolsMap(desc, p.tools)
       if (nextTools && JSON.stringify(nextTools) !== JSON.stringify(p.tools)) {
