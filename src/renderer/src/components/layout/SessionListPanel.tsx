@@ -753,18 +753,19 @@ export function SessionListPanel(): React.JSX.Element {
                       )}
                     >
                       <div className="overflow-hidden">
-                        {group.items.map((session) => (
-                          <ContextMenu key={session.id}>
-                            <ContextMenuTrigger asChild>
-                              <button
-                                className={cn(
-                                  'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors',
-                                  session.id === activeSessionId &&
-                                    useUIStore.getState().chatView === 'session' &&
-                                    !useUIStore.getState().settingsPageOpen
-                                    ? 'bg-accent text-accent-foreground'
-                                    : 'text-foreground/80 hover:bg-muted/60'
-                                )}
+                        <div className="ml-4 border-l border-border/40 pl-2">
+                          {group.items.map((session) => (
+                            <ContextMenu key={session.id}>
+                              <ContextMenuTrigger asChild>
+                                <button
+                                  className={cn(
+                                    'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors',
+                                    session.id === activeSessionId &&
+                                      useUIStore.getState().chatView === 'session' &&
+                                      !useUIStore.getState().settingsPageOpen
+                                      ? 'bg-accent text-accent-foreground'
+                                      : 'text-foreground/80 hover:bg-muted/60'
+                                  )}
                                 onClick={() => {
                                   setActiveSession(session.id)
                                   useUIStore.getState().navigateToSession()
@@ -999,8 +1000,9 @@ export function SessionListPanel(): React.JSX.Element {
                                 {t('action.delete', { ns: 'common' })}
                               </ContextMenuItem>
                             </ContextMenuContent>
-                          </ContextMenu>
-                        ))}
+                            </ContextMenu>
+                          ))}
+                        </div>
                       </div>
                     </div>
                   </div>

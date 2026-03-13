@@ -3,7 +3,15 @@ import { useTranslation } from 'react-i18next'
 import { useChatStore } from '@renderer/stores/chat-store'
 import { useUIStore } from '@renderer/stores/ui-store'
 import { MessageItem } from './MessageItem'
-import { MessageSquare, CircleHelp, Briefcase, Code2, RefreshCw, ArrowDown, Loader2 } from 'lucide-react'
+import {
+  MessageSquare,
+  CircleHelp,
+  Briefcase,
+  Code2,
+  RefreshCw,
+  ArrowDown,
+  Loader2
+} from 'lucide-react'
 import { Button } from '@renderer/components/ui/button'
 
 import type { ContentBlock, ToolResultContent, UnifiedMessage } from '@renderer/lib/api/types'
@@ -62,6 +70,8 @@ const EMPTY_MESSAGES: UnifiedMessage[] = []
 const EMPTY_MESSAGE_IDS: string[] = []
 const INITIAL_VISIBLE_MESSAGE_COUNT = 120
 const LOAD_MORE_MESSAGE_STEP = 80
+const AUTO_SCROLL_BOTTOM_THRESHOLD = 80
+const STREAMING_AUTO_SCROLL_BOTTOM_THRESHOLD = 150
 
 function isToolResultOnlyUserMessage(message: UnifiedMessage): boolean {
   return (
@@ -154,6 +164,7 @@ export function MessageList({ onRetry, onEditUserMessage }: MessageListProps): R
   const scrollContainerRef = React.useRef<HTMLDivElement>(null)
   const bottomRef = React.useRef<HTMLDivElement>(null)
   const [isAtBottom, setIsAtBottom] = React.useState(true)
+  const pendingInitialScrollSessionIdRef = React.useRef<string | null>(null)
 
   const activeSessionLoaded = activeSession?.messagesLoaded ?? true
   const activeSessionMessageCount = activeSession?.messageCount ?? 0
@@ -203,29 +214,48 @@ export function MessageList({ onRetry, onEditUserMessage }: MessageListProps): R
   React.useEffect(() => {
     setVisibleCount(INITIAL_VISIBLE_MESSAGE_COUNT)
     setIsAtBottom(true)
+    pendingInitialScrollSessionIdRef.current = activeSessionId ?? null
   }, [activeSessionId])
 
   React.useLayoutEffect(() => {
     const container = scrollContainerRef.current
     const content = contentRef.current
     if (!container || !activeSessionId) return
+    if (pendingInitialScrollSessionIdRef.current !== activeSessionId) return
+
     const scroll = (): void => {
       container.scrollTop = container.scrollHeight
     }
+
     scroll()
     const id = setTimeout(scroll, 100)
+    if (messageIds.length > 0 || streamingMessageId) {
+      pendingInitialScrollSessionIdRef.current = null
+    }
+
     if (content) {
-      const observer = new ResizeObserver(() => scroll())
+      const observer = new ResizeObserver(() => {
+        scroll()
+        if (messageIds.length > 0 || streamingMessageId) {
+          pendingInitialScrollSessionIdRef.current = null
+        }
+      })
       observer.observe(content)
-      const stopObserving = setTimeout(() => observer.disconnect(), 500)
+      const stopObserving = setTimeout(() => {
+        observer.disconnect()
+        if (messageIds.length > 0 || streamingMessageId) {
+          pendingInitialScrollSessionIdRef.current = null
+        }
+      }, 500)
       return () => {
         clearTimeout(id)
         clearTimeout(stopObserving)
         observer.disconnect()
       }
     }
+
     return () => clearTimeout(id)
-  }, [activeSessionId, messageIds])
+  }, [activeSessionId, messageIds.length, streamingMessageId])
 
   // Track if user is near the bottom via scroll position
   // Use larger threshold during streaming so rapid content growth doesn't break auto-scroll
@@ -236,7 +266,9 @@ export function MessageList({ onRetry, onEditUserMessage }: MessageListProps): R
     const handleScroll = (): void => {
       const distanceFromBottom =
         container.scrollHeight - container.scrollTop - container.clientHeight
-      const threshold = streamingMessageId ? 150 : 5
+      const threshold = streamingMessageId
+        ? STREAMING_AUTO_SCROLL_BOTTOM_THRESHOLD
+        : AUTO_SCROLL_BOTTOM_THRESHOLD
       const nextAtBottom = distanceFromBottom <= threshold
       setIsAtBottom((prev) => (prev === nextAtBottom ? prev : nextAtBottom))
     }
@@ -268,7 +300,7 @@ export function MessageList({ onRetry, onEditUserMessage }: MessageListProps): R
     const observer = new ResizeObserver(() => {
       const distanceFromBottom =
         container.scrollHeight - container.scrollTop - container.clientHeight
-      if (distanceFromBottom <= 150) {
+      if (distanceFromBottom <= STREAMING_AUTO_SCROLL_BOTTOM_THRESHOLD) {
         container.scrollTop = container.scrollHeight
       }
     })
