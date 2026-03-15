@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { ipcClient } from '../lib/ipc/ipc-client'
+import { useChatStore } from './chat-store'
 
 export interface TaskItem {
   id: string
@@ -209,6 +210,9 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
       return { tasksBySession: nextTasksBySession }
     })
     dbCreateTask(newTask, sortOrder)
+    if (newTask.sessionId) {
+      useChatStore.getState().clearSessionPromptSnapshot(newTask.sessionId)
+    }
     return newTask
   },
 
@@ -259,11 +263,15 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
     // Persist even when task is currently off-screen (another active session).
     if (updatedTask) {
       dbUpdateTask(id, buildDbPatch(patch, now))
+      if (updatedTask.sessionId) {
+        useChatStore.getState().clearSessionPromptSnapshot(updatedTask.sessionId)
+      }
     }
     return updatedTask
   },
 
   deleteTask: (id) => {
+    const existingTask = get().getTask(id)
     let deleted = false
 
     set((state) => {
@@ -298,6 +306,9 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
 
     if (!deleted) return false
     dbDeleteTask(id)
+    if (existingTask?.sessionId) {
+      useChatStore.getState().clearSessionPromptSnapshot(existingTask.sessionId)
+    }
     return true
   },
 
@@ -341,6 +352,7 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
       }
     })
     dbDeleteTasksBySession(sessionId)
+    useChatStore.getState().clearSessionPromptSnapshot(sessionId)
   },
 
   // --- Backward-compatible aliases ---

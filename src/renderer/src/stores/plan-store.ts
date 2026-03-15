@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
 import { nanoid } from 'nanoid'
 import { ipcClient } from '../lib/ipc/ipc-client'
+import { useChatStore } from './chat-store'
 
 // --- Types ---
 
@@ -144,6 +145,7 @@ export const usePlanStore = create<PlanStore>()(
         state.activePlanId = id
       })
       dbCreatePlan(plan)
+      useChatStore.getState().clearSessionPromptSnapshot(sessionId)
       return plan
     },
 
@@ -162,6 +164,10 @@ export const usePlanStore = create<PlanStore>()(
       if (patch.content !== undefined) dbPatch.content = patch.content
       if (patch.specJson !== undefined) dbPatch.specJson = patch.specJson
       dbUpdatePlan(planId, dbPatch)
+      const plan = get().plans[planId]
+      if (plan?.sessionId) {
+        useChatStore.getState().clearSessionPromptSnapshot(plan.sessionId)
+      }
     },
 
     approvePlan: (planId) => {
@@ -174,6 +180,10 @@ export const usePlanStore = create<PlanStore>()(
         }
       })
       dbUpdatePlan(planId, { status: 'approved', updatedAt: now })
+      const plan = get().plans[planId]
+      if (plan?.sessionId) {
+        useChatStore.getState().clearSessionPromptSnapshot(plan.sessionId)
+      }
     },
 
     rejectPlan: (planId) => {
@@ -186,6 +196,10 @@ export const usePlanStore = create<PlanStore>()(
         }
       })
       dbUpdatePlan(planId, { status: 'rejected', updatedAt: now })
+      const plan = get().plans[planId]
+      if (plan?.sessionId) {
+        useChatStore.getState().clearSessionPromptSnapshot(plan.sessionId)
+      }
     },
 
     startImplementing: (planId) => {
@@ -198,6 +212,10 @@ export const usePlanStore = create<PlanStore>()(
         }
       })
       dbUpdatePlan(planId, { status: 'implementing', updatedAt: now })
+      const plan = get().plans[planId]
+      if (plan?.sessionId) {
+        useChatStore.getState().clearSessionPromptSnapshot(plan.sessionId)
+      }
     },
 
     completePlan: (planId) => {
@@ -210,9 +228,14 @@ export const usePlanStore = create<PlanStore>()(
         }
       })
       dbUpdatePlan(planId, { status: 'completed', updatedAt: now })
+      const plan = get().plans[planId]
+      if (plan?.sessionId) {
+        useChatStore.getState().clearSessionPromptSnapshot(plan.sessionId)
+      }
     },
 
     deletePlan: (planId) => {
+      const existingPlan = get().plans[planId]
       set((state) => {
         delete state.plans[planId]
         if (state.activePlanId === planId) {
@@ -220,6 +243,9 @@ export const usePlanStore = create<PlanStore>()(
         }
       })
       dbDeletePlan(planId)
+      if (existingPlan?.sessionId) {
+        useChatStore.getState().clearSessionPromptSnapshot(existingPlan.sessionId)
+      }
     },
 
     getPlanBySession: (sessionId) => {

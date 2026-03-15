@@ -395,110 +395,130 @@ async function _runPluginAgent(task: PluginAutoReplyTask): Promise<void> {
 
   // ── Build tools (same as main agent's cowork branch) ──
   const allToolDefs = toolRegistry.getDefinitions()
+  const cachedPromptSnapshot = session.promptSnapshot
+  const canReusePromptSnapshot =
+    !!cachedPromptSnapshot &&
+    cachedPromptSnapshot.mode === 'cowork' &&
+    cachedPromptSnapshot.planMode === false
 
-  // ── Build system prompt with channel context ──
-  const settings = useSettingsStore.getState()
-  let userPrompt = settings.systemPrompt || ''
+  let effectiveToolDefs = allToolDefs
+  let systemPrompt = cachedPromptSnapshot?.systemPrompt ?? ''
 
-  // Inject active channel metadata
-  const activeChannels = useChannelStore.getState().getActiveChannels()
-  if (activeChannels.length > 0) {
-    const channelLines: string[] = ['\n## Active Channels']
-    for (const c of activeChannels) {
-      channelLines.push(`- **${c.name}** (channel_id: \`${c.id}\`, type: ${c.type})`)
-      const desc = useChannelStore.getState().getDescriptor(c.type)
-      const toolNames = desc?.tools ?? []
-      if (toolNames.length > 0) {
-        const enabled = toolNames.filter((name) => c.tools?.[name] !== false)
-        const disabled = toolNames.filter((name) => c.tools?.[name] === false)
-        channelLines.push(`  Enabled tools: ${enabled.length > 0 ? enabled.join(', ') : 'none'}`)
-        if (disabled.length > 0) {
-          channelLines.push(`  Disabled tools: ${disabled.join(', ')}`)
+  if (!canReusePromptSnapshot) {
+    // ── Build system prompt with channel context ──
+    const settings = useSettingsStore.getState()
+    let userPrompt = settings.systemPrompt || ''
+
+    // Inject active channel metadata
+    const activeChannels = useChannelStore.getState().getActiveChannels()
+    if (activeChannels.length > 0) {
+      const channelLines: string[] = ['\n## Active Channels']
+      for (const c of activeChannels) {
+        channelLines.push(`- **${c.name}** (channel_id: \`${c.id}\`, type: ${c.type})`)
+        const desc = useChannelStore.getState().getDescriptor(c.type)
+        const toolNames = desc?.tools ?? []
+        if (toolNames.length > 0) {
+          const enabled = toolNames.filter((name) => c.tools?.[name] !== false)
+          const disabled = toolNames.filter((name) => c.tools?.[name] === false)
+          channelLines.push(`  Enabled tools: ${enabled.length > 0 ? enabled.join(', ') : 'none'}`)
+          if (disabled.length > 0) {
+            channelLines.push(`  Disabled tools: ${disabled.join(', ')}`)
+          }
         }
       }
+      channelLines.push('', 'Use the channel_id value as plugin_id when calling Plugin* tools.')
+      userPrompt = userPrompt ? `${userPrompt}\n${channelLines.join('\n')}` : channelLines.join('\n')
     }
-    channelLines.push('', 'Use the channel_id value as plugin_id when calling Plugin* tools.')
-    userPrompt = userPrompt ? `${userPrompt}\n${channelLines.join('\n')}` : channelLines.join('\n')
+
+    // Inject channel session auto-reply context
+    // (channelMeta already resolved above from useChannelStore)
+    const isFeishu = isFeishuChannel
+
+    const channelDescriptor = channelMeta
+      ? useChannelStore.getState().getDescriptor(channelMeta.type)
+      : undefined
+    const channelToolNames = channelDescriptor?.tools ?? []
+    const enabledTools = channelToolNames.filter((name) => channelMeta?.tools?.[name] !== false)
+    const disabledTools = channelToolNames.filter((name) => channelMeta?.tools?.[name] === false)
+
+    const channelCtx = [
+      `\n## Channel Auto-Reply Context`,
+      `This session is handling messages from channel **${channelMeta?.name ?? pluginType}** (channel_id: \`${pluginId}\`).`,
+      `Chat ID: \`${chatId}\``,
+      `Chat Type: ${task.chatType ?? 'unknown'}`,
+      `Sender: ${task.senderName || task.senderId} (id: ${task.senderId})`,
+      `Enabled tools: ${enabledTools.length > 0 ? enabledTools.join(', ') : 'none'}`,
+      disabledTools.length > 0 ? `Disabled tools: ${disabledTools.join(', ')}` : '',
+      `Your response will be streamed directly to the user in real-time via the channel.`,
+      `Just respond naturally — the streaming pipeline handles delivery automatically.`,
+      `If you need to send an additional message, use PluginSendMessage with plugin_id="${pluginId}" and chat_id="${chatId}".`,
+
+      // ── File Generation & Delivery Guidelines ──
+      `\n### Generating & Delivering Files`,
+      `When the user asks you to generate reports, documents, spreadsheets, code files, or any deliverable content:`,
+      `1. **Use the Write tool** to create the file in the working folder (e.g. \`report.md\`, \`analysis.csv\`, \`summary.html\`, \`data.json\`). Choose the most appropriate format for the content.`,
+      `2. **Send the file directly to the user** via the plugin so they receive it without extra steps:`,
+      isFeishu
+        ? `   - Use **FeishuSendFile** (plugin_id="${pluginId}", chat_id="${chatId}") to deliver the generated file.`
+        : `   - Use **PluginSendMessage** to share the file content or a download-ready summary with the user.`,
+      isFeishu
+        ? `   - Use **FeishuSendImage** if the deliverable is an image (chart, screenshot, diagram).`
+        : '',
+      `3. **Also provide a brief summary** in your text response so the user knows what the file contains without opening it.`,
+      `4. **Format guidelines**: Prefer Markdown (.md) for reports and documentation, CSV for tabular data, HTML for rich formatted reports, JSON for structured data. Use the format that best serves the user's needs.`,
+      `5. **Do NOT paste entire file contents as chat messages** when the content is long (>30 lines). Write it to a file and send the file instead — this provides a much better user experience.`,
+
+      isFeishu
+        ? [
+            `\n### Feishu Media Tools`,
+            `You can send images and files to this chat:`,
+            `- **FeishuSendImage**: Send an image (local path or URL). plugin_id="${pluginId}", chat_id="${chatId}"`,
+            `- **FeishuSendFile**: Send a file (pdf, doc, xls, ppt, mp4, etc.). plugin_id="${pluginId}", chat_id="${chatId}"`,
+            `For @mentions, fetch member open_id via **FeishuListChatMembers** and call **FeishuAtMember** (plain '@' text will not mention).`,
+            `Always prefer sending files over pasting long content in messages.`
+          ].join('\n')
+        : ''
+    ]
+      .filter(Boolean)
+      .join('\n')
+    userPrompt = userPrompt ? `${userPrompt}\n${channelCtx}` : channelCtx
+
+    const memorySnapshot = await loadLayeredMemorySnapshot(ipcClient, {
+      workingFolder: session.workingFolder,
+      scope: 'shared'
+    })
+    const sshConnection = session.sshConnectionId
+      ? useSshStore
+          .getState()
+          .connections.find((connection) => connection.id === session.sshConnectionId)
+      : undefined
+    const environmentContext = resolvePromptEnvironmentContext({
+      sshConnectionId: session.sshConnectionId,
+      workingFolder: session.workingFolder,
+      sshConnection
+    })
+
+    systemPrompt = buildSystemPrompt({
+      mode: 'cowork',
+      workingFolder: session.workingFolder,
+      sessionId,
+      userRules: userPrompt,
+      toolDefs: allToolDefs,
+      language: settings.language,
+      memorySnapshot,
+      sessionScope: 'shared',
+      environmentContext
+    })
+
+    useChatStore.getState().setSessionPromptSnapshot(sessionId, {
+      mode: 'cowork',
+      planMode: false,
+      systemPrompt,
+      toolDefs: allToolDefs
+    })
+  } else {
+    effectiveToolDefs = cachedPromptSnapshot.toolDefs.slice()
   }
-
-  // Inject channel session auto-reply context
-  // (channelMeta already resolved above from useChannelStore)
-  const isFeishu = isFeishuChannel
-
-  const channelDescriptor = channelMeta
-    ? useChannelStore.getState().getDescriptor(channelMeta.type)
-    : undefined
-  const channelToolNames = channelDescriptor?.tools ?? []
-  const enabledTools = channelToolNames.filter((name) => channelMeta?.tools?.[name] !== false)
-  const disabledTools = channelToolNames.filter((name) => channelMeta?.tools?.[name] === false)
-
-  const channelCtx = [
-    `\n## Channel Auto-Reply Context`,
-    `This session is handling messages from channel **${channelMeta?.name ?? pluginType}** (channel_id: \`${pluginId}\`).`,
-    `Chat ID: \`${chatId}\``,
-    `Chat Type: ${task.chatType ?? 'unknown'}`,
-    `Sender: ${task.senderName || task.senderId} (id: ${task.senderId})`,
-    `Enabled tools: ${enabledTools.length > 0 ? enabledTools.join(', ') : 'none'}`,
-    disabledTools.length > 0 ? `Disabled tools: ${disabledTools.join(', ')}` : '',
-    `Your response will be streamed directly to the user in real-time via the channel.`,
-    `Just respond naturally — the streaming pipeline handles delivery automatically.`,
-    `If you need to send an additional message, use PluginSendMessage with plugin_id="${pluginId}" and chat_id="${chatId}".`,
-
-    // ── File Generation & Delivery Guidelines ──
-    `\n### Generating & Delivering Files`,
-    `When the user asks you to generate reports, documents, spreadsheets, code files, or any deliverable content:`,
-    `1. **Use the Write tool** to create the file in the working folder (e.g. \`report.md\`, \`analysis.csv\`, \`summary.html\`, \`data.json\`). Choose the most appropriate format for the content.`,
-    `2. **Send the file directly to the user** via the plugin so they receive it without extra steps:`,
-    isFeishu
-      ? `   - Use **FeishuSendFile** (plugin_id="${pluginId}", chat_id="${chatId}") to deliver the generated file.`
-      : `   - Use **PluginSendMessage** to share the file content or a download-ready summary with the user.`,
-    isFeishu
-      ? `   - Use **FeishuSendImage** if the deliverable is an image (chart, screenshot, diagram).`
-      : '',
-    `3. **Also provide a brief summary** in your text response so the user knows what the file contains without opening it.`,
-    `4. **Format guidelines**: Prefer Markdown (.md) for reports and documentation, CSV for tabular data, HTML for rich formatted reports, JSON for structured data. Use the format that best serves the user's needs.`,
-    `5. **Do NOT paste entire file contents as chat messages** when the content is long (>30 lines). Write it to a file and send the file instead — this provides a much better user experience.`,
-
-    isFeishu
-      ? [
-          `\n### Feishu Media Tools`,
-          `You can send images and files to this chat:`,
-          `- **FeishuSendImage**: Send an image (local path or URL). plugin_id="${pluginId}", chat_id="${chatId}"`,
-          `- **FeishuSendFile**: Send a file (pdf, doc, xls, ppt, mp4, etc.). plugin_id="${pluginId}", chat_id="${chatId}"`,
-          `For @mentions, fetch member open_id via **FeishuListChatMembers** and call **FeishuAtMember** (plain '@' text will not mention).`,
-          `Always prefer sending files over pasting long content in messages.`
-        ].join('\n')
-      : ''
-  ]
-    .filter(Boolean)
-    .join('\n')
-  userPrompt = userPrompt ? `${userPrompt}\n${channelCtx}` : channelCtx
-
-  const memorySnapshot = await loadLayeredMemorySnapshot(ipcClient, {
-    workingFolder: session.workingFolder,
-    scope: 'shared'
-  })
-  const sshConnection = session.sshConnectionId
-    ? useSshStore
-        .getState()
-        .connections.find((connection) => connection.id === session.sshConnectionId)
-    : undefined
-  const environmentContext = resolvePromptEnvironmentContext({
-    sshConnectionId: session.sshConnectionId,
-    workingFolder: session.workingFolder,
-    sshConnection
-  })
-
-  const systemPrompt = buildSystemPrompt({
-    mode: 'cowork',
-    workingFolder: session.workingFolder,
-    userRules: userPrompt,
-    toolDefs: allToolDefs,
-    language: settings.language,
-    memorySnapshot,
-    sessionScope: 'shared',
-    environmentContext
-  })
 
   // ── Build user message ──
   let userContent: string | Array<Record<string, unknown>> = effectiveContent
@@ -555,7 +575,7 @@ async function _runPluginAgent(task: PluginAutoReplyTask): Promise<void> {
   const loopConfig: AgentLoopConfig = {
     maxIterations: 15,
     provider: agentProviderConfig,
-    tools: allToolDefs,
+    tools: effectiveToolDefs,
     systemPrompt,
     workingFolder: session.workingFolder,
     signal: ac.signal

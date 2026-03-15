@@ -7,7 +7,8 @@ import type {
   TextBlock,
   ThinkingBlock,
   ToolUseBlock,
-  ToolResultContent
+  ToolResultContent,
+  ToolDefinition
 } from '../lib/api/types'
 import { ipcClient } from '../lib/ipc/ipc-client'
 import { useAgentStore } from './agent-store'
@@ -19,6 +20,13 @@ import { useProviderStore } from './provider-store'
 import { useSettingsStore } from './settings-store'
 
 export type SessionMode = 'chat' | 'clarify' | 'cowork' | 'code'
+
+export interface SessionPromptSnapshot {
+  mode: SessionMode
+  planMode: boolean
+  systemPrompt: string
+  toolDefs: ToolDefinition[]
+}
 
 export interface Project {
   id: string
@@ -59,6 +67,8 @@ export interface Session {
   providerId?: string
   /** Bound model ID (null = use global active model) */
   modelId?: string
+  /** In-memory prompt snapshot reused within the current app session */
+  promptSnapshot?: SessionPromptSnapshot
 }
 
 // --- DB persistence helpers (fire-and-forget) ---
@@ -215,6 +225,8 @@ interface ChatStore {
   setWorkingFolder: (sessionId: string, folder: string) => void
   setSshConnectionId: (sessionId: string, connectionId: string | null) => void
   updateSessionModel: (sessionId: string, providerId: string, modelId: string) => void
+  setSessionPromptSnapshot: (sessionId: string, snapshot: SessionPromptSnapshot) => void
+  clearSessionPromptSnapshot: (sessionId: string) => void
   clearSessionMessages: (sessionId: string) => void
   duplicateSession: (sessionId: string) => Promise<string | null>
   togglePinSession: (sessionId: string) => void
@@ -667,6 +679,7 @@ export const useChatStore = create<ChatStore>()(
           if (session.projectId !== projectId) continue
           session.workingFolder = nextWorkingFolder
           session.sshConnectionId = nextSshConnectionId
+          delete session.promptSnapshot
           session.updatedAt = now
         }
       })
@@ -1048,6 +1061,7 @@ export const useChatStore = create<ChatStore>()(
         const session = state.sessions.find((s) => s.id === id)
         if (session) {
           session.mode = mode
+          delete session.promptSnapshot
           session.updatedAt = now
         }
       })
@@ -1059,12 +1073,16 @@ export const useChatStore = create<ChatStore>()(
       if (!session) return
       if (session.projectId) {
         get().updateProjectDirectory(session.projectId, { workingFolder: folder })
+        get().clearSessionPromptSnapshot(sessionId)
         return
       }
 
       set((state) => {
         const target = state.sessions.find((item) => item.id === sessionId)
-        if (target) target.workingFolder = folder
+        if (target) {
+          target.workingFolder = folder
+          delete target.promptSnapshot
+        }
       })
       dbUpdateSession(sessionId, { workingFolder: folder })
     },
@@ -1076,12 +1094,16 @@ export const useChatStore = create<ChatStore>()(
         get().updateProjectDirectory(session.projectId, {
           sshConnectionId: connectionId
         })
+        get().clearSessionPromptSnapshot(sessionId)
         return
       }
 
       set((state) => {
         const target = state.sessions.find((item) => item.id === sessionId)
-        if (target) target.sshConnectionId = connectionId ?? undefined
+        if (target) {
+          target.sshConnectionId = connectionId ?? undefined
+          delete target.promptSnapshot
+        }
       })
       dbUpdateSession(sessionId, { sshConnectionId: connectionId })
     },
@@ -1093,10 +1115,32 @@ export const useChatStore = create<ChatStore>()(
         if (session) {
           session.providerId = providerId
           session.modelId = modelId
+          delete session.promptSnapshot
           session.updatedAt = now
         }
       })
       dbUpdateSession(sessionId, { providerId, modelId, updatedAt: now })
+    },
+
+    setSessionPromptSnapshot: (sessionId, snapshot) => {
+      set((state) => {
+        const session = state.sessions.find((s) => s.id === sessionId)
+        if (!session) return
+        session.promptSnapshot = {
+          mode: snapshot.mode,
+          planMode: snapshot.planMode,
+          systemPrompt: snapshot.systemPrompt,
+          toolDefs: snapshot.toolDefs.slice()
+        }
+      })
+    },
+
+    clearSessionPromptSnapshot: (sessionId) => {
+      set((state) => {
+        const session = state.sessions.find((s) => s.id === sessionId)
+        if (!session?.promptSnapshot) return
+        delete session.promptSnapshot
+      })
     },
 
     togglePinSession: (sessionId) => {
@@ -1126,6 +1170,7 @@ export const useChatStore = create<ChatStore>()(
 
       const normalizedSession: Session = {
         ...session,
+        promptSnapshot: undefined,
         projectId: targetProjectId ?? undefined,
         workingFolder: session.workingFolder ?? project?.workingFolder,
         sshConnectionId: session.sshConnectionId ?? project?.sshConnectionId,
@@ -1200,6 +1245,7 @@ export const useChatStore = create<ChatStore>()(
           session.messageCount = 0
           session.messagesLoaded = true
           session.title = 'New Conversation'
+          delete session.promptSnapshot
           session.updatedAt = now
         }
       })

@@ -72,6 +72,7 @@ type DesktopDirectoryResult = DesktopDirectorySuccessResult | DesktopDirectoryEr
 export function ChatHomePage(): React.JSX.Element {
   const { t } = useTranslation('chat')
   const { t: tCommon } = useTranslation('common')
+  const { t: tLayout } = useTranslation('layout')
   const mode = useUIStore((s) => s.mode)
   const setMode = useUIStore((s) => s.setMode)
   const activeProjectId = useChatStore((s) => s.activeProjectId)
@@ -373,7 +374,7 @@ export function ChatHomePage(): React.JSX.Element {
                     icon: m.icon,
                     shortcutIndex: i,
                     isActive: mode === m.value,
-                    t: (key, options) => String(t(key, options as never)),
+                    t: (key, options) => String(tLayout(key, options as never)),
                     tCommon: (key, options) => String(tCommon(key, options as never))
                   })}
                 </TooltipContent>

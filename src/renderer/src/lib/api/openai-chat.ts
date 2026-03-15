@@ -7,7 +7,7 @@ import type {
   ContentBlock
 } from './types'
 import { ipcStreamRequest, maskHeaders } from '../ipc/api-stream'
-import { registerProvider } from './provider'
+import { getGlobalPromptCacheKey, registerProvider } from './provider'
 
 function resolveHeaderTemplate(value: string, config: ProviderConfig): string {
   return value
@@ -79,9 +79,8 @@ class OpenAIChatProvider implements APIProvider {
       stream_options: { include_usage: true }
     }
 
-    // Enable prompt caching for OpenAI endpoints to reduce costs
-    if (config.sessionId) {
-      body.prompt_cache_key = `opencowork-${config.sessionId}`
+    if (config.enablePromptCache !== false) {
+      body.prompt_cache_key = getGlobalPromptCacheKey()
     }
 
     if (tools.length > 0) {

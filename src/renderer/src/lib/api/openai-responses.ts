@@ -19,7 +19,7 @@ import {
 } from '../app-plugin/types'
 import { ApiStreamError, ipcStreamRequest, maskHeaders } from '../ipc/api-stream'
 import { loadPrompt } from '../prompts/prompt-loader'
-import { registerProvider } from './provider'
+import { getGlobalPromptCacheKey, registerProvider } from './provider'
 
 function resolveHeaderTemplate(value: string, config: ProviderConfig): string {
   return value
@@ -123,8 +123,8 @@ class OpenAIResponsesProvider implements APIProvider {
       stream: true
     }
 
-    if (config.sessionId) {
-      body.prompt_cache_key = `opencowork-${config.sessionId}`
+    if (config.enablePromptCache !== false) {
+      body.prompt_cache_key = getGlobalPromptCacheKey()
     }
 
     const formattedTools = this.buildToolsPayload(tools, config)

@@ -1,5 +1,9 @@
 import type { LayeredMemorySnapshot, SessionMemoryScope } from './memory-files'
 import { toolRegistry } from './tool-registry'
+import { getRegisteredSkills } from '../tools/skill-tool'
+import { useTaskStore } from '../../stores/task-store'
+import { usePlanStore } from '../../stores/plan-store'
+import { useSettingsStore } from '../../stores/settings-store'
 
 export type PromptEnvironmentContext = {
   target: 'local' | 'ssh'
@@ -93,9 +97,63 @@ Only after we have both reached clarity, when you've run out of unknowns to surf
 
 Start by asking me what I want to build.`
 
+function buildSkillsReminder(): string | null {
+  const skills = getRegisteredSkills()
+  if (skills.length === 0) return null
+
+  return [
+    '<system-reminder>',
+    'Available Skills:',
+    `- Available Skills: ${skills.length}`,
+    ...skills.map((skill) => `  - ${skill.name}: ${skill.description}`),
+    '  Reminder: If the request matches a listed skill, call the Skill tool first.',
+    '</system-reminder>'
+  ].join('\n')
+}
+
+function buildSessionStateReminder(sessionId?: string): string | null {
+  const parts: string[] = []
+
+  if (useSettingsStore.getState().webSearchEnabled) {
+    parts.push('  Guidance: Web search is enabled. Actively use the WebSearch tool to gather the latest information, documentation, code examples, and data relevant to the task. Search for current information, best practices, API documentation, and any external resources that can help complete the task more accurately and comprehensively.')
+  }
+
+  if (!sessionId) {
+    return parts.length > 0
+      ? ['<system-reminder>', 'Session State:', ...parts, '</system-reminder>'].join('\n')
+      : null
+  }
+  const tasks = useTaskStore.getState().getTasksBySession(sessionId)
+  if (tasks.length > 0) {
+    const pending = tasks.filter((task) => task.status === 'pending').length
+    const inProgress = tasks.filter((task) => task.status === 'in_progress').length
+    const completed = tasks.filter((task) => task.status === 'completed').length
+    parts.push(`- Task List: ${tasks.length} tasks (${pending} pending, ${inProgress} in_progress, ${completed} completed)`)
+    if (inProgress > 0 || pending > 0) {
+      parts.push('  Reminder: Continue with existing tasks, use TaskUpdate to update status')
+    }
+  }
+
+  const plan = usePlanStore.getState().getPlanBySession(sessionId)
+  if (plan) {
+    parts.push(`- Plan: "${plan.title}" (status: ${plan.status})`)
+    if (plan.status === 'approved' || plan.status === 'implementing') {
+      parts.push('  Reminder: An approved plan exists. Follow the plan steps for implementation.')
+    }
+    if (plan.status === 'rejected') {
+      parts.push('  Reminder: The plan was rejected. Revise it in Plan Mode based on feedback.')
+    }
+  }
+
+  if (parts.length === 0) return null
+
+  return ['<system-reminder>', 'Session State:', ...parts, '</system-reminder>'].join('\n')
+}
+
 export function buildSystemPrompt(options: {
   mode: 'clarify' | 'cowork' | 'code'
   workingFolder?: string
+  sessionId?: string
   userRules?: string
   toolDefs?: import('../api/types').ToolDefinition[]
   language?: string
@@ -108,6 +166,7 @@ export function buildSystemPrompt(options: {
   const {
     mode,
     workingFolder,
+    sessionId,
     userRules,
     language,
     planMode,
@@ -539,6 +598,16 @@ export function buildSystemPrompt(options: {
         `Read before editing, preserve structure, and avoid storing secrets or unrelated temporary notes.`,
         `</memory_file>`
       )
+    }
+
+      const sessionStateReminder = buildSessionStateReminder(sessionId)
+    if (sessionStateReminder) {
+      parts.push(`\n${sessionStateReminder}`)
+    }
+
+    const skillsReminder = buildSkillsReminder()
+    if (skillsReminder) {
+      parts.push(`\n${skillsReminder}`)
     }
 
     // ── User-Defined Rules ──

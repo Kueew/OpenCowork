@@ -314,7 +314,7 @@ export interface AIModelConfig {
   thinkingConfig?: ThinkingConfig
   /** OpenAI Responses: summary of reasoning (auto/concise/detailed) */
   responseSummary?: ResponseSummary
-  /** OpenAI Responses: enable prompt caching with session-based key */
+  /** OpenAI-compatible endpoints: enable prompt caching with the app-global cache key */
   enablePromptCache?: boolean
   /** Anthropic: enable system prompt caching */
   enableSystemPromptCache?: boolean
@@ -404,7 +404,7 @@ export interface ProviderConfig {
   thinkingConfig?: ThinkingConfig
   /** Selected reasoning effort level (when model supports reasoningEffortLevels) */
   reasoningEffort?: ReasoningEffortLevel
-  /** Current session ID — used for prompt_cache_key on OpenAI endpoints */
+  /** Current session ID — used for request correlation and Responses transport continuity */
   sessionId?: string
   /** OpenAI Responses: summary of reasoning (auto/concise/detailed) */
   responseSummary?: ResponseSummary

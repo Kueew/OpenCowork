@@ -2,28 +2,22 @@ import type { ToolHandler } from './tool-types'
 import { toolRegistry } from '../agent/tool-registry'
 import { ipcClient } from '../ipc/ipc-client'
 
-/**
- * Build the description for the Skill tool by embedding
- * all available skill names, descriptions, and usage guidelines.
- * Similar pattern to buildTaskDescription in sub-agents/create-tool.ts.
- */
-function buildSkillDescription(skills: { name: string; description: string }[]): string {
-  const base = `Load a skill by name to get detailed instructions or knowledge for a specific task. Returns the full content of the skill's SKILL.md file as context.`
+type SkillMeta = { name: string; description: string }
 
-  if (skills.length === 0) return base
+let registeredSkills: SkillMeta[] = []
 
-  const skillLines = skills.map((s) => `- **${s.name}**: ${s.description}`).join('\n')
+export function getRegisteredSkills(): SkillMeta[] {
+  return registeredSkills.slice()
+}
 
-  return `${base}
+function buildSkillDescription(): string {
+  return `Load a skill by name to get detailed instructions or knowledge for a specific task. Returns the full content of the skill's SKILL.md file as context.
 
 You have access to **Skills** — pre-defined expert scripts for specialized tasks. Skills are your MOST RELIABLE way to handle these tasks.
-**BEFORE using Shell, Read, Write, or ANY other tool, check if the user's request matches a Skill below.**
-
-**Available skills:**
-${skillLines}
+**BEFORE using Shell, Read, Write, or ANY other tool, check if the user's request matches a Skill listed in the session's \`<system-reminder>\` context.**
 
 ### How to use Skills
-1. **Match**: Before starting any task, check if it matches an available Skill's description above.
+1. **Match**: Before starting any task, check if it matches one of the available Skills in the session context.
 2. **Load first**: Call the Skill tool as your FIRST tool call for matching tasks. Do NOT attempt ad-hoc solutions — Skills contain curated scripts with proper error handling that ad-hoc approaches will miss.
 3. **Read carefully**: After loading, read the Skill's content thoroughly before taking any action.
 4. **Follow strictly**: Execute the Skill's instructions step-by-step. Do NOT skip steps, reorder them, or substitute your own approach.
@@ -31,15 +25,11 @@ ${skillLines}
 6. If the user's message begins with "[Skill: <name>]", immediately call that Skill as your first action.`
 }
 
-/**
- * Create the Skill tool handler with the given skills list
- * embedded in the tool description.
- */
-function createSkillHandler(skills: { name: string; description: string }[]): ToolHandler {
+function createSkillHandler(): ToolHandler {
   return {
     definition: {
       name: 'Skill',
-      description: buildSkillDescription(skills),
+      description: buildSkillDescription(),
       inputSchema: {
         type: 'object',
         properties: {
@@ -74,21 +64,22 @@ function createSkillHandler(skills: { name: string; description: string }[]): To
 
 /**
  * Load available skills from ~/agents/skills/ via IPC,
- * then register the Skill tool with embedded skill descriptions.
+ * then register the Skill tool with a stable description.
  *
  * This is async because it reads skill metadata via IPC from the main process.
  * Similar pattern to registerBuiltinSubAgents().
  */
 export async function registerSkillTools(): Promise<void> {
-  let skills: { name: string; description: string }[] = []
+  let skills: SkillMeta[] = []
   try {
     const result = await ipcClient.invoke('skills:list')
     if (Array.isArray(result)) {
-      skills = result as { name: string; description: string }[]
+      skills = result as SkillMeta[]
     }
   } catch (err) {
     console.error('[Skills] Failed to load skills from IPC:', err)
   }
 
-  toolRegistry.register(createSkillHandler(skills))
+  registeredSkills = skills
+  toolRegistry.register(createSkillHandler())
 }

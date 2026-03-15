@@ -1029,15 +1029,32 @@ export function useChatActions(): {
 
       if (mode === 'chat') {
         // Simple chat mode: single API call, no tools
-        const chatSystemPrompt = [
-          'You are OpenCowork, a helpful AI assistant. Be concise, accurate, and friendly.',
-          "Before responding, follow this thinking process: (1) Understand — identify what the user truly needs, not just the literal words; consider context and implicit constraints. (2) Expand — think about the best way to solve the problem, consider edge cases, potential pitfalls, and better alternatives the user may not have thought of. (3) Validate — before finalizing, verify your answer is logically consistent: does it actually help the user achieve their stated goal? Check the full causal chain — if the user follows your advice, will they accomplish what they want? Watch for hidden contradictions (e.g. if someone needs to wash their car, they must bring the car — suggesting they walk defeats the purpose). (4) Respond — deliver a well-reasoned, logically sound answer that best fits the user's real needs. Think first, answer second — never rush to conclusions.",
-          'CRITICAL RULE: Before giving your final answer, always ask yourself: "If the user follows my advice step by step, will they actually achieve their stated goal?" If the answer is no, your response has a logical flaw — stop and reconsider. The user\'s goal defines the constraints; never give advice that makes the goal impossible.',
-          'Use markdown formatting in your responses. Use code blocks with language identifiers for code.',
-          settings.systemPrompt ? `\n## Additional Instructions\n${settings.systemPrompt}` : ''
-        ]
-          .filter(Boolean)
-          .join('\n')
+        const cachedPromptSnapshot = session?.promptSnapshot
+        const canReusePromptSnapshot =
+          !!cachedPromptSnapshot &&
+          cachedPromptSnapshot.mode === 'chat' &&
+          cachedPromptSnapshot.planMode === false
+
+        let chatSystemPrompt = cachedPromptSnapshot?.systemPrompt ?? ''
+        if (!canReusePromptSnapshot) {
+          chatSystemPrompt = [
+            'You are OpenCowork, a helpful AI assistant. Be concise, accurate, and friendly.',
+            "Before responding, follow this thinking process: (1) Understand — identify what the user truly needs, not just the literal words; consider context and implicit constraints. (2) Expand — think about the best way to solve the problem, consider edge cases, potential pitfalls, and better alternatives the user may not have thought of. (3) Validate — before finalizing, verify your answer is logically consistent: does it actually help the user achieve their stated goal? Check the full causal chain — if the user follows your advice, will they accomplish what they want? Watch for hidden contradictions (e.g. if someone needs to wash their car, they must bring the car — suggesting they walk defeats the purpose). (4) Respond — deliver a well-reasoned, logically sound answer that best fits the user's real needs. Think first, answer second — never rush to conclusions.",
+            'CRITICAL RULE: Before giving your final answer, always ask yourself: "If the user follows my advice step by step, will they actually achieve their stated goal?" If the answer is no, your response has a logical flaw — stop and reconsider. The user\'s goal defines the constraints; never give advice that makes the goal impossible.',
+            'Use markdown formatting in your responses. Use code blocks with language identifiers for code.',
+            settings.systemPrompt ? `\n## Additional Instructions\n${settings.systemPrompt}` : ''
+          ]
+            .filter(Boolean)
+            .join('\n')
+
+          useChatStore.getState().setSessionPromptSnapshot(sessionId, {
+            mode: 'chat',
+            planMode: false,
+            systemPrompt: chatSystemPrompt,
+            toolDefs: []
+          })
+        }
+
         // NOTE: thinkingEnabled is handled below when building the final config
         const chatConfig: ProviderConfig = { ...baseProviderConfig, systemPrompt: chatSystemPrompt }
         agentStore.setSessionStatus(sessionId, 'running')
@@ -1237,32 +1254,54 @@ export function useChatActions(): {
         }
 
         const sessionScope: SessionMemoryScope = session?.pluginId ? 'shared' : 'main'
-        const memorySnapshot = await loadLayeredMemorySnapshot(ipcClient, {
-          workingFolder: session?.workingFolder,
-          scope: sessionScope
-        })
-        const sshConnection = session?.sshConnectionId
-          ? useSshStore
-              .getState()
-              .connections.find((connection) => connection.id === session.sshConnectionId)
-          : undefined
-        const environmentContext = resolvePromptEnvironmentContext({
-          sshConnectionId: session?.sshConnectionId,
-          workingFolder: session?.workingFolder,
-          sshConnection
-        })
+        const cachedPromptSnapshot = session?.promptSnapshot
+        const canReusePromptSnapshot =
+          !!cachedPromptSnapshot &&
+          cachedPromptSnapshot.mode === mode &&
+          cachedPromptSnapshot.planMode === isPlanMode
 
-        const agentSystemPrompt = buildSystemPrompt({
-          mode: mode as 'clarify' | 'cowork' | 'code',
-          workingFolder: session?.workingFolder,
-          userRules: userPrompt || undefined,
-          toolDefs: finalEffectiveToolDefs,
-          language: useSettingsStore.getState().language,
-          planMode: isPlanMode,
-          memorySnapshot,
-          sessionScope,
-          environmentContext
-        })
+        let effectiveToolDefs = finalEffectiveToolDefs
+        let agentSystemPrompt = cachedPromptSnapshot?.systemPrompt ?? ''
+
+        if (canReusePromptSnapshot && cachedPromptSnapshot) {
+          effectiveToolDefs = cachedPromptSnapshot.toolDefs.slice()
+        } else {
+          const memorySnapshot = await loadLayeredMemorySnapshot(ipcClient, {
+            workingFolder: session?.workingFolder,
+            scope: sessionScope
+          })
+          const sshConnection = session?.sshConnectionId
+            ? useSshStore
+                .getState()
+                .connections.find((connection) => connection.id === session.sshConnectionId)
+            : undefined
+          const environmentContext = resolvePromptEnvironmentContext({
+            sshConnectionId: session?.sshConnectionId,
+            workingFolder: session?.workingFolder,
+            sshConnection
+          })
+
+          agentSystemPrompt = buildSystemPrompt({
+            mode: mode as 'clarify' | 'cowork' | 'code',
+            workingFolder: session?.workingFolder,
+            sessionId,
+            userRules: userPrompt || undefined,
+            toolDefs: finalEffectiveToolDefs,
+            language: useSettingsStore.getState().language,
+            planMode: isPlanMode,
+            memorySnapshot,
+            sessionScope,
+            environmentContext
+          })
+
+          useChatStore.getState().setSessionPromptSnapshot(sessionId, {
+            mode,
+            planMode: isPlanMode,
+            systemPrompt: agentSystemPrompt,
+            toolDefs: finalEffectiveToolDefs
+          })
+        }
+
         const agentProviderConfig: ProviderConfig = {
           ...baseProviderConfig,
           computerUseEnabled: desktopControlMode === 'computer-use',
@@ -1283,7 +1322,7 @@ export function useChatActions(): {
         const loopConfig: AgentLoopConfig = {
           maxIterations: DEFAULT_AGENT_MAX_ITERATIONS,
           provider: agentProviderConfig,
-          tools: finalEffectiveToolDefs,
+          tools: effectiveToolDefs,
           systemPrompt: agentSystemPrompt,
           workingFolder: session?.workingFolder,
           signal: abortController.signal,
