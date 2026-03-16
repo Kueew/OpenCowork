@@ -3,6 +3,23 @@
 All notable changes to **OpenCowork** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com).
 
+## [0.5.7] - 2026-03-14
+
+### Added
+- Added new cron job management UI with real-time status updates.
+- Enhanced SSH file transfer with progress tracking and resumable transfers.
+- Improved error handling for plugin auto-reply workflows.
+
+### Changed
+- Updated dependencies to latest stable versions.
+- Refined UI animations for better performance on low-end hardware.
+- Optimized database queries for session and message storage.
+
+### Fixed
+- Fixed crash when opening large markdown files in the preview panel.
+- Resolved issue with duplicate tool calls in agent loops.
+- Fixed OAuth authentication flow for some third-party providers.
+
 ## [0.5.6] - 2026-03-13
 
 ### Changed
