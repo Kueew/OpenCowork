@@ -1,7 +1,6 @@
 import * as React from 'react'
 import { useEffect, useState } from 'react'
 import {
-  MessageSquare,
   CircleHelp,
   Briefcase,
   Code2,
@@ -10,12 +9,9 @@ import {
   Server,
   Pencil,
   ChevronDown,
-  Plus,
-  ArrowRight,
-  Sparkles
+  Plus
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@renderer/components/ui/dialog'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
@@ -24,8 +20,11 @@ import { InputArea } from '@renderer/components/chat/InputArea'
 import { useUIStore } from '@renderer/stores/ui-store'
 import { useChatStore } from '@renderer/stores/chat-store'
 import { useSshStore } from '@renderer/stores/ssh-store'
+import { useProviderStore, modelSupportsVision } from '@renderer/stores/provider-store'
+import { useSettingsStore } from '@renderer/stores/settings-store'
 import { useChatActions } from '@renderer/hooks/use-chat-actions'
 import { ipcClient } from '@renderer/lib/ipc/ipc-client'
+import appIconUrl from '../../../../../resources/icon.png'
 import { Input } from '@renderer/components/ui/input'
 import type { ImageAttachment } from '@renderer/lib/image-attachments'
 import {
@@ -85,6 +84,15 @@ interface DesktopDirectoryErrorResult {
 
 type DesktopDirectoryResult = DesktopDirectorySuccessResult | DesktopDirectoryErrorResult
 
+function formatContextLength(length?: number): string | null {
+  if (!length) return null
+  if (length >= 1_000_000) {
+    return `${(length / 1_000_000).toFixed(length % 1_000_000 === 0 ? 0 : 1)}M`
+  }
+  if (length >= 1_000) return `${Math.round(length / 1_000)}K`
+  return String(length)
+}
+
 export function ChatHomePage(): React.JSX.Element {
   const { t } = useTranslation('chat')
   const { t: tCommon } = useTranslation('common')
@@ -92,7 +100,9 @@ export function ChatHomePage(): React.JSX.Element {
   const mode = useUIStore((s) => s.mode)
   const setMode = useUIStore((s) => s.setMode)
   const activeProjectId = useChatStore((s) => s.activeProjectId)
+  const activeSessionId = useChatStore((s) => s.activeSessionId)
   const projects = useChatStore((s) => s.projects)
+  const sessions = useChatStore((s) => s.sessions)
   const setActiveProject = useChatStore((s) => s.setActiveProject)
   const createProject = useChatStore((s) => s.createProject)
   const ensureDefaultProject = useChatStore((s) => s.ensureDefaultProject)
@@ -109,6 +119,11 @@ export function ChatHomePage(): React.JSX.Element {
   const { sendMessage } = useChatActions()
   const sshConnections = useSshStore((s) => s.connections)
   const sshLoaded = useSshStore((s) => s._loaded)
+  const activeProviderId = useProviderStore((s) => s.activeProviderId)
+  const activeModelId = useProviderStore((s) => s.activeModelId)
+  const providers = useProviderStore((s) => s.providers)
+  const mainModelSelectionMode = useSettingsStore((s) => s.mainModelSelectionMode)
+  const autoSelection = useUIStore((s) => s.getAutoModelSelection(activeSessionId))
   const [sshDirInputs, setSshDirInputs] = useState<Record<string, string>>({})
   const [sshDirEditingId, setSshDirEditingId] = useState<string | null>(null)
 
@@ -235,112 +250,77 @@ export function ChatHomePage(): React.JSX.Element {
     void sendMessage(text, images)
   }
 
-  const suggestionCards =
-    mode === 'chat'
-      ? [
-          {
-            prompt: t('messageList.explainAsync'),
-            icon: <Sparkles className="size-4" />,
-            toneClass: 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
-          },
-          {
-            prompt: t('messageList.compareRest'),
-            icon: <MessageSquare className="size-4" />,
-            toneClass: 'bg-blue-500/10 text-blue-600 dark:text-blue-400'
-          },
-          {
-            prompt: t('messageList.writeRegex'),
-            icon: <Pencil className="size-4" />,
-            toneClass: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-          }
-        ]
-      : mode === 'clarify'
-        ? [
-            {
-              prompt: t('messageList.clarifyIdea'),
-              icon: <CircleHelp className="size-4" />,
-              toneClass: 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
-            },
-            {
-              prompt: t('messageList.challengeAssumptions'),
-              icon: <MessageSquare className="size-4" />,
-              toneClass: 'bg-orange-500/10 text-orange-600 dark:text-orange-400'
-            },
-            {
-              prompt: t('messageList.exploreRisks'),
-              icon: <Sparkles className="size-4" />,
-              toneClass: 'bg-yellow-500/10 text-yellow-600 dark:text-yellow-400'
-            }
-          ]
-        : mode === 'cowork'
-          ? [
-              {
-                prompt: t('messageList.summarizeProject'),
-                icon: <FolderOpen className="size-4" />,
-                toneClass: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-              },
-              {
-                prompt: t('messageList.findBugs'),
-                icon: <Server className="size-4" />,
-                toneClass: 'bg-orange-500/10 text-orange-600 dark:text-orange-400'
-              },
-              {
-                prompt: t('messageList.addErrorHandling'),
-                icon: <Briefcase className="size-4" />,
-                toneClass: 'bg-sky-500/10 text-sky-600 dark:text-sky-400'
-              }
-            ]
-          : [
-              {
-                prompt: t('messageList.buildCli'),
-                icon: <Code2 className="size-4" />,
-                toneClass: 'bg-violet-500/10 text-violet-600 dark:text-violet-400'
-              },
-              {
-                prompt: t('messageList.createRestApi'),
-                icon: <MessageSquare className="size-4" />,
-                toneClass: 'bg-cyan-500/10 text-cyan-600 dark:text-cyan-400'
-              },
-              {
-                prompt: t('messageList.writeScript'),
-                icon: <Pencil className="size-4" />,
-                toneClass: 'bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-400'
-              }
-            ]
-
-  const modeHint = {
-    chat: {
-      icon: <MessageSquare className="size-7" />,
-      title: t('messageList.startConversation'),
-      desc: t('messageList.startConversationDesc')
-    },
-    clarify: {
-      icon: <CircleHelp className="size-7" />,
-      title: t('messageList.startClarify'),
-      desc: t('messageList.startClarifyDesc')
-    },
-    cowork: {
-      icon: <Briefcase className="size-7" />,
-      title: t('messageList.startCowork'),
-      desc: t('messageList.startCoworkDesc')
-    },
-    code: {
-      icon: <Code2 className="size-7" />,
-      title: t('messageList.startCoding'),
-      desc: t('messageList.startCodingDesc')
-    }
+  const activeSession = sessions.find((session) => session.id === activeSessionId)
+  const sessionProviderId = activeSession?.providerId ?? null
+  const sessionModelId = activeSession?.modelId ?? null
+  const isSessionBound = Boolean(sessionProviderId && sessionModelId)
+  const displayProviderId = sessionProviderId ?? activeProviderId
+  const displayModelId = sessionModelId ?? activeModelId
+  const displayProvider = providers.find((provider) => provider.id === displayProviderId)
+  const displayModel = displayProvider?.models.find((model) => model.id === displayModelId)
+  const isAutoModeActive = !isSessionBound && mainModelSelectionMode === 'auto'
+  const autoResolvedProvider = autoSelection?.providerId
+    ? providers.find((provider) => provider.id === autoSelection.providerId)
+    : null
+  const autoResolvedModel = autoResolvedProvider?.models.find(
+    (model) => model.id === autoSelection?.modelId
+  )
+  const homeProvider = isAutoModeActive
+    ? (autoResolvedProvider ?? displayProvider)
+    : displayProvider
+  const homeModel = isAutoModeActive ? (autoResolvedModel ?? displayModel) : displayModel
+  const homeHasVision = modelSupportsVision(homeModel, homeProvider?.type)
+  const homeHasTools = homeModel?.supportsFunctionCall === true
+  const homeHasThinking = homeModel?.supportsThinking === true
+  const homeModelTitle = isAutoModeActive
+    ? autoSelection?.modelName
+      ? `${tLayout('topbar.autoModel')} · ${autoSelection.modelName}`
+      : tLayout('topbar.autoModel')
+    : (homeModel?.name ?? displayModelId ?? t('messageList.homeModelUnavailable'))
+  const homeTitle = {
+    chat: t('messageList.homeTitleChat'),
+    clarify: t('messageList.homeTitleClarify'),
+    cowork: t('messageList.homeTitleCowork'),
+    code: t('messageList.homeTitleCode')
   }[mode]
 
-  const heroIconClass = {
-    chat: 'bg-blue-500/10 text-blue-600 dark:text-blue-400',
-    clarify: 'bg-amber-500/10 text-amber-600 dark:text-amber-400',
-    cowork: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
-    code: 'bg-violet-500/10 text-violet-600 dark:text-violet-400'
-  }[mode]
-
-  const handleSuggestionClick = (prompt: string): void => {
-    useUIStore.getState().setPendingInsertText(prompt)
+  let homeDescription = t('messageList.homeDescChatGeneral')
+  if (isAutoModeActive) {
+    homeDescription = {
+      chat: t('messageList.homeDescAutoChat'),
+      clarify: t('messageList.homeDescAutoClarify'),
+      cowork: t('messageList.homeDescAutoCowork'),
+      code: t('messageList.homeDescAutoCode')
+    }[mode]
+  } else if (mode === 'clarify') {
+    homeDescription = homeHasThinking
+      ? t('messageList.homeDescClarifyThinking')
+      : t('messageList.homeDescClarifyGeneral')
+  } else if (mode === 'cowork') {
+    homeDescription = homeHasTools
+      ? t('messageList.homeDescCoworkTools')
+      : t('messageList.homeDescCoworkGeneral')
+  } else if (mode === 'code') {
+    homeDescription = homeHasThinking
+      ? t('messageList.homeDescCodeThinking')
+      : homeHasVision
+        ? t('messageList.homeDescCodeVision')
+        : t('messageList.homeDescCodeGeneral')
+  } else {
+    homeDescription = homeHasVision
+      ? t('messageList.homeDescChatVision')
+      : t('messageList.homeDescChatGeneral')
   }
+
+  const homeModelMetaParts = [
+    homeProvider?.name,
+    homeHasVision ? tLayout('topbar.vision') : null,
+    homeHasTools ? tLayout('topbar.tools') : null,
+    homeHasThinking ? tLayout('topbar.thinking') : null,
+    formatContextLength(homeModel?.contextLength)
+  ].filter((value): value is string => Boolean(value))
+  const homeModelMeta =
+    homeModelMetaParts.join(' · ') || (isAutoModeActive ? t('messageList.homeAutoMeta') : '')
 
   const normalizedWorkingFolder = workingFolder?.toLowerCase()
 
@@ -402,72 +382,25 @@ export function ChatHomePage(): React.JSX.Element {
           </div>
         </div>
 
-        <div className="mb-5 rounded-[28px] border border-border/60 bg-background/85 p-6 shadow-sm backdrop-blur-sm">
-          <div className="mb-4 flex flex-wrap items-center gap-2">
-            <Badge variant="secondary" className="rounded-full px-2.5 py-1 text-[11px]">
-              {tCommon(`mode.${mode}`)}
-            </Badge>
-            <Badge variant="outline" className="rounded-full px-2.5 py-1 text-[11px]">
-              {mode === 'chat'
-                ? t('messageList.readyToStart', { defaultValue: '准备就绪' })
-                : sshConnectionId
-                  ? t('messageList.remoteWorkspace', { defaultValue: '远程工作区' })
-                  : t('messageList.localWorkspace', { defaultValue: '本地工作区' })}
-            </Badge>
-            {mode !== 'chat' && activeProject?.name && (
-              <Badge variant="outline" className="max-w-full rounded-full px-2.5 py-1 text-[11px]">
-                <span className="truncate">{activeProject.name}</span>
-              </Badge>
+        <div className="mb-5 flex min-h-[240px] flex-1 flex-col">
+          <div className="flex flex-1 items-center justify-center">
+            <img
+              src={appIconUrl}
+              alt="OpenCowork"
+              className="size-24 rounded-[28px] object-cover shadow-xl ring-1 ring-border/50"
+            />
+          </div>
+          <div className="text-center">
+            <p className="text-xs font-medium tracking-wide text-muted-foreground/80">
+              {t('messageList.homeCurrentModel', { model: homeModelTitle })}
+            </p>
+            <h1 className="mt-2 text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
+              {homeTitle}
+            </h1>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">{homeDescription}</p>
+            {homeModelMeta && (
+              <p className="mt-1 text-xs text-muted-foreground/70">{homeModelMeta}</p>
             )}
-          </div>
-
-          {/* Icon + title */}
-          <div className="mb-5 flex flex-col gap-4 text-center sm:flex-row sm:items-start sm:text-left">
-            <div
-              className={cn(
-                'mx-auto flex size-16 items-center justify-center rounded-3xl sm:mx-0',
-                heroIconClass
-              )}
-            >
-              {modeHint.icon}
-            </div>
-            <div className="min-w-0 flex-1">
-              <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
-                {modeHint.title}
-              </h1>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-                {modeHint.desc}
-              </p>
-            </div>
-          </div>
-
-          {/* Suggestion chips */}
-          <div className="grid gap-3 sm:grid-cols-3">
-            {suggestionCards.map((item) => (
-              <button
-                key={item.prompt}
-                className="group rounded-2xl border border-border/60 bg-muted/20 p-4 text-left transition-all hover:-translate-y-0.5 hover:border-primary/30 hover:bg-background"
-                onClick={() => handleSuggestionClick(item.prompt)}
-              >
-                <div className="mb-3 flex items-center justify-between gap-3">
-                  <div
-                    className={cn(
-                      'flex size-9 items-center justify-center rounded-2xl',
-                      item.toneClass
-                    )}
-                  >
-                    {item.icon}
-                  </div>
-                  <ArrowRight className="size-4 text-muted-foreground/50 transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
-                </div>
-                <p className="line-clamp-2 text-sm font-medium leading-6 text-foreground">
-                  {item.prompt}
-                </p>
-                <p className="mt-2 text-xs text-muted-foreground">
-                  {t('messageList.clickToFill', { defaultValue: '点击可填入输入框' })}
-                </p>
-              </button>
-            ))}
           </div>
         </div>
 
