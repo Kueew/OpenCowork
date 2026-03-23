@@ -41,7 +41,7 @@ import { registerDbHandlers } from './ipc/db-handlers'
 import { registerConfigHandlers } from './ipc/secure-key-store'
 import { registerChannelHandlers, autoStartChannels } from './ipc/channel-handlers'
 import { ChannelManager } from './channels/channel-manager'
-import { registerMcpHandlers } from './ipc/mcp-handlers'
+import { autoConnectMcpServers, registerMcpHandlers } from './ipc/mcp-handlers'
 import { registerCronHandlers } from './ipc/cron-handlers'
 import { registerInputHandlers } from './ipc/input-handlers'
 import { registerNotifyHandlers } from './ipc/notify-handlers'
@@ -551,6 +551,7 @@ if (gotSingleInstanceLock) {
 
     // Auto-start plugins with autoStart feature enabled
     void autoStartChannels(channelManager)
+    void autoConnectMcpServers(mcpManager)
 
     createWindow()
 
