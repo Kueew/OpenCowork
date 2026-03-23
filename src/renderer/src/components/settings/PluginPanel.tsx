@@ -749,19 +749,32 @@ function ChannelConfigPanelContent({ plugin }: { plugin: PluginInstance }): Reac
                     {t('channel.weixin.bindingDesc', '通过扫码获取 token，并启用长轮询收发消息。')}
                   </p>
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-7 text-xs"
-                  onClick={() => void handleWeixinBind()}
-                  disabled={weixinLoginPending}
-                >
-                  {weixinLoginPending
-                    ? t('channel.weixin.bindingInProgress', '绑定中...')
-                    : localConfig.token
-                      ? t('channel.weixin.rebind', '重新绑定')
-                      : t('channel.weixin.bind', '绑定微信')}
-                </Button>
+                <div className="flex items-center gap-2">
+                  {weixinQrUrl && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => void handleWeixinBind()}
+                      disabled={weixinLoginPending}
+                    >
+                      {t('channel.weixin.refreshQr', '刷新二维码')}
+                    </Button>
+                  )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs"
+                    onClick={() => void handleWeixinBind()}
+                    disabled={weixinLoginPending}
+                  >
+                    {weixinLoginPending
+                      ? t('channel.weixin.bindingInProgress', '绑定中...')
+                      : localConfig.token
+                        ? t('channel.weixin.rebind', '重新绑定')
+                        : t('channel.weixin.bind', '绑定微信')}
+                  </Button>
+                </div>
               </div>
               {weixinLoginMessage && (
                 <p className="text-[10px] text-muted-foreground">{weixinLoginMessage}</p>
@@ -769,7 +782,11 @@ function ChannelConfigPanelContent({ plugin }: { plugin: PluginInstance }): Reac
               {weixinQrUrl && (
                 <div className="space-y-2">
                   <div className="rounded-md border bg-white p-3 flex justify-center">
-                    <img src={weixinQrUrl} alt="Weixin QR" className="size-44 object-contain" />
+                    <img
+                      src={weixinQrUrl}
+                      alt="Weixin QR"
+                      className="max-h-[420px] w-auto object-contain"
+                    />
                   </div>
                   {weixinSessionKey && (
                     <p className="text-[10px] text-muted-foreground font-mono break-all">

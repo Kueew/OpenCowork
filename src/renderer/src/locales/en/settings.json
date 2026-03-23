@@ -602,6 +602,7 @@
       "bindingDesc": "Bind by QR code, then use long polling for inbound and outbound messages.",
       "bind": "Bind Weixin",
       "rebind": "Rebind",
+      "refreshQr": "Refresh QR",
       "bindingInProgress": "Binding...",
       "baseUrlMissing": "Please fill in the Weixin gateway URL first",
       "loginStarting": "Generating QR code...",

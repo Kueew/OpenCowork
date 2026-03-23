@@ -602,6 +602,7 @@
       "bindingDesc": "通过扫码获取 token，并启用长轮询收发消息。",
       "bind": "绑定微信",
       "rebind": "重新绑定",
+      "refreshQr": "刷新二维码",
       "bindingInProgress": "绑定中...",
       "baseUrlMissing": "请先填写微信网关地址",
       "loginStarting": "正在生成二维码...",
