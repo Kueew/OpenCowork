@@ -282,11 +282,19 @@ export class FeishuApi {
    * Update a card entity content.
    * `sequence` must be strictly incrementing per card_id.
    */
-  async updateCard(cardId: string, content: string, sequence: number): Promise<boolean> {
+  async updateCard(
+    cardId: string,
+    content: string,
+    sequence: number,
+    title = 'AI Assistant'
+  ): Promise<boolean> {
     const headers = await this.authHeaders()
     const cardData = {
       schema: '2.0',
       config: { update_multi: true, streaming_mode: true },
+      header: {
+        title: { tag: 'plain_text', content: title }
+      },
       body: {
         elements: [{ tag: 'markdown', content }]
       }
@@ -464,7 +472,7 @@ export class FeishuApi {
                 return
               }
               resolve(data.data?.image_key ?? '')
-            } catch (e) {
+            } catch {
               reject(new Error(`Upload image parse error: ${responseBody.slice(0, 200)}`))
             }
           })
@@ -539,7 +547,7 @@ export class FeishuApi {
                 return
               }
               resolve(data.data?.file_key ?? '')
-            } catch (e) {
+            } catch {
               reject(new Error(`Upload file parse error: ${responseBody.slice(0, 200)}`))
             }
           })

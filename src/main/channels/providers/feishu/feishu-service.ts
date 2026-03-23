@@ -12,6 +12,9 @@ import { FeishuApi } from './feishu-api'
 
 /** Throttle interval for card updates (ms) */
 const STREAM_THROTTLE_MS = 500
+const STREAM_CARD_MAX_DURATION_MS = 45_000
+const STREAM_CARD_MAX_CHARS = 3_500
+const STREAM_CARD_MIN_ROTATE_CHARS = 800
 
 /**
  * Build a custom httpInstance for the Lark SDK that uses native fetch
@@ -24,7 +27,7 @@ function buildFetchHttpInstance(): Lark.HttpInstance {
     method: string
     data?: unknown
     headers?: Record<string, string>
-  }) => {
+  }): Promise<unknown> => {
     const res = await fetch(opts.url, {
       method: opts.method.toUpperCase(),
       headers: {
@@ -358,36 +361,105 @@ export class FeishuService implements MessagingChannelService {
     return seq
   }
 
+  private _streamCardTitle(index: number): string {
+    const baseTitle = this._instance.name || 'AI Assistant'
+    return index <= 1 ? baseTitle : `${baseTitle}（续 ${index}）`
+  }
+
+  private async _createStreamingCard(params: {
+    chatId: string
+    initialContent: string
+    replyToMessageId?: string
+    cardIndex: number
+    isFirstCard: boolean
+  }): Promise<string> {
+    const title = this._streamCardTitle(params.cardIndex)
+    const { cardId } = await this.api.createCard(params.initialContent || '⏳ Thinking...', title)
+
+    if (params.isFirstCard && params.replyToMessageId) {
+      await this.api.replyCardMessage(params.replyToMessageId, cardId)
+    } else {
+      await this.api.sendCardMessage(params.chatId, cardId)
+    }
+
+    return cardId
+  }
+
   async sendStreamingMessage(
     chatId: string,
     initialContent: string,
     messageId?: string
   ): Promise<ChannelStreamingHandle> {
-    const { cardId } = await this.api.createCard(
-      initialContent || '⏳ Thinking...',
-      this._instance.name || 'AI Assistant'
-    )
-
-    if (messageId) {
-      await this.api.replyCardMessage(messageId, cardId)
-    } else {
-      await this.api.sendCardMessage(chatId, cardId)
-    }
+    let cardIndex = 1
+    let currentCardId = await this._createStreamingCard({
+      chatId,
+      initialContent: initialContent || '⏳ Thinking...',
+      replyToMessageId: messageId,
+      cardIndex,
+      isFirstCard: true
+    })
 
     let lastUpdateTime = 0
+    let currentCardStartedAt = Date.now()
+    let segmentStartOffset = 0
+    let rotationPending = false
+    let rotationOffset = 0
+
+    const flushCurrentCard = async (content: string): Promise<void> => {
+      const seq = this._nextSeq(currentCardId)
+      await this.api.updateCard(currentCardId, content, seq, this._streamCardTitle(cardIndex))
+    }
+
+    const maybeRotateCard = async (fullContent: string): Promise<void> => {
+      const currentSegment = fullContent.slice(segmentStartOffset)
+      const shouldRotate =
+        currentSegment.length >= STREAM_CARD_MIN_ROTATE_CHARS &&
+        (Date.now() - currentCardStartedAt >= STREAM_CARD_MAX_DURATION_MS ||
+          currentSegment.length >= STREAM_CARD_MAX_CHARS)
+
+      if (!shouldRotate) return
+
+      rotationPending = true
+      rotationOffset = fullContent.length
+    }
+
+    const ensureNextCardIfNeeded = async (fullContent: string): Promise<void> => {
+      if (!rotationPending || fullContent.length <= rotationOffset) return
+
+      cardIndex += 1
+      currentCardId = await this._createStreamingCard({
+        chatId,
+        initialContent: '⏳ Continuing...',
+        cardIndex,
+        isFirstCard: false
+      })
+      segmentStartOffset = rotationOffset
+      currentCardStartedAt = Date.now()
+      rotationPending = false
+      rotationOffset = 0
+    }
 
     const handle: ChannelStreamingHandle = {
       update: async (content: string) => {
         const now = Date.now()
         if (now - lastUpdateTime < STREAM_THROTTLE_MS) return
         lastUpdateTime = now
-        const seq = this._nextSeq(cardId)
-        await this.api.updateCard(cardId, content, seq)
+
+        await ensureNextCardIfNeeded(content)
+        const segmentContent = content.slice(segmentStartOffset) || '⏳ Thinking...'
+        await flushCurrentCard(segmentContent)
+        await maybeRotateCard(content)
       },
       finish: async (finalContent: string) => {
-        const seq = this._nextSeq(cardId)
-        await this.api.updateCard(cardId, finalContent, seq)
-        this._cardSequences.delete(cardId)
+        await ensureNextCardIfNeeded(finalContent)
+        const finalSegmentContent = finalContent.slice(segmentStartOffset) || '✅ Done'
+        await flushCurrentCard(finalSegmentContent)
+
+        for (const [cardId] of this._cardSequences) {
+          if (cardId === currentCardId) {
+            this._cardSequences.delete(cardId)
+          }
+        }
       }
     }
 
