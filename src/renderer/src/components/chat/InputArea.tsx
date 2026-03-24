@@ -219,19 +219,6 @@ const defaultRecommendationKeys: Record<AppMode, string> = {
   code: 'input.recommendationDefaultCode'
 }
 
-interface InputHistoryEntry {
-  text: string
-  images: ImageAttachment[]
-  selectedFiles: SelectedFileItem[]
-}
-
-interface InputHistoryDraft {
-  text: string
-  images: ImageAttachment[]
-  selectedSkill: string | null
-  selectedFiles: SelectedFileItem[]
-}
-
 interface FileSearchItem {
   name: string
   path: string
@@ -239,8 +226,6 @@ interface FileSearchItem {
 
 const EMPTY_QUEUED_MESSAGES: PendingSessionMessageItem[] = []
 const EMPTY_SESSION_MESSAGES: UnifiedMessage[] = []
-const INPUT_HISTORY_LIMIT = 30
-const PENDING_HISTORY_KEY = '__pending_session__'
 const MIN_INPUT_HEIGHT = 120
 const HOME_INPUT_MIN_HEIGHT = 208
 const MAX_INPUT_HEIGHT = 500
@@ -484,10 +469,6 @@ export function InputArea({
     },
     [getMaxInputHeight]
   )
-  const [sentHistory, setSentHistory] = React.useState<InputHistoryEntry[]>([])
-  const [historyCursor, setHistoryCursor] = React.useState<number | null>(null)
-  const historyDraftRef = React.useRef<InputHistoryDraft | null>(null)
-  const historyBySessionRef = React.useRef<Record<string, InputHistoryEntry[]>>({})
   const prevSessionIdRef = React.useRef<string | null>(null)
   /** Per-session input draft (text + images + skill + files) */
   const draftBySessionRef = React.useRef<
@@ -707,26 +688,6 @@ export function InputArea({
     dispatchNextQueuedMessageForSession(activeSessionId)
   }, [activeSessionId])
 
-  const getHistoryKey = React.useCallback(
-    () => activeSessionId ?? PENDING_HISTORY_KEY,
-    [activeSessionId]
-  )
-  const updateSessionHistory = React.useCallback(
-    (updater: (prev: InputHistoryEntry[]) => InputHistoryEntry[]) => {
-      const historyKey = getHistoryKey()
-      const prevHistory = historyBySessionRef.current[historyKey] ?? []
-      const nextHistory = updater(prevHistory)
-      historyBySessionRef.current[historyKey] = nextHistory
-      setSentHistory(nextHistory)
-    },
-    [getHistoryKey]
-  )
-  const clearHistoryNavigation = React.useCallback(() => {
-    if (historyCursor !== null) {
-      setHistoryCursor(null)
-      historyDraftRef.current = null
-    }
-  }, [historyCursor])
   React.useEffect(() => {
     textRef.current = text
   }, [text])
@@ -941,7 +902,6 @@ export function InputArea({
 
   const insertSelectedFile = React.useCallback(
     (filePath: string) => {
-      clearHistoryNavigation()
       setSelectedSkill(null)
 
       const { files: nextFiles, file } = ensureSelectedFile(
@@ -971,7 +931,6 @@ export function InputArea({
     },
     [
       activeFileMention,
-      clearHistoryNavigation,
       editorSelection.end,
       editorSelection.start,
       replaceSelectionWithText,
@@ -982,80 +941,13 @@ export function InputArea({
 
   const insertSlashCommand = React.useCallback(
     (commandName: string) => {
-      clearHistoryNavigation()
       setSelectedSkill(null)
       applyEditorStateFromSerializedText(`/${commandName} `, selectedFiles)
       requestAnimationFrame(() => {
         focusInputAtEnd()
       })
     },
-    [applyEditorStateFromSerializedText, clearHistoryNavigation, focusInputAtEnd, selectedFiles]
-  )
-
-  const applyHistoryEntry = React.useCallback(
-    (entry: InputHistoryEntry) => {
-      applyEditorStateFromSerializedText(entry.text, entry.selectedFiles)
-      setAttachedImages(cloneImageAttachments(entry.images))
-      setSelectedSkill(null)
-      requestAnimationFrame(() => {
-        focusInputAtEnd()
-      })
-    },
-    [applyEditorStateFromSerializedText, focusInputAtEnd]
-  )
-  const restoreDraftFromHistory = React.useCallback(() => {
-    const draft = historyDraftRef.current
-    applyEditorStateFromSerializedText(draft?.text ?? '', draft?.selectedFiles ?? [])
-    setAttachedImages(cloneImageAttachments(draft?.images ?? []))
-    setSelectedSkill(draft?.selectedSkill ?? null)
-    historyDraftRef.current = null
-    requestAnimationFrame(() => {
-      focusInputAtEnd()
-    })
-  }, [applyEditorStateFromSerializedText, focusInputAtEnd])
-  const navigateHistory = React.useCallback(
-    (direction: 'up' | 'down') => {
-      if (sentHistory.length === 0) return
-      if (direction === 'up') {
-        if (historyCursor === null) {
-          historyDraftRef.current = {
-            text: finalSerializedText,
-            images: cloneImageAttachments(attachedImages),
-            selectedSkill,
-            selectedFiles: selectedFiles.map((file) => ({ ...file }))
-          }
-          const latest = sentHistory.length - 1
-          setHistoryCursor(latest)
-          applyHistoryEntry(sentHistory[latest])
-          return
-        }
-        const next = Math.max(historyCursor - 1, 0)
-        if (next !== historyCursor) {
-          setHistoryCursor(next)
-          applyHistoryEntry(sentHistory[next])
-        }
-        return
-      }
-      if (historyCursor === null) return
-      const next = historyCursor + 1
-      if (next >= sentHistory.length) {
-        setHistoryCursor(null)
-        restoreDraftFromHistory()
-        return
-      }
-      setHistoryCursor(next)
-      applyHistoryEntry(sentHistory[next])
-    },
-    [
-      historyCursor,
-      sentHistory,
-      finalSerializedText,
-      attachedImages,
-      selectedSkill,
-      selectedFiles,
-      applyHistoryEntry,
-      restoreDraftFromHistory
-    ]
+    [applyEditorStateFromSerializedText, focusInputAtEnd, selectedFiles]
   )
   const hasApiKey = !!activeProvider?.apiKey || activeProvider?.requiresApiKey === false
   const needsWorkingFolder = mode !== 'chat' && !workingFolder
@@ -1101,7 +993,6 @@ export function InputArea({
   }, [
     acceptSuggestion,
     applyEditorStateFromSerializedText,
-    clearHistoryNavigation,
     focusInputAtEnd,
     handleRecommendationSelectionChange,
     selectedFiles,
@@ -1172,21 +1063,6 @@ export function InputArea({
     setAttachedImages(draft?.images ? cloneImageAttachments(draft.images) : [])
     setSelectedSkill(draft?.skill ?? null)
 
-    if (!prevSessionId && activeSessionId) {
-      const pendingHistory = historyBySessionRef.current[PENDING_HISTORY_KEY]
-      if (
-        pendingHistory &&
-        pendingHistory.length > 0 &&
-        !historyBySessionRef.current[activeSessionId]
-      ) {
-        historyBySessionRef.current[activeSessionId] = pendingHistory
-        delete historyBySessionRef.current[PENDING_HISTORY_KEY]
-      }
-    }
-    const historyKey = activeSessionId ?? PENDING_HISTORY_KEY
-    setSentHistory(historyBySessionRef.current[historyKey] ?? [])
-    setHistoryCursor(null)
-    historyDraftRef.current = null
     prevSessionIdRef.current = activeSessionId
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId])
@@ -1196,7 +1072,6 @@ export function InputArea({
   React.useEffect(() => {
     if (!pendingInsert) return
 
-    clearHistoryNavigation()
     const selection = editorRef.current?.getSelectionOffsets() ?? {
       start: text.length,
       end: text.length
@@ -1211,7 +1086,7 @@ export function InputArea({
 
     replaceSelectionWithText(`${needsPrefix ? ' ' : ''}${pendingInsert}`, selection)
     useUIStore.getState().setPendingInsertText(null)
-  }, [clearHistoryNavigation, pendingInsert, replaceSelectionWithText, text])
+  }, [pendingInsert, replaceSelectionWithText, text])
 
   // --- Image helpers ---
   const addImages = React.useCallback(
@@ -1219,19 +1094,17 @@ export function InputArea({
       const results = await Promise.all(files.map(fileToImageAttachment))
       const valid = results.filter(Boolean) as ImageAttachment[]
       if (valid.length > 0) {
-        clearHistoryNavigation()
         setAttachedImages((prev) => [...prev, ...valid])
       }
     },
-    [clearHistoryNavigation]
+    []
   )
 
   const removeImage = React.useCallback(
     (id: string) => {
-      clearHistoryNavigation()
       setAttachedImages((prev) => prev.filter((img) => img.id !== id))
     },
-    [clearHistoryNavigation]
+    []
   )
 
   const addFilesToEditor = React.useCallback(
@@ -1286,7 +1159,6 @@ export function InputArea({
 
   const handleRemoveFileReference = React.useCallback(
     (nodeId: string) => {
-      clearHistoryNavigation()
       const currentDocument = documentRef.current
       const targetNode = currentDocument.find(
         (node): node is Extract<EditorDocumentNode, { type: 'file' }> =>
@@ -1303,12 +1175,11 @@ export function InputArea({
       setDocumentNodes(nextDocument)
       setSelectedFiles(nextFiles)
     },
-    [clearHistoryNavigation]
+    []
   )
 
   const handleEditorDocumentChange = React.useCallback(
     (nextDocument: EditorDocumentNode[]) => {
-      clearHistoryNavigation()
       const referencedFileIds = new Set(
         nextDocument
           .filter(
@@ -1321,7 +1192,7 @@ export function InputArea({
         currentFiles.filter((file) => referencedFileIds.has(file.id))
       )
     },
-    [clearHistoryNavigation]
+    []
   )
 
   const handleSend = (): void => {
@@ -1336,22 +1207,7 @@ export function InputArea({
         : serialized
 
     onSend(message, attachedImages.length > 0 ? attachedImages : undefined)
-    updateSessionHistory((prevHistory) => {
-      const nextHistory = [
-        ...prevHistory,
-        {
-          text: message,
-          images: cloneImageAttachments(attachedImages),
-          selectedFiles: selectedFiles.map((file) => ({ ...file }))
-        }
-      ]
-      return nextHistory.length > INPUT_HISTORY_LIMIT
-        ? nextHistory.slice(nextHistory.length - INPUT_HISTORY_LIMIT)
-        : nextHistory
-    })
 
-    setHistoryCursor(null)
-    historyDraftRef.current = null
     setDocumentNodes([])
     setSelectedFiles([])
     setEditorSelection({ start: 0, end: 0 })
@@ -1367,7 +1223,6 @@ export function InputArea({
 
     const selectionStart = editorSelection.start
     const selectionEnd = editorSelection.end
-    const collapsed = selectionStart === selectionEnd
 
     if (fileMenuOpen) {
       if (!e.altKey && !e.ctrlKey && !e.metaKey && e.key === 'ArrowDown') {
@@ -1436,31 +1291,11 @@ export function InputArea({
       const acceptedSuggestion = acceptSuggestion()
       if (acceptedSuggestion) {
         e.preventDefault()
-        clearHistoryNavigation()
         applyEditorStateFromSerializedText(acceptedSuggestion, selectedFiles)
         requestAnimationFrame(() => {
           focusInputAtEnd()
           handleRecommendationSelectionChange()
         })
-        return
-      }
-    }
-
-    if (
-      !e.altKey &&
-      !e.ctrlKey &&
-      !e.metaKey &&
-      !e.shiftKey &&
-      (e.key === 'ArrowUp' || e.key === 'ArrowDown')
-    ) {
-      if (collapsed && e.key === 'ArrowUp' && selectionStart === 0) {
-        e.preventDefault()
-        navigateHistory('up')
-        return
-      }
-      if (collapsed && e.key === 'ArrowDown' && selectionStart === text.length) {
-        e.preventDefault()
-        navigateHistory('down')
         return
       }
     }
@@ -1491,11 +1326,10 @@ export function InputArea({
       if (!plainText) return
 
       e.preventDefault()
-      clearHistoryNavigation()
       const selection = editorRef.current?.getSelectionOffsets() ?? editorSelection
       replaceSelectionWithText(plainText, selection)
     },
-    [addImages, clearHistoryNavigation, editorSelection, replaceSelectionWithText, supportsVision]
+    [addImages, editorSelection, replaceSelectionWithText, supportsVision]
   )
 
   const handleDropFiles = React.useCallback(
