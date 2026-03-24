@@ -1722,7 +1722,7 @@ export function InputArea({
             'relative flex flex-col border transition-shadow',
             isHomeComposer
               ? cn(
-                  'rounded-[30px] border-border/50 bg-[#151515] shadow-[0_30px_80px_-36px_rgba(0,0,0,0.88)] focus-within:ring-1 focus-within:ring-ring/20',
+                  'rounded-[30px] border-border/50 bg-background shadow-[0_30px_80px_-36px_rgba(0,0,0,0.24)] dark:shadow-[0_30px_80px_-36px_rgba(0,0,0,0.72)] focus-within:ring-1 focus-within:ring-ring/20',
                   hasFloatingSuggestionMenu ? 'z-10 overflow-visible' : 'overflow-hidden'
                 )
               : 'rounded-lg bg-background shadow-lg focus-within:shadow-xl focus-within:ring-1 focus-within:ring-ring/20',
