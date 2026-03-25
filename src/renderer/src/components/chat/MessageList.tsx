@@ -1,6 +1,7 @@
 import * as React from 'react'
-import { useVirtualizer } from '@tanstack/react-virtual'
+import { type VListHandle, VList } from 'virtua'
 import { useTranslation } from 'react-i18next'
+import { useShallow } from 'zustand/react/shallow'
 import { useChatStore } from '@renderer/stores/chat-store'
 import { useUIStore } from '@renderer/stores/ui-store'
 import { MessageItem } from './MessageItem'
@@ -43,37 +44,100 @@ interface MessageListProps {
 
 interface RenderableMessage {
   messageId: string
-  messageIndex: number
   isLastUserMessage: boolean
   isLastAssistantMessage: boolean
-  toolResults?: Map<string, { content: ToolResultContent; isError?: boolean }>
 }
 
 interface RenderableMessageMeta {
-  messageIndex: number
+  messageId: string
   isLastUserMessage: boolean
   isLastAssistantMessage: boolean
-  toolResults?: Map<string, { content: ToolResultContent; isError?: boolean }>
 }
 
 interface RenderableMetaBuildResult {
   items: RenderableMessageMeta[]
-  hasAssistantMessages: boolean
 }
 
 type VirtualRow =
   | { type: 'load-more'; key: string }
   | { type: 'message'; key: string; data: RenderableMessage }
 
+interface VirtualMessageRowProps {
+  rowIndex: number
+  messageId: string
+  isLastUserMessage: boolean
+  isLastAssistantMessage: boolean
+  disableAnimation: boolean
+  onRetry?: () => void
+  onEditUserMessage?: (messageId: string, draft: EditableUserMessageDraft) => void
+  onDeleteMessage?: (messageId: string) => void
+}
+
+const messageLookupCache = new WeakMap<UnifiedMessage[], Map<string, UnifiedMessage>>()
+const toolResultsLookupCache = new WeakMap<
+  UnifiedMessage[],
+  Map<string, Map<string, { content: ToolResultContent; isError?: boolean }>>
+>()
+
+function getMessageLookup(messages: UnifiedMessage[]): Map<string, UnifiedMessage> {
+  const cached = messageLookupCache.get(messages)
+  if (cached) return cached
+  const next = new Map<string, UnifiedMessage>()
+  for (const message of messages) {
+    next.set(message.id, message)
+  }
+  messageLookupCache.set(messages, next)
+  return next
+}
+
+function getToolResultsLookup(
+  messages: UnifiedMessage[]
+): Map<string, Map<string, { content: ToolResultContent; isError?: boolean }>> {
+  const cached = toolResultsLookupCache.get(messages)
+  if (cached) return cached
+
+  const next = new Map<string, Map<string, { content: ToolResultContent; isError?: boolean }>>()
+  let trailingToolResults:
+    | Map<string, { content: ToolResultContent; isError?: boolean }>
+    | undefined
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (isToolResultOnlyUserMessage(message)) {
+      if (!trailingToolResults) trailingToolResults = new Map()
+      collectToolResults(message.content as ContentBlock[], trailingToolResults)
+      continue
+    }
+
+    if (
+      message.role === 'assistant' &&
+      Array.isArray(message.content) &&
+      trailingToolResults &&
+      trailingToolResults.size > 0
+    ) {
+      next.set(message.id, trailingToolResults)
+    }
+    trailingToolResults = undefined
+  }
+
+  toolResultsLookupCache.set(messages, next)
+  return next
+}
+
+function areStringArraysEqual(left: string[], right: string[]): boolean {
+  if (left === right) return true
+  if (left.length !== right.length) return false
+  for (let i = 0; i < left.length; i += 1) {
+    if (left[i] !== right[i]) return false
+  }
+  return true
+}
+
 const EMPTY_MESSAGES: UnifiedMessage[] = []
-const INITIAL_VISIBLE_MESSAGE_COUNT = 120
-const LOAD_MORE_MESSAGE_STEP = 80
+const LOAD_MORE_MESSAGE_STEP = 160
 const AUTO_SCROLL_BOTTOM_THRESHOLD = 80
 const STREAMING_AUTO_SCROLL_BOTTOM_THRESHOLD = 150
 const LOAD_MORE_ROW_KEY = '__load_more__'
-const LOAD_MORE_ROW_ESTIMATED_HEIGHT = 56
-const MESSAGE_ESTIMATED_HEIGHT = 320
-const VIRTUAL_OVERSCAN = 6
 const TAIL_STATIC_MESSAGE_COUNT = 4
 
 function isToolResultOnlyUserMessage(message: UnifiedMessage): boolean {
@@ -122,49 +186,71 @@ function buildRenderableMessageMeta(
     break
   }
 
-  const assistantToolResults = new Map<
-    number,
-    Map<string, { content: ToolResultContent; isError?: boolean }>
-  >()
-  let trailingToolResults:
-    | Map<string, { content: ToolResultContent; isError?: boolean }>
-    | undefined
-
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i]
-    if (isToolResultOnlyUserMessage(message)) {
-      if (!trailingToolResults) trailingToolResults = new Map()
-      collectToolResults(message.content as ContentBlock[], trailingToolResults)
-      continue
-    }
-
-    if (
-      message.role === 'assistant' &&
-      Array.isArray(message.content) &&
-      trailingToolResults &&
-      trailingToolResults.size > 0
-    ) {
-      assistantToolResults.set(i, trailingToolResults)
-    }
-    trailingToolResults = undefined
-  }
-
   const result: RenderableMessageMeta[] = []
-  let hasAssistantMessages = false
   for (let i = 0; i < messages.length; i++) {
     const message = messages[i]
     if (isToolResultOnlyUserMessage(message)) continue
-    if (message.role === 'assistant') hasAssistantMessages = true
 
     result.push({
-      messageIndex: i,
+      messageId: message.id,
       isLastUserMessage: i === lastRealUserIndex,
-      isLastAssistantMessage: i === lastAssistantIndex,
-      toolResults: assistantToolResults.get(i)
+      isLastAssistantMessage: i === lastAssistantIndex
     })
   }
-  return { items: result, hasAssistantMessages }
+
+  return { items: result }
 }
+
+function getMessageTailSignal(message: UnifiedMessage | undefined): string {
+  if (!message) return ''
+  if (typeof message.content === 'string') {
+    return `s:${message.content.length}:${message.content.slice(-32)}`
+  }
+
+  return `a:${message.content.length}:${JSON.stringify(message.content[message.content.length - 1] ?? null)}`
+}
+
+const VirtualMessageRow = React.memo(function VirtualMessageRow({
+  rowIndex,
+  messageId,
+  isLastUserMessage,
+  isLastAssistantMessage,
+  disableAnimation,
+  onRetry,
+  onEditUserMessage,
+  onDeleteMessage
+}: VirtualMessageRowProps): React.JSX.Element | null {
+  const { message, toolResults, isStreaming } = useChatStore(
+    useShallow((s) => {
+      const activeSession = s.sessions.find((session) => session.id === s.activeSessionId)
+      const activeMessages = activeSession?.messages ?? EMPTY_MESSAGES
+      return {
+        message: getMessageLookup(activeMessages).get(messageId) ?? null,
+        toolResults: getToolResultsLookup(activeMessages).get(messageId),
+        isStreaming: s.streamingMessageId === messageId
+      }
+    })
+  )
+
+  if (!message) return null
+
+  return (
+    <div data-index={rowIndex} className="mx-auto max-w-3xl px-4 pb-6">
+      <MessageItem
+        message={message}
+        messageId={messageId}
+        isStreaming={isStreaming}
+        isLastUserMessage={isLastUserMessage}
+        isLastAssistantMessage={isLastAssistantMessage}
+        disableAnimation={disableAnimation}
+        onRetryAssistantMessage={onRetry}
+        onEditUserMessage={onEditUserMessage}
+        onDeleteMessage={onDeleteMessage}
+        toolResults={toolResults}
+      />
+    </div>
+  )
+})
 
 export function MessageList({
   onRetry,
@@ -172,23 +258,33 @@ export function MessageList({
   onDeleteMessage
 }: MessageListProps): React.JSX.Element {
   const { t } = useTranslation('chat')
-  const activeSessionId = useChatStore((s) => s.activeSessionId)
-  const streamingMessageId = useChatStore((s) => s.streamingMessageId)
-  const activeSession = useChatStore((s) =>
-    s.sessions.find((session) => session.id === s.activeSessionId)
+  const {
+    activeSessionId,
+    streamingMessageId,
+    activeSessionLoaded,
+    activeSessionMessageCount,
+    activeWorkingFolder,
+    messages
+  } = useChatStore(
+    useShallow((s) => {
+      const activeSession = s.sessions.find((session) => session.id === s.activeSessionId)
+      return {
+        activeSessionId: s.activeSessionId,
+        streamingMessageId: s.streamingMessageId,
+        activeSessionLoaded: activeSession?.messagesLoaded ?? true,
+        activeSessionMessageCount: activeSession?.messageCount ?? 0,
+        activeWorkingFolder: activeSession?.workingFolder,
+        messages: activeSession?.messages ?? EMPTY_MESSAGES
+      }
+    })
   )
   const mode = useUIStore((s) => s.mode)
-  const scrollContainerRef = React.useRef<HTMLDivElement>(null)
+  const listRef = React.useRef<VListHandle | null>(null)
   const [isAtBottom, setIsAtBottom] = React.useState(true)
   const pendingInitialScrollSessionIdRef = React.useRef<string | null>(null)
   const shouldStickToBottomRef = React.useRef(true)
   const preserveScrollOnPrependRef = React.useRef<{ offset: number; size: number } | null>(null)
   const scheduledScrollFrameRef = React.useRef<number | null>(null)
-
-  const activeSessionLoaded = activeSession?.messagesLoaded ?? true
-  const activeSessionMessageCount = activeSession?.messageCount ?? 0
-  const activeWorkingFolder = activeSession?.workingFolder
-  const messages = activeSession?.messages ?? EMPTY_MESSAGES
   const messageCount = messages.length
 
   React.useEffect(() => {
@@ -196,58 +292,20 @@ export function MessageList({
     void useChatStore.getState().loadRecentSessionMessages(activeSessionId)
   }, [activeSessionId])
 
-  const renderableStructureSignature = React.useMemo(
-    () =>
-      messages
-        .map(
-          (message) =>
-            `${message.id}:${message.role}:${isToolResultOnlyUserMessage(message) ? 1 : 0}`
-        )
-        .join('|'),
-    [messages]
-  )
-  const renderableMessages = React.useMemo(() => {
-    void renderableStructureSignature
-    if (!activeSessionId) return EMPTY_MESSAGES
-    return (
-      useChatStore.getState().sessions.find((session) => session.id === activeSessionId)?.messages ??
-      EMPTY_MESSAGES
-    )
-  }, [activeSessionId, renderableStructureSignature])
   const renderableMeta = React.useMemo(
-    () => buildRenderableMessageMeta(renderableMessages, streamingMessageId),
-    [renderableMessages, streamingMessageId]
+    () => buildRenderableMessageMeta(messages, streamingMessageId),
+    [messages, streamingMessageId]
   )
-  const [visibleCount, setVisibleCount] = React.useState(INITIAL_VISIBLE_MESSAGE_COUNT)
-  const visibleRenderableMeta = React.useMemo(() => {
-    const startIndex = Math.max(0, renderableMeta.items.length - visibleCount)
-    return renderableMeta.items.slice(startIndex)
-  }, [renderableMeta.items, visibleCount])
-  const visibleRenderableMessages = React.useMemo<RenderableMessage[]>(() => {
-    const result: RenderableMessage[] = []
-    for (const item of visibleRenderableMeta) {
-      const message = renderableMessages[item.messageIndex]
-      if (!message || isToolResultOnlyUserMessage(message)) continue
-      result.push({
-        messageId: message.id,
-        messageIndex: item.messageIndex,
-        isLastUserMessage: item.isLastUserMessage,
-        isLastAssistantMessage: item.isLastAssistantMessage,
-        toolResults: item.toolResults
-      })
-    }
-    return result
-  }, [renderableMessages, visibleRenderableMeta])
-  const hiddenLoadedMessageCount = Math.max(
-    0,
-    renderableMeta.items.length - visibleRenderableMeta.length
-  )
+
+  const renderableMessages = React.useMemo<RenderableMessage[]>(() => {
+    return renderableMeta.items
+  }, [renderableMeta.items])
+
   const olderUnloadedMessageCount = Math.max(0, activeSessionMessageCount - messages.length)
-  const hiddenMessageCount = hiddenLoadedMessageCount + olderUnloadedMessageCount
-  const hasLoadMoreRow = hiddenMessageCount > 0
+  const hasLoadMoreRow = olderUnloadedMessageCount > 0
 
   const virtualRows = React.useMemo<VirtualRow[]>(() => {
-    const rows: VirtualRow[] = visibleRenderableMessages.map((message) => ({
+    const rows: VirtualRow[] = renderableMessages.map((message) => ({
       type: 'message',
       key: message.messageId,
       data: message
@@ -256,33 +314,43 @@ export function MessageList({
       rows.unshift({ type: 'load-more', key: LOAD_MORE_ROW_KEY })
     }
     return rows
-  }, [hasLoadMoreRow, visibleRenderableMessages])
-
-  const virtualizer = useVirtualizer({
-    count: virtualRows.length,
-    getScrollElement: () => scrollContainerRef.current,
-    estimateSize: (index) =>
-      virtualRows[index]?.type === 'load-more'
-        ? LOAD_MORE_ROW_ESTIMATED_HEIGHT
-        : MESSAGE_ESTIMATED_HEIGHT,
-    overscan: VIRTUAL_OVERSCAN,
-    getItemKey: (index) => virtualRows[index]?.key ?? index
-  })
+  }, [hasLoadMoreRow, renderableMessages])
+  const nextVirtualRowKeys = React.useMemo(() => virtualRows.map((row) => row.key), [virtualRows])
+  const [stableVirtualRowKeys, setStableVirtualRowKeys] =
+    React.useState<string[]>(nextVirtualRowKeys)
+  React.useEffect(() => {
+    setStableVirtualRowKeys((prev) =>
+      areStringArraysEqual(prev, nextVirtualRowKeys) ? prev : nextVirtualRowKeys
+    )
+  }, [nextVirtualRowKeys])
+  const virtualRowKeys = areStringArraysEqual(stableVirtualRowKeys, nextVirtualRowKeys)
+    ? stableVirtualRowKeys
+    : nextVirtualRowKeys
+  const rowByKey = React.useMemo(() => {
+    const map = new Map<string, VirtualRow>()
+    for (const row of virtualRows) {
+      map.set(row.key, row)
+    }
+    return map
+  }, [virtualRows])
 
   const lastMessageRowIndex = React.useMemo(() => {
-    for (let i = virtualRows.length - 1; i >= 0; i--) {
-      if (virtualRows[i]?.type === 'message') return i
-    }
-    return -1
-  }, [virtualRows])
+    return virtualRowKeys.length - 1
+  }, [virtualRowKeys.length])
+
+  const streamingMessageSignal = React.useMemo(() => {
+    if (!streamingMessageId) return ''
+    return getMessageTailSignal(getMessageLookup(messages).get(streamingMessageId))
+  }, [messages, streamingMessageId])
 
   const scrollToBottomImmediate = React.useCallback(
     (behavior: ScrollBehavior = 'auto') => {
-      const lastIndex = virtualRows.length - 1
-      if (lastIndex < 0) return
-      virtualizer.scrollToIndex(lastIndex, { align: 'end', behavior })
+      const ref = listRef.current
+      const lastIndex = virtualRowKeys.length - 1
+      if (!ref || lastIndex < 0) return
+      ref.scrollToIndex(lastIndex, { align: 'end', smooth: behavior === 'smooth' })
     },
-    [virtualRows.length, virtualizer]
+    [virtualRowKeys.length]
   )
 
   const scheduleScrollToBottom = React.useCallback(() => {
@@ -290,10 +358,21 @@ export function MessageList({
     scheduledScrollFrameRef.current = window.requestAnimationFrame(() => {
       scheduledScrollFrameRef.current = null
       if (!shouldStickToBottomRef.current) return
-      virtualizer.measure()
       scrollToBottomImmediate()
     })
-  }, [scrollToBottomImmediate, virtualizer])
+  }, [scrollToBottomImmediate])
+
+  const syncBottomState = React.useCallback(() => {
+    const ref = listRef.current
+    if (!ref) return
+
+    const threshold = streamingMessageId
+      ? STREAMING_AUTO_SCROLL_BOTTOM_THRESHOLD
+      : AUTO_SCROLL_BOTTOM_THRESHOLD
+    const nextAtBottom = ref.scrollSize - ref.scrollOffset - ref.viewportSize <= threshold
+    shouldStickToBottomRef.current = nextAtBottom
+    setIsAtBottom((prev) => (prev === nextAtBottom ? prev : nextAtBottom))
+  }, [streamingMessageId])
 
   React.useEffect(() => {
     return () => {
@@ -304,7 +383,6 @@ export function MessageList({
   }, [])
 
   React.useLayoutEffect(() => {
-    setVisibleCount(INITIAL_VISIBLE_MESSAGE_COUNT)
     setIsAtBottom(true)
     pendingInitialScrollSessionIdRef.current = activeSessionId ?? null
     shouldStickToBottomRef.current = true
@@ -315,11 +393,10 @@ export function MessageList({
     if (!activeSessionId) return
     if (pendingInitialScrollSessionIdRef.current !== activeSessionId) return
 
-    virtualizer.measure()
     scrollToBottomImmediate()
     const timer = window.setTimeout(() => {
-      virtualizer.measure()
       scrollToBottomImmediate()
+      syncBottomState()
     }, 100)
 
     if (messageCount > 0 || streamingMessageId) {
@@ -327,79 +404,48 @@ export function MessageList({
     }
 
     return () => window.clearTimeout(timer)
-  }, [activeSessionId, messageCount, scrollToBottomImmediate, streamingMessageId, virtualizer])
-
-  React.useEffect(() => {
-    const container = scrollContainerRef.current
-    if (!container) return
-
-    const handleScroll = (): void => {
-      const distanceFromBottom =
-        container.scrollHeight - container.scrollTop - container.clientHeight
-      const threshold = streamingMessageId
-        ? STREAMING_AUTO_SCROLL_BOTTOM_THRESHOLD
-        : AUTO_SCROLL_BOTTOM_THRESHOLD
-      const nextAtBottom = distanceFromBottom <= threshold
-      shouldStickToBottomRef.current = nextAtBottom
-      setIsAtBottom((prev) => (prev === nextAtBottom ? prev : nextAtBottom))
-    }
-
-    handleScroll()
-    container.addEventListener('scroll', handleScroll, { passive: true })
-    return () => container.removeEventListener('scroll', handleScroll)
-  }, [activeSessionId, streamingMessageId])
+  }, [activeSessionId, messageCount, scrollToBottomImmediate, streamingMessageId, syncBottomState])
 
   React.useLayoutEffect(() => {
     const pending = preserveScrollOnPrependRef.current
-    const container = scrollContainerRef.current
-    if (!pending || !container) return
-    preserveScrollOnPrependRef.current = null
-    virtualizer.measure()
-    const delta = virtualizer.getTotalSize() - pending.size
-    if (delta > 0) {
-      container.scrollTop = pending.offset + delta
-    }
-  }, [virtualRows.length, virtualizer])
+    if (!pending) return
+
+    const frame = window.requestAnimationFrame(() => {
+      const ref = listRef.current
+      if (!ref) return
+      preserveScrollOnPrependRef.current = null
+      const delta = ref.scrollSize - pending.size
+      if (delta > 0) {
+        ref.scrollTo(pending.offset + delta)
+      }
+      syncBottomState()
+    })
+
+    return () => window.cancelAnimationFrame(frame)
+  }, [syncBottomState, virtualRowKeys.length])
+
+  React.useEffect(() => {
+    syncBottomState()
+  }, [syncBottomState, virtualRowKeys.length])
 
   React.useEffect(() => {
     if (!shouldStickToBottomRef.current) return
     scheduleScrollToBottom()
-  }, [messageCount, scheduleScrollToBottom, streamingMessageId, virtualRows.length])
+  }, [messageCount, scheduleScrollToBottom, streamingMessageId, virtualRowKeys.length])
 
   React.useEffect(() => {
     if (!streamingMessageId || !shouldStickToBottomRef.current) return
-    const timer = window.setTimeout(() => {
-      virtualizer.measure()
-      scrollToBottomImmediate()
-    }, 40)
-    return () => window.clearTimeout(timer)
-  }, [streamingMessageId, scrollToBottomImmediate, virtualRows.length, virtualizer])
-
-  React.useEffect(() => {
-    if (lastMessageRowIndex < 0 || !shouldStickToBottomRef.current) return
-    const element = scrollContainerRef.current?.querySelector<HTMLElement>(
-      `[data-index="${lastMessageRowIndex}"]`
-    )
-    if (!element) return
-
-    const observer = new ResizeObserver(() => {
-      if (!shouldStickToBottomRef.current) return
-      virtualizer.measure()
+    const frame = window.requestAnimationFrame(() => {
       scrollToBottomImmediate()
     })
-    observer.observe(element)
-
-    return () => {
-      observer.disconnect()
-    }
-  }, [lastMessageRowIndex, scrollToBottomImmediate, virtualizer])
+    return () => window.cancelAnimationFrame(frame)
+  }, [scrollToBottomImmediate, streamingMessageId, streamingMessageSignal])
 
   const scrollToBottom = React.useCallback(() => {
     shouldStickToBottomRef.current = true
     setIsAtBottom(true)
-    virtualizer.measure()
     scrollToBottomImmediate('smooth')
-  }, [scrollToBottomImmediate, virtualizer])
+  }, [scrollToBottomImmediate])
 
   const applySuggestedPrompt = React.useCallback((prompt: string) => {
     const textarea = document.querySelector('textarea')
@@ -441,12 +487,12 @@ export function MessageList({
   if (messages.length === 0) {
     const hint = modeHints[mode]
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-6 text-center px-6">
+      <div className="flex flex-1 flex-col items-center justify-center gap-6 px-6 text-center">
         <div className="flex flex-col items-center gap-3">
           <div className="rounded-2xl bg-muted/40 p-4">{hint.icon}</div>
           <div>
             <p className="text-base font-semibold text-foreground/80">{t(hint.titleKey)}</p>
-            <p className="mt-1.5 text-sm text-muted-foreground/60 max-w-[320px]">
+            <p className="mt-1.5 max-w-[320px] text-sm text-muted-foreground/60">
               {t(hint.descKey)}
             </p>
           </div>
@@ -454,7 +500,7 @@ export function MessageList({
         {mode !== 'chat' && (
           <p className="text-[11px] text-muted-foreground/40">{t('messageList.tipDropFiles')}</p>
         )}
-        <div className="flex flex-wrap justify-center gap-2 max-w-[400px]">
+        <div className="flex max-w-[400px] flex-wrap justify-center gap-2">
           {(mode === 'chat'
             ? [
                 t('messageList.explainAsync'),
@@ -489,7 +535,7 @@ export function MessageList({
           ).map((prompt) => (
             <button
               key={prompt}
-              className="rounded-lg border bg-muted/30 px-3 py-1.5 text-[11px] text-muted-foreground/60 hover:text-foreground hover:bg-muted/60 transition-colors"
+              className="rounded-lg border bg-muted/30 px-3 py-1.5 text-[11px] text-muted-foreground/60 transition-colors hover:bg-muted/60 hover:text-foreground"
               onClick={() => {
                 applySuggestedPrompt(prompt)
               }}
@@ -544,112 +590,80 @@ export function MessageList({
 
   return (
     <div className="relative flex-1" data-message-list>
-      <div ref={scrollContainerRef} className="absolute inset-0 overflow-y-auto">
-        <div className="mx-auto max-w-3xl p-4 overflow-hidden">
-          <div
-            data-message-content
-            style={{
-              height: virtualizer.getTotalSize(),
-              position: 'relative',
-              width: '100%'
-            }}
-          >
-            {virtualizer.getVirtualItems().map((virtualItem) => {
-              const row = virtualRows[virtualItem.index]
-              if (!row) return null
-
-              if (row.type === 'load-more') {
-                return (
-                  <div
-                    key={row.key}
-                    ref={virtualizer.measureElement}
-                    data-index={virtualItem.index}
-                    className="absolute left-0 top-0 w-full"
-                    style={{ transform: `translateY(${virtualItem.start}px)` }}
-                  >
-                    <div className="flex justify-center pb-6">
-                      <button
-                        className="rounded-md border px-3 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
-                        onClick={() => {
-                          const container = scrollContainerRef.current
-                          preserveScrollOnPrependRef.current = container
-                            ? { offset: container.scrollTop, size: virtualizer.getTotalSize() }
-                            : null
-
-                          if (hiddenLoadedMessageCount > 0) {
-                            setVisibleCount((prev) => prev + LOAD_MORE_MESSAGE_STEP)
-                            return
-                          }
-                          if (!activeSessionId || olderUnloadedMessageCount === 0) {
-                            preserveScrollOnPrependRef.current = null
-                            return
-                          }
-                          void useChatStore
-                            .getState()
-                            .loadOlderSessionMessages(activeSessionId, LOAD_MORE_MESSAGE_STEP)
-                            .then((loaded) => {
-                              if (loaded > 0) {
-                                setVisibleCount((prev) => prev + loaded)
-                                return
-                              }
-                              preserveScrollOnPrependRef.current = null
-                            })
-                            .catch(() => {
-                              preserveScrollOnPrependRef.current = null
-                            })
-                        }}
-                      >
-                        {t('messageList.loadMoreMessages', { defaultValue: '加载更早消息' })} (
-                        {hiddenMessageCount})
-                      </button>
-                    </div>
-                  </div>
-                )
-              }
-
-              const {
-                messageId,
-                messageIndex,
-                isLastUserMessage,
-                isLastAssistantMessage,
-                toolResults
-              } = row.data
-
-              const disableAnimation = lastMessageRowIndex >= 0
-                ? virtualItem.index >= Math.max(0, lastMessageRowIndex - (TAIL_STATIC_MESSAGE_COUNT - 1))
-                : false
-
+      <div className="absolute inset-0" data-message-content>
+        <VList
+          bufferSize={typeof window !== 'undefined' ? window.innerHeight : 0}
+          data={virtualRowKeys}
+          ref={listRef}
+          style={{ height: '100%', overflowAnchor: 'none' }}
+          onScroll={syncBottomState}
+        >
+          {(rowKey, rowIndex): React.JSX.Element => {
+            const row = rowByKey.get(rowKey)
+            if (!row) return <div key={rowKey} />
+            if (row.type === 'load-more') {
               return (
-                <div
-                  key={row.key}
-                  ref={virtualizer.measureElement}
-                  data-index={virtualItem.index}
-                  className="absolute left-0 top-0 w-full pb-6"
-                  style={{ transform: `translateY(${virtualItem.start}px)` }}
-                >
-                  <MessageItem
-                    message={messages[messageIndex]!}
-                    messageId={messageId}
-                    isStreaming={messageId === streamingMessageId}
-                    isLastUserMessage={isLastUserMessage}
-                    isLastAssistantMessage={isLastAssistantMessage}
-                    disableAnimation={disableAnimation}
-                    onRetryAssistantMessage={onRetry}
-                    onEditUserMessage={onEditUserMessage}
-                    onDeleteMessage={onDeleteMessage}
-                    toolResults={toolResults}
-                  />
+                <div key={rowKey} data-index={rowIndex} className="mx-auto max-w-3xl px-4">
+                  <div className="flex justify-center pb-6 pt-4">
+                    <button
+                      className="rounded-md border px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+                      onClick={() => {
+                        const ref = listRef.current
+                        preserveScrollOnPrependRef.current = ref
+                          ? { offset: ref.scrollOffset, size: ref.scrollSize }
+                          : null
+
+                        if (!activeSessionId || olderUnloadedMessageCount === 0) {
+                          preserveScrollOnPrependRef.current = null
+                          return
+                        }
+                        void useChatStore
+                          .getState()
+                          .loadOlderSessionMessages(activeSessionId, LOAD_MORE_MESSAGE_STEP)
+                          .then((loaded) => {
+                            if (loaded > 0) return
+                            preserveScrollOnPrependRef.current = null
+                          })
+                          .catch(() => {
+                            preserveScrollOnPrependRef.current = null
+                          })
+                      }}
+                    >
+                      {t('messageList.loadMoreMessages', { defaultValue: '加载更早消息' })} (
+                      {olderUnloadedMessageCount})
+                    </button>
+                  </div>
                 </div>
               )
-            })}
-          </div>
-        </div>
+            }
+
+            const { messageId, isLastUserMessage, isLastAssistantMessage } = row.data
+            const disableAnimation =
+              lastMessageRowIndex >= 0
+                ? rowIndex >= Math.max(0, lastMessageRowIndex - (TAIL_STATIC_MESSAGE_COUNT - 1))
+                : false
+
+            return (
+              <VirtualMessageRow
+                key={rowKey}
+                rowIndex={rowIndex}
+                messageId={messageId}
+                isLastUserMessage={isLastUserMessage}
+                isLastAssistantMessage={isLastAssistantMessage}
+                disableAnimation={disableAnimation}
+                onRetry={onRetry}
+                onEditUserMessage={onEditUserMessage}
+                onDeleteMessage={onDeleteMessage}
+              />
+            )
+          }}
+        </VList>
       </div>
 
       {!isAtBottom && messageCount > 0 && (
         <button
           onClick={scrollToBottom}
-          className="absolute bottom-4 left-1/2 z-10 -translate-x-1/2 flex items-center gap-1.5 rounded-full border bg-background/90 backdrop-blur-sm px-3 py-1.5 text-xs text-muted-foreground shadow-lg hover:text-foreground hover:shadow-xl transition-all duration-200 hover:-translate-y-0.5"
+          className="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border bg-background/90 px-3 py-1.5 text-xs text-muted-foreground shadow-lg backdrop-blur-sm transition-all duration-200 hover:-translate-y-0.5 hover:text-foreground hover:shadow-xl"
         >
           <ArrowDown className="size-3" />
           {t('messageList.scrollToBottom')}
