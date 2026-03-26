@@ -3,6 +3,30 @@
 All notable changes to **OpenCowork** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com).
 
+## [0.7.1] - 2026-03-26
+
+### Added
+
+- Added a dedicated SubAgents detail panel with transcript rendering, execution progress, task input context, and report states for teammate runs.
+- Added ACP-specific empty-state hints and homepage copy so users can understand empty sessions more quickly.
+- Added a dedicated `Routin AI（套餐）` built-in provider preset to expose the `https://cn.routin.ai/plan/v1` model lineup.
+
+### Changed
+
+- Expanded the workspace experience with richer side-panel behavior and improved SubAgents panel layout, navigation, and localization copy.
+- Updated Anthropic model capability metadata and reasoning effort labels, including support for the `max` effort level where applicable.
+- Updated the docs homepage release badge from `v0.6.6` to `v0.7.1`.
+
+### Fixed
+
+- Improved ACP chat empty-state handling so guidance stays consistent across chat home and message list views.
+- Improved wiki document access by returning tree metadata and preserving leaf-level source file references for tool and page consumers.
+
+### Refactored
+
+- Removed the legacy OpenAI Responses websocket transport preference across providers, channels, and related settings.
+- Refactored project wiki generation toward a tree-based document structure with leaf-node generation flow and sidebar browsing support.
+
 ## [0.7.0] - 2026-03-25
 
 ### Refactored
