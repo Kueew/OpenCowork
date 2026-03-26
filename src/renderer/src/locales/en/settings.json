@@ -434,6 +434,7 @@
     "responsesSummaryDetailed": "Detailed",
     "promptCache": "Prompt cache (responses)",
     "systemPromptCache": "System prompt cache (anthropic)",
+
     "capabilities": "Capabilities",
     "supportsVision": "Supports vision (image input)",
     "supportsFunctionCall": "Supports function calling",

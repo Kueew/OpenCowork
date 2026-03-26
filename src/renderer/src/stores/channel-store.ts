@@ -170,7 +170,6 @@ export const useChannelStore = create<ChannelStore>((set, get) => ({
       enabled: true,
       config,
       createdAt: Date.now(),
-      enableResponsesWebSocket: false,
       ...(tools ? { tools } : {})
     }
     await ipcClient.invoke(IPC.PLUGIN_ADD, instance)

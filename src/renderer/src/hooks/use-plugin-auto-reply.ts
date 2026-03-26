@@ -519,8 +519,7 @@ async function _runPluginAgent(task: PluginAutoReplyTask): Promise<void> {
   const agentProviderConfig: ProviderConfig = {
     ...providerConfig,
     systemPrompt,
-    sessionId,
-    ...(channelMeta?.enableResponsesWebSocket ? { preferResponsesWebSocket: true } : {})
+    sessionId
   }
 
   const loopConfig: AgentLoopConfig = {

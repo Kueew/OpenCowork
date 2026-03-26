@@ -5,8 +5,6 @@ import type {
   ToolDefinition,
   UnifiedMessage,
   ContentBlock,
-  ToolResultContent,
-  ToolUseBlock,
   OpenAIComputerActionType,
   ToolCallExtraContent
 } from './types'
@@ -17,7 +15,7 @@ import {
   DESKTOP_TYPE_TOOL_NAME,
   DESKTOP_WAIT_TOOL_NAME
 } from '../app-plugin/types'
-import { ApiStreamError, ipcStreamRequest, maskHeaders } from '../ipc/api-stream'
+import { ipcStreamRequest, maskHeaders } from '../ipc/api-stream'
 import { loadPrompt } from '../prompts/prompt-loader'
 import { getGlobalPromptCacheKey, registerProvider } from './provider'
 
@@ -54,42 +52,10 @@ function applyBodyOverrides(body: Record<string, unknown>, config: ProviderConfi
   }
 }
 
-class RecoverableResponsesWebSocketError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'RecoverableResponsesWebSocketError'
-  }
-}
-
-function shouldUseResponsesWebSocket(config: ProviderConfig): boolean {
-  return config.type === 'openai-responses' && config.preferResponsesWebSocket === true
-}
-
-function isRecoverableResponsesWebSocketProtocolError(data: {
-  error?: { code?: string }
-}): boolean {
-  const code = data.error?.code
-  return code === 'previous_response_not_found' || code === 'websocket_connection_limit_reached'
-}
-
 interface ComputerActionInputDescriptor {
   toolName: string
   input: Record<string, unknown>
   extraContent: ToolCallExtraContent
-}
-
-interface PendingResponsesContinuationTurn {
-  previousResponseId: string
-  input: unknown[]
-}
-
-interface ComputerUseToolMeta {
-  toolUseId: string
-  toolName: string
-  computerCallId: string
-  computerActionType: OpenAIComputerActionType
-  computerActionIndex: number
-  autoAddedScreenshot?: boolean
 }
 
 class OpenAIResponsesProvider implements APIProvider {
@@ -105,17 +71,8 @@ class OpenAIResponsesProvider implements APIProvider {
     const requestStartedAt = Date.now()
     let firstTokenAt: number | null = null
     let outputTokens = 0
-    let websocketStartedStreaming = false
     const baseUrl = (config.baseUrl || 'https://api.openai.com/v1').trim().replace(/\/+$/, '')
-    const useResponsesWebSocket = shouldUseResponsesWebSocket(config)
     const fullInput = this.formatMessages(messages, config.systemPrompt, !!config.thinkingEnabled)
-    const pendingContinuationTurn = useResponsesWebSocket
-      ? this.extractPendingResponsesContinuationTurn(
-          messages,
-          !!config.thinkingEnabled,
-          !!config.computerUseEnabled
-        )
-      : null
 
     const body: Record<string, unknown> = {
       model: config.model,
@@ -200,29 +157,17 @@ class OpenAIResponsesProvider implements APIProvider {
     if (config.serviceTier) headers.service_tier = config.serviceTier
     applyHeaderOverrides(headers, config)
 
-    const websocketBody = pendingContinuationTurn
-      ? {
-          ...body,
-          input: pendingContinuationTurn.input,
-          previous_response_id: pendingContinuationTurn.previousResponseId
-        }
-      : body
     const httpBodyStr = JSON.stringify(body)
-    const websocketBodyStr = JSON.stringify(websocketBody)
-    const transportSessionKey =
-      config.sessionId ?? `${config.providerId ?? 'provider'}::${config.model}`
 
-    console.log(
-      `[OpenAI Responses] transport=${useResponsesWebSocket ? 'websocket' : 'http'} session=${transportSessionKey} continuation=${pendingContinuationTurn ? 'yes' : 'no'} previous_response_id=${pendingContinuationTurn?.previousResponseId ?? 'none'} model=${config.model}`
-    )
+    console.log(`[OpenAI Responses] model=${config.model}`)
 
     yield {
       type: 'request_debug',
       debugInfo: {
         url,
-        method: useResponsesWebSocket ? 'WS' : 'POST',
+        method: 'POST',
         headers: maskHeaders(headers),
-        body: useResponsesWebSocket ? websocketBodyStr : httpBodyStr,
+        body: httpBodyStr,
         timestamp: Date.now()
       }
     }
@@ -264,10 +209,7 @@ class OpenAIResponsesProvider implements APIProvider {
     }
 
     const buildComputerUseToolEvents = this.buildComputerUseToolEvents.bind(this)
-    const streamTransport = async function* (
-      requestBody: string,
-      transport?: 'websocket'
-    ): AsyncIterable<StreamEvent> {
+    const streamTransport = async function* (requestBody: string): AsyncIterable<StreamEvent> {
       for await (const sse of ipcStreamRequest({
         url,
         method: 'POST',
@@ -276,9 +218,7 @@ class OpenAIResponsesProvider implements APIProvider {
         signal,
         useSystemProxy: config.useSystemProxy,
         providerId: config.providerId,
-        providerBuiltinId: config.providerBuiltinId,
-        transport,
-        transportSessionKey
+        providerBuiltinId: config.providerBuiltinId
       })) {
         if (!sse.data || sse.data === '[DONE]') continue
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -291,13 +231,11 @@ class OpenAIResponsesProvider implements APIProvider {
 
         switch (sse.event) {
           case 'response.output_text.delta':
-            websocketStartedStreaming = websocketStartedStreaming || transport === 'websocket'
             if (firstTokenAt === null) firstTokenAt = Date.now()
             yield { type: 'text_delta', text: data.delta }
             break
 
           case 'response.reasoning_summary_text.delta': {
-            websocketStartedStreaming = websocketStartedStreaming || transport === 'websocket'
             if (firstTokenAt === null) firstTokenAt = Date.now()
             const thinkingEvent = tryBuildThinkingDeltaEvent(data.delta)
             if (thinkingEvent) {
@@ -307,7 +245,6 @@ class OpenAIResponsesProvider implements APIProvider {
           }
 
           case 'response.reasoning_summary_text.done': {
-            websocketStartedStreaming = websocketStartedStreaming || transport === 'websocket'
             if (firstTokenAt === null) firstTokenAt = Date.now()
             if (!emittedThinkingDelta) {
               const thinkingEvent = tryBuildThinkingDeltaEvent(
@@ -321,7 +258,6 @@ class OpenAIResponsesProvider implements APIProvider {
           }
 
           case 'response.output_item.added':
-            websocketStartedStreaming = websocketStartedStreaming || transport === 'websocket'
             if (data.item?.type === 'function_call') {
               argBuffers.set(data.item.id, '')
               yield {
@@ -344,7 +280,6 @@ class OpenAIResponsesProvider implements APIProvider {
             break
 
           case 'response.output_item.done': {
-            websocketStartedStreaming = websocketStartedStreaming || transport === 'websocket'
             if (data.item?.type === 'computer_call') {
               for (const event of buildComputerUseToolEvents(data.item, emittedComputerCallIds)) {
                 yield event
@@ -371,7 +306,6 @@ class OpenAIResponsesProvider implements APIProvider {
           }
 
           case 'response.function_call_arguments.delta': {
-            websocketStartedStreaming = websocketStartedStreaming || transport === 'websocket'
             yield { type: 'tool_call_delta', toolCallId: data.call_id, argumentsDelta: data.delta }
             const key = data.item_id
             argBuffers.set(key, (argBuffers.get(key) ?? '') + data.delta)
@@ -379,7 +313,6 @@ class OpenAIResponsesProvider implements APIProvider {
           }
 
           case 'response.function_call_arguments.done':
-            websocketStartedStreaming = websocketStartedStreaming || transport === 'websocket'
             try {
               yield {
                 type: 'tool_call_end',
@@ -465,43 +398,12 @@ class OpenAIResponsesProvider implements APIProvider {
             break
 
           case 'error':
-            if (
-              transport === 'websocket' &&
-              !websocketStartedStreaming &&
-              isRecoverableResponsesWebSocketProtocolError(data)
-            ) {
-              throw new RecoverableResponsesWebSocketError(JSON.stringify(data))
-            }
             yield { type: 'error', error: { type: 'api_error', message: JSON.stringify(data) } }
             break
         }
       }
     }
 
-    if (useResponsesWebSocket) {
-      try {
-        for await (const event of streamTransport(websocketBodyStr, 'websocket')) {
-          yield event
-        }
-        return
-      } catch (error) {
-        if (
-          websocketStartedStreaming ||
-          (!(error instanceof RecoverableResponsesWebSocketError) &&
-            !(error instanceof ApiStreamError))
-        ) {
-          throw error
-        }
-        console.warn(
-          `[OpenAI Responses] WebSocket unavailable, fallback to HTTP session=${transportSessionKey}`,
-          error
-        )
-      }
-    }
-
-    if (useResponsesWebSocket) {
-      console.log(`[OpenAI Responses] Using HTTP fallback session=${transportSessionKey}`)
-    }
     for await (const event of streamTransport(httpBodyStr)) {
       yield event
     }
@@ -924,139 +826,6 @@ class OpenAIResponsesProvider implements APIProvider {
     return `${callId}__${actionIndex}__${safeToolName}__${suffix}`
   }
 
-  private extractPendingResponsesContinuationTurn(
-    messages: UnifiedMessage[],
-    includeEncryptedReasoning: boolean,
-    computerUseEnabled: boolean
-  ): PendingResponsesContinuationTurn | null {
-    if (computerUseEnabled) {
-      const pendingComputerUseTurn = this.extractPendingComputerUseTurn(messages)
-      if (pendingComputerUseTurn) return pendingComputerUseTurn
-    }
-
-    const lastMessage = messages.at(-1)
-    const previousMessage = messages.at(-2)
-    if (!lastMessage || !previousMessage) return null
-    if (lastMessage.role !== 'user' || previousMessage.role !== 'assistant') return null
-    if (!previousMessage.providerResponseId) return null
-
-    return {
-      previousResponseId: previousMessage.providerResponseId,
-      input: this.formatMessages([lastMessage], undefined, includeEncryptedReasoning)
-    }
-  }
-
-  private extractPendingComputerUseTurn(
-    messages: UnifiedMessage[]
-  ): PendingResponsesContinuationTurn | null {
-    const lastMessage = messages.at(-1)
-    const previousMessage = messages.at(-2)
-    if (!lastMessage || !previousMessage) return null
-    if (lastMessage.role !== 'user' || previousMessage.role !== 'assistant') return null
-    if (!previousMessage.providerResponseId) return null
-    if (!Array.isArray(previousMessage.content) || !Array.isArray(lastMessage.content)) return null
-
-    const computerToolMetas = this.collectComputerToolMetas(previousMessage.content)
-    if (computerToolMetas.length === 0) return null
-
-    const toolMetaById = new Map(computerToolMetas.map((item) => [item.toolUseId, item]))
-    const functionToolUseIds = new Set(
-      previousMessage.content
-        .filter(
-          (block): block is ToolUseBlock =>
-            block.type === 'tool_use' && !this.isComputerUseToolBlock(block)
-        )
-        .map((block) => block.id)
-    )
-
-    const functionOutputs: unknown[] = []
-    const computerResults = lastMessage.content.filter(
-      (block): block is Extract<ContentBlock, { type: 'tool_result' }> => {
-        if (block.type !== 'tool_result') return false
-        if (functionToolUseIds.has(block.toolUseId)) {
-          functionOutputs.push({
-            type: 'function_call_output',
-            call_id: block.toolUseId,
-            output: this.stringifyToolResult(block.content)
-          })
-        }
-        return toolMetaById.has(block.toolUseId)
-      }
-    )
-
-    if (computerResults.length === 0) return null
-
-    const screenshotMeta = [...computerToolMetas]
-      .sort((a, b) => a.computerActionIndex - b.computerActionIndex)
-      .reverse()
-      .find((item) => item.toolName === DESKTOP_SCREENSHOT_TOOL_NAME)
-
-    const screenshotResult = screenshotMeta
-      ? computerResults.find((result) => result.toolUseId === screenshotMeta.toolUseId)
-      : null
-
-    const screenshotDataUrl = screenshotResult
-      ? this.extractScreenshotDataUrlFromToolResult(screenshotResult.content)
-      : null
-
-    if (screenshotMeta && screenshotDataUrl) {
-      return {
-        previousResponseId: previousMessage.providerResponseId,
-        input: [
-          ...functionOutputs,
-          {
-            type: 'computer_call_output',
-            call_id: screenshotMeta.computerCallId,
-            output: {
-              type: 'computer_screenshot',
-              image_url: screenshotDataUrl,
-              detail: 'original'
-            }
-          }
-        ]
-      }
-    }
-
-    const errorText = computerResults
-      .map((result) => this.extractToolErrorText(result.content))
-      .filter((item): item is string => Boolean(item))
-      .join('\n')
-
-    return {
-      previousResponseId: previousMessage.providerResponseId,
-      input: [
-        ...functionOutputs,
-        {
-          type: 'message',
-          role: 'user',
-          content:
-            errorText ||
-            'Computer use could not capture a follow-up screenshot after executing the requested actions.'
-        }
-      ]
-    }
-  }
-
-  private collectComputerToolMetas(blocks: ContentBlock[]): ComputerUseToolMeta[] {
-    return blocks
-      .filter((block): block is ToolUseBlock => this.isComputerUseToolBlock(block))
-      .map((block) => ({
-        toolUseId: block.id,
-        toolName: block.name,
-        computerCallId: block.extraContent!.openaiResponses!.computerUse!.computerCallId,
-        computerActionType: block.extraContent!.openaiResponses!.computerUse!.computerActionType,
-        computerActionIndex: block.extraContent!.openaiResponses!.computerUse!.computerActionIndex,
-        autoAddedScreenshot: block.extraContent!.openaiResponses!.computerUse!.autoAddedScreenshot
-      }))
-  }
-
-  private isComputerUseToolBlock(block: ContentBlock): block is ToolUseBlock {
-    return (
-      block.type === 'tool_use' &&
-      block.extraContent?.openaiResponses?.computerUse?.kind === 'computer_use'
-    )
-  }
-
   private isComputerUseToolResultBlock(
     block: Extract<ContentBlock, { type: 'tool_result' }>,
     messages: UnifiedMessage[],
@@ -1072,41 +841,6 @@ class OpenAIResponsesProvider implements APIProvider {
         candidate.id === block.toolUseId &&
         candidate.extraContent?.openaiResponses?.computerUse?.kind === 'computer_use'
     )
-  }
-
-  private extractScreenshotDataUrlFromToolResult(content: ToolResultContent): string | null {
-    if (!Array.isArray(content)) return null
-    const imageBlock = content.find((block) => block.type === 'image')
-    if (!imageBlock || imageBlock.type !== 'image') return null
-    if (imageBlock.source.type === 'url' && imageBlock.source.url) {
-      return imageBlock.source.url
-    }
-    if (imageBlock.source.type === 'base64' && imageBlock.source.data) {
-      return `data:${imageBlock.source.mediaType || 'image/png'};base64,${imageBlock.source.data}`
-    }
-    return null
-  }
-
-  private stringifyToolResult(content: ToolResultContent): string {
-    if (typeof content === 'string') return content
-    const textParts = content
-      .filter((block) => block.type === 'text')
-      .map((block) => (block.type === 'text' ? block.text : ''))
-    const imageParts = content.filter((block) => block.type === 'image')
-    return [...textParts, ...imageParts.map(() => '[Image attached]')].join('\n') || '[Image]'
-  }
-
-  private extractToolErrorText(content: ToolResultContent): string | null {
-    if (typeof content !== 'string') return null
-    try {
-      const parsed = JSON.parse(content) as { error?: unknown }
-      if (typeof parsed.error === 'string' && parsed.error.trim()) {
-        return parsed.error
-      }
-    } catch {
-      return content.trim() || null
-    }
-    return null
   }
 
   private normalizeToolSchema(schema: ToolDefinition['inputSchema']): Record<string, unknown> {

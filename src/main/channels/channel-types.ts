@@ -62,8 +62,6 @@ export interface ChannelInstance {
   providerId?: string | null
   /** Model override for this plugin's auto-reply agent (null = use global default) */
   model?: string | null
-  /** Prefer OpenAI Responses WebSocket transport for this channel when supported */
-  enableResponsesWebSocket?: boolean
   /** Feature toggles */
   features?: ChannelFeatures
   /** Security permissions (defaults applied if missing) */

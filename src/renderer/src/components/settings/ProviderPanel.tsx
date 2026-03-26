@@ -322,7 +322,6 @@ function ModelFormDialog({
   const [enableSystemPromptCache, setEnableSystemPromptCache] = useState(
     initial?.enableSystemPromptCache ?? true
   )
-
   const handleSave = (): void => {
     if (!id.trim()) return
     const model: AIModelConfig = {
@@ -362,10 +361,10 @@ function ModelFormDialog({
       const v = parseFloat(cacheHitPrice)
       if (!isNaN(v)) model.cacheHitPrice = v
     }
-    if (supportsVision) model.supportsVision = true
+    model.supportsVision = supportsVision
     if (!supportsFunctionCall) model.supportsFunctionCall = false
-    if (supportsComputerUse) model.supportsComputerUse = true
-    if (supportsComputerUse && enableComputerUse) model.enableComputerUse = true
+    model.supportsComputerUse = supportsComputerUse
+    model.enableComputerUse = supportsComputerUse && enableComputerUse
     if (icon.trim()) model.icon = icon.trim()
     if (responseSummary && responseSummary !== 'none') model.responseSummary = responseSummary
     model.enablePromptCache = enablePromptCache

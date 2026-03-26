@@ -43,9 +43,6 @@ function createProviderFromPreset(preset: BuiltinProviderPreset): AIProvider {
     ...(preset.requestOverrides ? { requestOverrides: { ...preset.requestOverrides } } : {}),
     ...(preset.instructionsPrompt ? { instructionsPrompt: preset.instructionsPrompt } : {}),
     ...(preset.ui ? { ui: { ...preset.ui } } : {}),
-    ...(preset.preferResponsesWebSocket !== undefined
-      ? { preferResponsesWebSocket: preset.preferResponsesWebSocket }
-      : {})
   }
 }
 
@@ -180,13 +177,26 @@ function mergeBuiltinModels(
   const presetIds = new Set(presetModels.map((model) => model.id))
   const deprecatedIds = new Set(deprecatedModelIds)
 
-  // Keep preset order for builtin models; preserve user's enabled state.
+  // Keep preset order for builtin models; preserve user's enabled state and capability overrides.
+  const capabilityKeys: (keyof AIModelConfig)[] = [
+    'supportsVision',
+    'supportsFunctionCall',
+    'supportsComputerUse',
+    'enableComputerUse'
+  ]
   const merged = presetModels.map((presetModel) => {
     const existingModel = existingById.get(presetModel.id)
     if (!existingModel) return { ...presetModel }
+    const capabilityOverrides: Partial<AIModelConfig> = {}
+    for (const key of capabilityKeys) {
+      if (existingModel[key] !== undefined) {
+        ;(capabilityOverrides as Record<string, unknown>)[key] = existingModel[key]
+      }
+    }
     return {
       ...existingModel,
       ...presetModel,
+      ...capabilityOverrides,
       enabled: existingModel.enabled
     }
   })
@@ -598,11 +608,6 @@ export const useProviderStore = create<ProviderStore>()(
           ...(requestOverrides ? { requestOverrides } : {}),
           ...(provider.instructionsPrompt
             ? { instructionsPrompt: provider.instructionsPrompt }
-            : {}),
-          ...(provider.preferResponsesWebSocket ||
-          activeModel?.preferResponsesWebSocket ||
-          (provider.builtinId === 'codex-oauth' && requestType === 'openai-responses')
-            ? { preferResponsesWebSocket: true }
             : {})
         }
       },
@@ -700,11 +705,6 @@ export const useProviderStore = create<ProviderStore>()(
           ...(requestOverrides ? { requestOverrides } : {}),
           ...(provider.instructionsPrompt
             ? { instructionsPrompt: provider.instructionsPrompt }
-            : {}),
-          ...(provider.preferResponsesWebSocket ||
-          model?.preferResponsesWebSocket ||
-          (provider.builtinId === 'codex-oauth' && requestType === 'openai-responses')
-            ? { preferResponsesWebSocket: true }
             : {})
         }
       },
@@ -766,11 +766,6 @@ export const useProviderStore = create<ProviderStore>()(
           ...(requestOverrides ? { requestOverrides } : {}),
           ...(provider.instructionsPrompt
             ? { instructionsPrompt: provider.instructionsPrompt }
-            : {}),
-          ...(provider.preferResponsesWebSocket ||
-          fastModel?.preferResponsesWebSocket ||
-          (provider.builtinId === 'codex-oauth' && requestType === 'openai-responses')
-            ? { preferResponsesWebSocket: true }
             : {})
         }
       },
@@ -843,9 +838,6 @@ function ensureBuiltinPresets(): void {
       }
       if (existing.userAgent !== preset.userAgent) {
         patch.userAgent = preset.userAgent
-      }
-      if (existing.preferResponsesWebSocket !== preset.preferResponsesWebSocket) {
-        patch.preferResponsesWebSocket = preset.preferResponsesWebSocket
       }
       if (existing.defaultModel !== preset.defaultModel) {
         patch.defaultModel = preset.defaultModel

@@ -36,7 +36,6 @@ export const codexOAuthPreset: BuiltinProviderPreset = {
     usePkce: true
   },
   ui: { hideOAuthSettings: true },
-  preferResponsesWebSocket: true,
   userAgent: 'codex_cli_rs/0.76.0 (Windows 10.0.26200; x86_64) vscode/1.105.1',
   requestOverrides: {
     headers: {

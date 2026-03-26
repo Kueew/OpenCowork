@@ -303,7 +303,6 @@ export function registerChannelHandlers(channelManager: ChannelManager): void {
           builtin: true,
           config,
           createdAt: Date.now(),
-          enableResponsesWebSocket: false,
           tools: buildToolsMap(descriptor)
         })
         changed = true
@@ -359,7 +358,6 @@ export function registerChannelHandlers(channelManager: ChannelManager): void {
             'tools',
             'providerId',
             'model',
-            'enableResponsesWebSocket',
             'features',
             'permissions'
           ].includes(key)
@@ -367,10 +365,6 @@ export function registerChannelHandlers(channelManager: ChannelManager): void {
           delete (p as unknown as Record<string, unknown>)[key]
           changed = true
         }
-      }
-      if (typeof p.enableResponsesWebSocket !== 'boolean') {
-        p.enableResponsesWebSocket = false
-        changed = true
       }
       // Ensure tools map matches descriptor
       const nextTools = buildToolsMap(desc, p.tools)

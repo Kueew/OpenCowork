@@ -434,6 +434,7 @@
     "responsesSummaryDetailed": "详细",
     "promptCache": "Prompt 缓存（Responses）",
     "systemPromptCache": "System 缓存（Anthropic）",
+
     "capabilities": "能力",
     "supportsVision": "支持视觉（图片输入）",
     "supportsFunctionCall": "支持函数调用",

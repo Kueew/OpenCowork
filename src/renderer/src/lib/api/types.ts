@@ -330,8 +330,6 @@ export interface AIModelConfig {
   enableSystemPromptCache?: boolean
   /** Optional request overrides applied only to this model */
   requestOverrides?: RequestOverrides
-  /** Prefer OpenAI Responses WebSocket transport when available */
-  preferResponsesWebSocket?: boolean
   /** OpenAI-compatible service tier (e.g. priority). Effective when fast mode is enabled. */
   serviceTier?: 'priority'
 }
@@ -384,8 +382,6 @@ export interface AIProvider {
   instructionsPrompt?: string
   /** Optional UI configuration for this provider */
   ui?: ProviderUiConfig
-  /** Prefer OpenAI Responses WebSocket transport when available (ignored when useSystemProxy) */
-  preferResponsesWebSocket?: boolean
 }
 
 // --- Provider Config ---
@@ -435,8 +431,6 @@ export interface ProviderConfig {
   organization?: string
   /** OpenAI project header */
   project?: string
-  /** Prefer OpenAI Responses WebSocket transport when available */
-  preferResponsesWebSocket?: boolean
 }
 
 // --- Provider Interface ---

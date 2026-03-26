@@ -9,6 +9,8 @@ export interface ToolContext {
   sshConnectionId?: string
   signal: AbortSignal
   ipc: IPCClient
+  /** Per-run inline tool handlers that should shadow the global registry. */
+  inlineToolHandlers?: Record<string, ToolHandler>
   /** The tool_use block id currently being executed (set by agent-loop) */
   currentToolUseId?: string
   /** Current top-level agent run id, reused for post-run change review and rollback. */
@@ -31,6 +33,8 @@ export interface ToolContext {
   channelPermissions?: ChannelPermissions
   /** Channel working home dir for path-based access control */
   channelHomedir?: string
+  /** Per-run local tool handlers that should not be exposed globally */
+  localToolHandlers?: Record<string, ToolHandler>
 }
 
 export interface IPCClient {
