@@ -33,6 +33,7 @@ import {
   type FileSnapshot
 } from './agent-change-handlers'
 import { createGitIgnoreMatcher } from './gitignore-utils'
+import { safeSendToAllWindows } from '../window-ipc'
 
 // ── SSH Session Manager ──
 
@@ -159,9 +160,7 @@ type UploadTaskState = {
 const uploadTasks = new Map<string, UploadTaskState>()
 
 function broadcastUploadEvent(evt: UploadEvent): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    win.webContents.send('ssh:fs:upload:events', evt)
-  }
+  safeSendToAllWindows('ssh:fs:upload:events', evt)
 }
 
 function nowStamp(): string {

@@ -5,6 +5,7 @@ import * as os from 'os'
 import { FeishuApi } from '../channels/providers/feishu/feishu-api'
 import { nanoid } from 'nanoid'
 import { ChannelManager } from '../channels/channel-manager'
+import { safeSendToAllWindows } from '../window-ipc'
 import { CHANNEL_PROVIDERS } from '../channels/channel-descriptors'
 import { getDb } from '../db/database'
 import * as projectsDao from '../db/projects-dao'
@@ -174,10 +175,7 @@ function writePlugins(plugins: ChannelInstance[]): void {
 // ── Notify renderer of channel events ──
 
 function notifyRenderer(event: ChannelEvent): void {
-  const windows = BrowserWindow.getAllWindows()
-  for (const win of windows) {
-    win.webContents.send('plugin:incoming-message', event)
-  }
+  safeSendToAllWindows('plugin:incoming-message', event)
 
   // Route incoming messages through auto-reply pipeline
   if (event.type === 'incoming_message') {
@@ -684,10 +682,7 @@ export function registerChannelHandlers(channelManager: ChannelManager): void {
     db.prepare('DELETE FROM messages WHERE session_id = ?').run(args.sessionId)
     db.prepare('DELETE FROM sessions WHERE id = ?').run(args.sessionId)
     // Notify renderer to remove from store
-    const windows = BrowserWindow.getAllWindows()
-    for (const win of windows) {
-      win.webContents.send('plugin:session-deleted', { sessionId: args.sessionId })
-    }
+    safeSendToAllWindows('plugin:session-deleted', { sessionId: args.sessionId })
     return { ok: true }
   })
 

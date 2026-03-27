@@ -1,10 +1,10 @@
-import { BrowserWindow } from 'electron'
 import * as path from 'path'
 import * as os from 'os'
 import * as fs from 'fs'
 import { nanoid } from 'nanoid'
 import { getDb } from '../db/database'
 import * as projectsDao from '../db/projects-dao'
+import { safeSendToAllWindows } from '../window-ipc'
 import type { ChannelEvent, ChannelInstance, ChannelIncomingMessageData } from './channel-types'
 import type { ChannelManager } from './channel-manager'
 import { tryHandleCommand } from './plugin-commands'
@@ -188,31 +188,28 @@ export function handleChannelAutoReply(event: ChannelEvent): void {
     const supportsStreaming = !!(service?.supportsStreaming && service?.sendStreamingMessage)
 
     // Notify renderer to trigger Agent Loop auto-reply
-    const windows = BrowserWindow.getAllWindows()
-    for (const win of windows) {
-      win.webContents.send('plugin:session-task', {
-        sessionId: session.id,
-        pluginId,
-        pluginType: event.pluginType,
-        chatId: data.chatId,
-        senderId: data.senderId,
-        senderName: data.senderName,
-        chatName: data.chatName,
-        sessionTitle: session.title,
-        content:
-          data.content ||
-          (data.images?.length ? '[User sent an image]' : '') ||
-          (data.audio ? '[User sent an audio message]' : ''),
-        messageId: data.messageId,
-        supportsStreaming,
-        images: data.images,
-        audio: data.audio,
-        chatType: data.chatType,
-        projectId: pluginProject?.id ?? undefined,
-        workingFolder: pluginWorkDir || undefined,
-        sshConnectionId: pluginSshConnectionId
-      })
-    }
+    safeSendToAllWindows('plugin:session-task', {
+      sessionId: session.id,
+      pluginId,
+      pluginType: event.pluginType,
+      chatId: data.chatId,
+      senderId: data.senderId,
+      senderName: data.senderName,
+      chatName: data.chatName,
+      sessionTitle: session.title,
+      content:
+        data.content ||
+        (data.images?.length ? '[User sent an image]' : '') ||
+        (data.audio ? '[User sent an audio message]' : ''),
+      messageId: data.messageId,
+      supportsStreaming,
+      images: data.images,
+      audio: data.audio,
+      chatType: data.chatType,
+      projectId: pluginProject?.id ?? undefined,
+      workingFolder: pluginWorkDir || undefined,
+      sshConnectionId: pluginSshConnectionId
+    })
 
     console.log(
       `[AutoReply] Routed message from ${data.senderName || data.senderId} ` +
