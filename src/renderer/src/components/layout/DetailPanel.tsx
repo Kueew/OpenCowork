@@ -380,7 +380,7 @@ export function SubAgentExecutionDetailContent({
             <section className="rounded-2xl border border-border/60 bg-background/80 p-4 sm:p-5">
               <div className="mb-3 flex items-center gap-2 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground/60">
                 <FileText className="size-3.5" />
-                <span>{t('subAgentsPanel.report', { defaultValue: '总结报告' })}</span>
+                <span>{t('subAgentsPanel.report', { defaultValue: '最终结果' })}</span>
               </div>
               {agent.report.trim() ? (
                 <div className="prose prose-sm max-w-none prose-headings:text-foreground prose-p:text-foreground/90 prose-li:text-foreground/90 prose-strong:text-foreground dark:prose-invert">
@@ -395,9 +395,9 @@ export function SubAgentExecutionDetailContent({
                   {agent.reportStatus === 'retrying'
                     ? t('subAgentsPanel.reportStatusRetrying', { defaultValue: '补救中' })
                     : agent.reportStatus === 'missing'
-                      ? t('subAgentsPanel.reportMissing', { defaultValue: '未捕获到总结报告。' })
+                      ? t('subAgentsPanel.reportMissing', { defaultValue: '未捕获到最终结果。' })
                       : t('subAgentsPanel.reportPending', {
-                          defaultValue: '当前 SubAgent 尚未生成总结报告。'
+                          defaultValue: '当前 SubAgent 尚未产出最终结果。'
                         })}
                 </div>
               )}

@@ -39,7 +39,7 @@ function getReportStatusLabel(
 ): string {
   switch (status) {
     case 'submitted':
-      return t('subAgentsPanel.reportStatusSubmitted', { defaultValue: '已提交' })
+      return t('subAgentsPanel.reportStatusSubmitted', { defaultValue: '结果可用' })
     case 'retrying':
       return t('subAgentsPanel.reportStatusRetrying', { defaultValue: '补救中' })
     case 'fallback':
@@ -300,9 +300,9 @@ export function SubAgentExecutionDetail({
                 {agent.reportStatus === 'retrying'
                   ? t('subAgentsPanel.reportStatusRetrying', { defaultValue: '补救中' })
                   : agent.reportStatus === 'missing'
-                    ? t('subAgentsPanel.reportMissing', { defaultValue: '未捕获到总结报告。' })
+                    ? t('subAgentsPanel.reportMissing', { defaultValue: '未捕获到最终结果。' })
                     : t('subAgentsPanel.reportPending', {
-                        defaultValue: '当前执行尚未生成总结报告。'
+                        defaultValue: '当前执行尚未产出最终结果。'
                       })}
               </div>
             )}

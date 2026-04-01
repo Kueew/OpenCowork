@@ -201,6 +201,12 @@ const MemberDetailRow = React.memo(function MemberDetailRow({
         <div className="ml-4 mr-1 mt-0.5 mb-2 space-y-2 border-l-2 border-cyan-500/15 pl-3">
           {/* Meta info */}
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground/60">
+            {member.agentName && (
+              <span className="flex items-center gap-0.5 text-violet-500/80">
+                <Bot className="size-2.5" />
+                {member.agentName}
+              </span>
+            )}
             {member.model !== 'default' && (
               <span className="flex items-center gap-0.5">
                 <Bot className="size-2.5" />

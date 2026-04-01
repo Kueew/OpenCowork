@@ -66,10 +66,20 @@ export interface AgentInfo {
   description: string
   /** Lucide icon name */
   icon?: string
-  /** Comma-separated list of allowed tool names */
+  /** Allowed tool names. Supports '*' to expose all registered tools. */
+  tools: string[]
+  /** Legacy alias kept for compatibility with existing renderer code and saved files. */
   allowedTools: string[]
-  /** Max LLM iterations */
+  /** Tools explicitly denied for this agent. */
+  disallowedTools: string[]
+  /** Max LLM turns */
+  maxTurns: number
+  /** Legacy alias kept for compatibility with existing renderer code and saved files. */
   maxIterations: number
+  /** Optional initial task prefix */
+  initialPrompt?: string
+  /** Whether this agent is intended for background execution */
+  background?: boolean
   /** Optional model override */
   model?: string
   /** Optional temperature override */
@@ -103,11 +113,16 @@ function parseAgentFile(content: string, filename: string): AgentInfo | null {
   const fmBlock = fmMatch[1]
   const body = content.slice(fmMatch[0].length).trimStart()
 
-  // Extract frontmatter fields
-  const getString = (key: string): string | undefined => {
+  const getRawValue = (key: string): string | undefined => {
     const m = fmBlock.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'))
     if (!m) return undefined
-    return m[1].trim().replace(/^["']|["']$/g, '')
+    return m[1].trim()
+  }
+
+  const getString = (key: string): string | undefined => {
+    const value = getRawValue(key)
+    if (value === undefined) return undefined
+    return value.replace(/^["']|["']$/g, '')
   }
 
   const getNumber = (key: string): number | undefined => {
@@ -117,6 +132,27 @@ function parseAgentFile(content: string, filename: string): AgentInfo | null {
     return isNaN(n) ? undefined : n
   }
 
+  const getBoolean = (key: string): boolean | undefined => {
+    const s = getString(key)
+    if (s === undefined) return undefined
+    if (s === 'true') return true
+    if (s === 'false') return false
+    return undefined
+  }
+
+  const getStringList = (key: string): string[] | undefined => {
+    const raw = getRawValue(key)
+    if (!raw) return undefined
+
+    const normalized = raw
+      .replace(/^\[(.*)\]$/, '$1')
+      .split(',')
+      .map((item) => item.trim().replace(/^["']|["']$/g, ''))
+      .filter(Boolean)
+
+    return normalized.length > 0 ? normalized : undefined
+  }
+
   const name = getString('name')
   const description = getString('description')
   if (!name || !description) {
@@ -124,19 +160,22 @@ function parseAgentFile(content: string, filename: string): AgentInfo | null {
     return null
   }
 
-  const allowedToolsStr = getString('allowedTools') ?? 'Read, Glob, Grep, LS'
-  const allowedTools = allowedToolsStr
-    .split(',')
-    .map((t) => t.trim())
-    .filter(Boolean)
+  const tools = getStringList('tools') ??
+    getStringList('allowedTools') ?? ['Read', 'Glob', 'Grep', 'LS']
+  const disallowedTools = getStringList('disallowedTools') ?? []
+  const maxTurns = getNumber('maxTurns') ?? getNumber('maxIterations') ?? 0
 
   return {
     name,
     description,
     icon: getString('icon'),
-    allowedTools,
-    // 0 => unlimited iterations; explicit value in frontmatter still takes precedence
-    maxIterations: getNumber('maxIterations') ?? 0,
+    tools,
+    allowedTools: tools,
+    disallowedTools,
+    maxTurns,
+    maxIterations: maxTurns,
+    initialPrompt: getString('initialPrompt'),
+    background: getBoolean('background'),
     model: getString('model'),
     temperature: getNumber('temperature'),
     systemPrompt: body || `You are ${name}, a specialized agent.`

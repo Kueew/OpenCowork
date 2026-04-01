@@ -156,6 +156,7 @@ interface SubAgentState {
   streamingText: string
   transcript: UnifiedMessage[]
   currentAssistantMessageId: string | null
+  /** Final result text resolved from the sub-agent's actual output. */
   report: string
   reportStatus: SubAgentReportStatus
   startedAt: number
@@ -1212,14 +1213,10 @@ export const useAgentStore = create<AgentStore>()(
                 sa.errorMessage = event.result.error ?? null
                 sa.completedAt = Date.now()
                 finalizeAssistantMessage(sa)
-                if (!sa.report.trim()) {
-                  sa.report = event.result.finalReportMarkdown ?? sa.report
-                  sa.reportStatus = event.result.finalReportMarkdown?.trim()
-                    ? 'fallback'
-                    : 'missing'
-                } else if (sa.reportStatus !== 'submitted') {
-                  sa.reportStatus = sa.reportStatus === 'missing' ? 'missing' : sa.reportStatus
+                if (!sa.report.trim() && event.result.output.trim()) {
+                  sa.report = event.result.output
                 }
+                sa.reportStatus = sa.report.trim() ? 'submitted' : 'missing'
                 state.completedSubAgents[id] = sa
                 upsertSubAgentHistory(state.subAgentHistory, sa)
                 trimCompletedSubAgentsMap(state.completedSubAgents)

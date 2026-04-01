@@ -1,8 +1,15 @@
 import { nanoid } from 'nanoid'
 import type { UnifiedMessage } from '../../api/types'
 
-export function buildSubAgentPromptText(input: Record<string, unknown>): string {
+export function buildSubAgentPromptText(
+  input: Record<string, unknown>,
+  initialPrompt?: string
+): string {
   const parts: string[] = []
+
+  if (initialPrompt?.trim()) {
+    parts.push(initialPrompt.trim())
+  }
 
   if (input.prompt) {
     parts.push(String(input.prompt))
@@ -29,12 +36,13 @@ export function buildSubAgentPromptText(input: Record<string, unknown>): string 
 
 export function createSubAgentPromptMessage(
   input: Record<string, unknown>,
-  createdAt = Date.now()
+  createdAt = Date.now(),
+  initialPrompt?: string
 ): UnifiedMessage {
   return {
     id: nanoid(),
     role: 'user',
-    content: buildSubAgentPromptText(input),
+    content: buildSubAgentPromptText(input, initialPrompt),
     createdAt
   }
 }

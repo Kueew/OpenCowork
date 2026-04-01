@@ -49,7 +49,7 @@ export function TeammateCard({
   const isWorking = member.status === 'working'
 
   // Live elapsed time
-  const [now, setNow] = React.useState(Date.now())
+  const [now, setNow] = React.useState(() => Date.now())
   React.useEffect(() => {
     if (!isWorking) return
     const timer = setInterval(() => setNow(Date.now()), 1000)
@@ -82,6 +82,9 @@ export function TeammateCard({
             >
               {t(`teammateCard.status.${member.status}`, { defaultValue: member.status })}
             </Badge>
+            {member.agentName && (
+              <span className="text-[8px] text-violet-500/80 truncate">{member.agentName}</span>
+            )}
             {member.model !== 'default' && (
               <span className="text-[8px] text-muted-foreground/40 truncate">{member.model}</span>
             )}

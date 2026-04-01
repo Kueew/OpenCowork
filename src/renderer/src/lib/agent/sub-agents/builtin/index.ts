@@ -12,8 +12,13 @@ interface AgentInfo {
   name: string
   description: string
   icon?: string
-  allowedTools: string[]
-  maxIterations: number
+  tools?: string[]
+  allowedTools?: string[]
+  disallowedTools?: string[]
+  maxTurns?: number
+  maxIterations?: number
+  initialPrompt?: string
+  background?: boolean
   model?: string
   temperature?: number
   systemPrompt: string
@@ -25,8 +30,11 @@ function toDefinition(info: AgentInfo): SubAgentDefinition {
     name: info.name,
     description: info.description,
     icon: info.icon,
-    allowedTools: info.allowedTools,
-    maxIterations: info.maxIterations,
+    tools: info.tools ?? info.allowedTools ?? ['Read', 'Glob', 'Grep', 'LS'],
+    disallowedTools: info.disallowedTools ?? [],
+    maxTurns: info.maxTurns ?? info.maxIterations ?? 0,
+    initialPrompt: info.initialPrompt,
+    background: info.background,
     model: info.model,
     temperature: info.temperature,
     systemPrompt: info.systemPrompt,

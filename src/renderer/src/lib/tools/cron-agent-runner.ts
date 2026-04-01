@@ -40,18 +40,9 @@ const DEFAULT_AGENT = 'CronAgent'
 const FALLBACK_CRON_AGENT = {
   name: DEFAULT_AGENT,
   description: 'Scheduled task agent for cron jobs',
-  allowedTools: [
-    'Read',
-    'Write',
-    'Edit',
-    'Glob',
-    'Grep',
-    'Shell',
-    'Bash',
-    'Notify',
-    'AskUserQuestion'
-  ],
-  maxIterations: 15,
+  tools: ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Shell', 'Bash', 'Notify', 'AskUserQuestion'],
+  disallowedTools: [],
+  maxTurns: 15,
   model: undefined as string | undefined,
   temperature: undefined as number | undefined,
   systemPrompt:
@@ -411,8 +402,10 @@ async function _runCronAgentAsync(
     'FeishuBitableDeleteRecords'
   ]
   const allDefs = toolRegistry.getDefinitions()
-  const allowedSet = new Set([...definition.allowedTools, 'Notify', 'Skill', ...CHANNEL_TOOL_NAMES])
-  const innerTools = allDefs.filter((t) => allowedSet.has(t.name))
+  const requestedTools = definition.tools ?? []
+  const deniedTools = new Set(definition.disallowedTools ?? [])
+  const allowedSet = new Set([...requestedTools, 'Notify', 'Skill', ...CHANNEL_TOOL_NAMES])
+  const innerTools = allDefs.filter((t) => allowedSet.has(t.name) && !deniedTools.has(t.name))
 
   const innerProvider: ProviderConfig = {
     ...providerConfig,
@@ -500,7 +493,7 @@ Begin working on this task now.`
   await flushTranscript()
 
   const loopConfig: AgentLoopConfig = {
-    maxIterations: maxIter ?? definition.maxIterations,
+    maxIterations: maxIter ?? definition.maxTurns,
     provider: innerProvider,
     tools: innerTools,
     systemPrompt: definition.systemPrompt,

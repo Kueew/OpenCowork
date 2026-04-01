@@ -1,6 +1,4 @@
 import { nanoid } from 'nanoid'
-import { createProvider } from '../../api/provider'
-import { runAgentLoop } from '../agent-loop'
 import { toolRegistry } from '../tool-registry'
 import { teamEvents } from './events'
 import { useTeamStore } from '../../../stores/team-store'
@@ -10,9 +8,13 @@ import { ensureProviderAuthReady } from '../../auth/provider-auth'
 import { useAgentStore } from '../../../stores/agent-store'
 import { ipcClient } from '../../ipc/ipc-client'
 import { MessageQueue } from '../types'
-import type { AgentLoopConfig, ToolCallState } from '../types'
+import type { AgentLoopConfig } from '../types'
 import type { UnifiedMessage, ProviderConfig, TokenUsage } from '../../api/types'
 import type { TeamMessage, TeamTask } from './types'
+import { buildRuntimeCompression } from '../context-compression-runtime'
+import { subAgentRegistry } from '../sub-agents/registry'
+import { resolveSubAgentTools } from '../sub-agents/resolve-tools'
+import { runSharedAgentRuntime } from '../shared-runtime'
 
 // --- AbortController registry for individual teammates ---
 const teammateAbortControllers = new Map<string, AbortController>()
@@ -66,6 +68,7 @@ interface RunTeammateOptions {
   prompt: string
   taskId: string | null
   model: string | null
+  agentName: string | null
   workingFolder?: string
 }
 
@@ -83,7 +86,7 @@ interface RunTeammateOptions {
  * needing to poll. The lead is auto-notified via SendMessage.
  */
 export async function runTeammate(options: RunTeammateOptions): Promise<void> {
-  const { memberId, memberName, model, workingFolder } = options
+  const { memberId, memberName, model, agentName, workingFolder } = options
   let { prompt, taskId } = options
 
   const abortController = new AbortController()
@@ -91,10 +94,15 @@ export async function runTeammate(options: RunTeammateOptions): Promise<void> {
 
   // Exclude team management tools from teammate (only lead should manage team).
   // TaskCreate is excluded because teammates should not create new tasks.
-  // Note: Task tool is kept but run_in_background is guarded inside executeBackgroundTeammate
-  // (requires active team context; teammate spawning teammate is blocked below via approval).
+  // Note: Task tool is kept but run_in_background is guarded inside executeBackgroundTeammate.
   const LEAD_ONLY_TOOLS = new Set(['TeamCreate', 'TeamDelete', 'TaskCreate'])
-  const toolDefs = toolRegistry.getDefinitions().filter((t) => !LEAD_ONLY_TOOLS.has(t.name))
+  const baseToolDefs = toolRegistry
+    .getDefinitions()
+    .filter((tool) => !LEAD_ONLY_TOOLS.has(tool.name))
+  const agentDefinition = agentName ? subAgentRegistry.get(agentName) : undefined
+  const toolDefs = agentDefinition
+    ? resolveSubAgentTools(agentDefinition, baseToolDefs).tools
+    : baseToolDefs
 
   // Message queue: receives messages from lead/other teammates and injects
   // them into the agent loop at iteration boundaries (between turns).
@@ -106,13 +114,11 @@ export async function runTeammate(options: RunTeammateOptions): Promise<void> {
     const msg = event.message
     const isForMe = msg.to === memberName || msg.to === 'all'
     if (!isForMe) return
-    // Don't inject our own messages
     if (msg.from === memberName) return
 
     if (msg.type === 'shutdown_request') {
       teammateShutdownRequested.add(memberId)
     } else {
-      // Inject as a user message so the LLM sees it on the next turn
       messageQueue.push({
         id: nanoid(),
         role: 'user',
@@ -130,7 +136,6 @@ export async function runTeammate(options: RunTeammateOptions): Promise<void> {
   let endReason: 'completed' | 'aborted' | 'error' | 'shutdown' = 'completed'
 
   try {
-    // If no task was assigned, try to auto-claim one before starting
     if (!taskId) {
       const initialTask = findNextClaimableTask()
       if (initialTask) {
@@ -149,8 +154,6 @@ export async function runTeammate(options: RunTeammateOptions): Promise<void> {
       }
     }
 
-    // Execute the single assigned task (no auto-claim loop;
-    // the framework scheduler handles dispatching next tasks).
     const result = await runSingleTaskLoop({
       memberId,
       memberName,
@@ -160,28 +163,28 @@ export async function runTeammate(options: RunTeammateOptions): Promise<void> {
       workingFolder,
       abortController,
       toolDefs,
-      messageQueue
+      messageQueue,
+      agentName
     })
 
     totalIterations = result.iterations
     totalToolCalls = result.toolCalls
     lastStreamingText = result.lastStreamingText
-    fullOutput = result.finalReportMarkdown || result.fullOutput
+    fullOutput = result.fullOutput
     if (result.taskCompleted) tasksCompleted++
     if (result.reason === 'aborted') endReason = 'aborted'
     else if (result.reason === 'shutdown') endReason = 'shutdown'
     else if (result.reason === 'error') endReason = 'error'
 
-    // Mark member as stopped
     teamEvents.emit({
       type: 'team_member_update',
       memberId,
       patch: { status: 'stopped', completedAt: Date.now() }
     })
-  } catch (err) {
+  } catch (error) {
     endReason = 'error'
     if (!abortController.signal.aborted) {
-      console.error(`[Teammate ${memberName}] Error:`, err)
+      console.error(`[Teammate ${memberName}] Error:`, error)
     }
     teamEvents.emit({
       type: 'team_member_update',
@@ -193,10 +196,6 @@ export async function runTeammate(options: RunTeammateOptions): Promise<void> {
     teammateShutdownRequested.delete(memberId)
     unsubMessages()
 
-    // --- P0: Auto-notify lead with completion summary ---
-    // IMPORTANT: Do NOT emit for aborted teammates. When the user clicks Stop,
-    // abortAllTeammates() fires. If we still emit here, the completion message
-    // triggers drainLeadMessages → new main agent turn → potential re-spawn → dead loop.
     if (endReason !== 'aborted') {
       emitCompletionMessage(memberName, endReason, {
         totalIterations,
@@ -217,7 +216,6 @@ interface SingleTaskResult {
   toolCalls: number
   lastStreamingText: string
   fullOutput: string
-  finalReportMarkdown: string
   taskCompleted: boolean
   reason: 'completed' | 'max_iterations' | 'aborted' | 'shutdown' | 'error'
   usage: TokenUsage
@@ -229,6 +227,7 @@ async function runSingleTaskLoop(opts: {
   prompt: string
   taskId: string | null
   model: string | null
+  agentName: string | null
   workingFolder?: string
   abortController: AbortController
   toolDefs: ReturnType<typeof toolRegistry.getDefinitions>
@@ -240,13 +239,13 @@ async function runSingleTaskLoop(opts: {
     prompt,
     taskId,
     model,
+    agentName,
     workingFolder,
     abortController,
     toolDefs,
     messageQueue
   } = opts
 
-  // Build provider config from provider-store with fallback to settings-store
   const settings = useSettingsStore.getState()
   const providerState = useProviderStore.getState()
   const activeProviderId = providerState.activeProviderId
@@ -256,6 +255,7 @@ async function runSingleTaskLoop(opts: {
       throw new Error('Provider authentication required. Please sign in.')
     }
   }
+
   const activeConfig = providerState.getActiveProviderConfig()
   const effectiveModel =
     model && model !== 'default' ? model : (activeConfig?.model ?? settings.model)
@@ -278,59 +278,65 @@ async function runSingleTaskLoop(opts: {
         temperature: settings.temperature
       }
 
-  const team = useTeamStore.getState().activeTeam
-  const taskInfo = taskId && team ? team.tasks.find((t) => t.id === taskId) : null
+  if (toolDefs.length === 0) {
+    throw new Error(
+      agentName
+        ? `No tools available for teammate agent "${agentName}".`
+        : 'No tools available for teammate.'
+    )
+  }
 
-  const systemPrompt = buildTeammateSystemPrompt({
+  const team = useTeamStore.getState().activeTeam
+  const taskInfo = taskId && team ? team.tasks.find((task) => task.id === taskId) : null
+  const agentDefinition = agentName ? subAgentRegistry.get(agentName) : undefined
+  const effectivePrompt = agentDefinition?.initialPrompt
+    ? `${agentDefinition.initialPrompt}\n\n${prompt}`
+    : prompt
+
+  const coordinationPrompt = buildTeammateSystemPrompt({
     memberName,
     teamName: team?.name ?? 'team',
-    prompt,
+    prompt: effectivePrompt,
     task: taskInfo
       ? { id: taskInfo.id, subject: taskInfo.subject, description: taskInfo.description }
       : null,
     workingFolder,
     language: settings.language
   })
+  const systemPrompt = agentDefinition
+    ? `${agentDefinition.systemPrompt}\n\n${coordinationPrompt}`
+    : coordinationPrompt
   providerConfig.systemPrompt = systemPrompt
 
+  const compression = buildRuntimeCompression(providerConfig, abortController.signal)
+
   const loopConfig: AgentLoopConfig = {
-    maxIterations: DEFAULT_TEAMMATE_MAX_ITERATIONS,
+    maxIterations: agentDefinition?.maxTurns ?? DEFAULT_TEAMMATE_MAX_ITERATIONS,
     provider: providerConfig,
     tools: toolDefs,
     systemPrompt,
     workingFolder,
     signal: abortController.signal,
-    messageQueue
+    messageQueue,
+    ...(compression ? { contextCompression: compression } : {})
   }
 
   const userMsg: UnifiedMessage = {
     id: nanoid(),
     role: 'user',
-    content: prompt,
+    content: effectivePrompt,
     createdAt: Date.now()
   }
 
-  // Mark member as working
   teamEvents.emit({
     type: 'team_member_update',
     memberId,
     patch: { status: 'working', iteration: 0 }
   })
 
-  const collectedToolCalls: ToolCallState[] = []
-  let iteration = 0
   let streamingText = ''
-  let fullOutput = ''
-  const summaryContextParts: string[] = [`## Task Prompt\n${prompt}`]
-  let reason: SingleTaskResult['reason'] = 'completed'
   let taskCompleted = false
-  let taskAlreadyDone = false
 
-  // Accumulate token usage across all iterations
-  const accumulatedUsage: TokenUsage = { inputTokens: 0, outputTokens: 0 }
-
-  // Throttle streamingText updates to reduce store churn / re-renders.
-  // Accumulate deltas and flush at most every 200 ms.
   const STREAM_THROTTLE_MS = 200
   let streamDirty = false
   let streamTimer: ReturnType<typeof setTimeout> | null = null
@@ -349,168 +355,135 @@ async function runSingleTaskLoop(opts: {
     })
   }
 
-  try {
-    const loop = runAgentLoop(
-      [userMsg],
-      loopConfig,
-      { workingFolder, signal: abortController.signal, ipc: ipcClient },
-      async (tc) => {
-        if (READ_ONLY_TOOLS.has(tc.name)) return true
-        const autoApprove = useSettingsStore.getState().autoApprove
-        if (autoApprove) return true
-        // Per-session tool approval memory
-        const approved = useAgentStore.getState().approvedToolNames
-        if (approved.includes(tc.name)) return true
-        // Bubble up to UI PermissionDialog
-        const result = await useAgentStore.getState().requestApproval(tc.id)
-        if (result) useAgentStore.getState().addApprovedTool(tc.name)
-        return result
-      }
-    )
+  const runtime = await runSharedAgentRuntime({
+    initialMessages: [userMsg],
+    loopConfig,
+    toolContext: {
+      workingFolder,
+      signal: abortController.signal,
+      ipc: ipcClient,
+      callerAgent: 'teammate'
+    },
+    isReadOnlyTool: (toolName) => READ_ONLY_TOOLS.has(toolName),
+    onApprovalNeeded: async (toolCall) => {
+      const autoApprove = useSettingsStore.getState().autoApprove
+      if (autoApprove) return true
+      const approved = useAgentStore.getState().approvedToolNames
+      if (approved.includes(toolCall.name)) return true
+      const result = await useAgentStore.getState().requestApproval(toolCall.id)
+      if (result) useAgentStore.getState().addApprovedTool(toolCall.name)
+      return result
+    },
+    hooks: {
+      beforeHandleEvent: ({ event }) => {
+        if (event.type !== 'iteration_start') return
 
-    for await (const event of loop) {
-      if (abortController.signal.aborted) {
-        reason = 'aborted'
-        break
-      }
-
-      switch (event.type) {
-        case 'iteration_start':
-          // Check graceful shutdown between iterations
-          if (teammateShutdownRequested.has(memberId)) {
-            reason = 'shutdown'
-            break
-          }
-          // Check if current task was already completed by the LLM (via TaskUpdate)
-          // in a previous iteration. If so, stop the loop early — no need to
-          // keep running more iterations on a finished task.
-          if (taskId) {
-            const currentTeam = useTeamStore.getState().activeTeam
-            const currentTask = currentTeam?.tasks.find((t) => t.id === taskId)
-            if (currentTask?.status === 'completed') {
-              taskCompleted = true
-              taskAlreadyDone = true
-              break
-            }
-          }
-          iteration = event.iteration
-          streamingText = ''
-          flushStreamingText()
-          teamEvents.emit({
-            type: 'team_member_update',
-            memberId,
-            patch: { iteration, status: 'working', streamingText: '' }
-          })
-          break
-
-        case 'text_delta':
-          streamingText += event.text
-          fullOutput += event.text
-          streamDirty = true
-          if (!streamTimer) {
-            streamTimer = setTimeout(flushStreamingText, STREAM_THROTTLE_MS)
-          }
-          break
-
-        case 'tool_call_approval_needed': {
-          // Add to agent store's pending list so PermissionDialog renders
-          const willAutoApprove =
-            useSettingsStore.getState().autoApprove ||
-            useAgentStore.getState().approvedToolNames.includes(event.toolCall.name)
-          if (!willAutoApprove) {
-            useAgentStore.getState().addToolCall(event.toolCall)
-          }
-          break
+        if (teammateShutdownRequested.has(memberId)) {
+          return { stop: true, reason: 'shutdown' }
         }
 
-        case 'tool_call_start':
-        case 'tool_call_result':
-          {
-            // Flush any buffered streaming text before reporting tool activity
+        if (!taskId) return undefined
+        const currentTeam = useTeamStore.getState().activeTeam
+        const currentTask = currentTeam?.tasks.find((task) => task.id === taskId)
+        if (currentTask?.status === 'completed') {
+          taskCompleted = true
+          return { stop: true, reason: 'completed' }
+        }
+        return undefined
+      },
+      afterHandleEvent: async ({ event, state }) => {
+        switch (event.type) {
+          case 'iteration_start':
+            streamingText = ''
             flushStreamingText()
-            const idx = collectedToolCalls.findIndex((t) => t.id === event.toolCall.id)
-            if (idx >= 0) {
-              collectedToolCalls[idx] = event.toolCall
-            } else {
-              collectedToolCalls.push(event.toolCall)
-            }
-            if (event.type === 'tool_call_result') {
-              summaryContextParts.push(formatTeamToolCallSummary(event.toolCall))
-            }
             teamEvents.emit({
               type: 'team_member_update',
               memberId,
-              patch: { toolCalls: [...collectedToolCalls] }
+              patch: { iteration: state.iteration, status: 'working', streamingText: '' }
             })
-          }
-          break
+            break
 
-        case 'message_end':
-          if (event.usage) {
-            mergeTeammateUsage(accumulatedUsage, event.usage)
+          case 'text_delta':
+            streamingText += event.text
+            streamDirty = true
+            if (!streamTimer) {
+              streamTimer = setTimeout(flushStreamingText, STREAM_THROTTLE_MS)
+            }
+            break
+
+          case 'tool_call_approval_needed': {
+            const willAutoApprove =
+              useSettingsStore.getState().autoApprove ||
+              useAgentStore.getState().approvedToolNames.includes(event.toolCall.name)
+            if (!willAutoApprove) {
+              useAgentStore.getState().addToolCall(event.toolCall)
+            }
+            break
+          }
+
+          case 'tool_call_start':
+          case 'tool_call_result':
+            flushStreamingText()
             teamEvents.emit({
               type: 'team_member_update',
               memberId,
-              patch: { usage: { ...accumulatedUsage } }
+              patch: { toolCalls: [...state.toolCalls] }
             })
-          }
-          break
+            break
 
-        case 'loop_end':
-          flushStreamingText()
-          reason = event.reason as SingleTaskResult['reason']
-          if ((event.reason === 'completed' || event.reason === 'max_iterations') && taskId) {
-            teamEvents.emit({
-              type: 'team_task_update',
-              taskId,
-              patch: { status: 'completed' }
-            })
-            taskCompleted = true
-          }
-          break
+          case 'message_end':
+            if (event.usage) {
+              teamEvents.emit({
+                type: 'team_member_update',
+                memberId,
+                patch: { usage: { ...state.usage } }
+              })
+            }
+            break
+
+          case 'loop_end':
+            flushStreamingText()
+            if ((event.reason === 'completed' || event.reason === 'max_iterations') && taskId) {
+              teamEvents.emit({
+                type: 'team_task_update',
+                taskId,
+                patch: { status: 'completed' }
+              })
+              taskCompleted = true
+            }
+            break
+        }
       }
-
-      // Break outer for-await if we should stop early
-      // (shutdown requested, or task already completed via TaskUpdate)
-      if (reason === 'shutdown' || taskAlreadyDone) break
     }
-  } catch {
-    reason = 'error'
-  } finally {
-    // Clean up streaming throttle timer
-    if (streamTimer) {
-      clearTimeout(streamTimer)
-      streamTimer = null
-    }
-    flushStreamingText()
-  }
-
-  const finalReportMarkdown = await generateTeammateFinalReport({
-    providerConfig,
-    signal: abortController.signal,
-    taskPrompt: prompt,
-    contextParts: summaryContextParts,
-    finalOutput: fullOutput,
-    status: reason
   })
 
-  if (taskId) {
-    teamEvents.emit({
-      type: 'team_task_update',
-      taskId,
-      patch: { report: finalReportMarkdown }
-    })
+  if (streamTimer) {
+    clearTimeout(streamTimer)
+    streamTimer = null
+  }
+  flushStreamingText()
+
+  const resolvedOutput = runtime.finalOutput
+
+  if (taskId && resolvedOutput) {
+    const currentTask = useTeamStore.getState().activeTeam?.tasks.find((task) => task.id === taskId)
+    if (!currentTask?.report?.trim()) {
+      teamEvents.emit({
+        type: 'team_task_update',
+        taskId,
+        patch: { report: resolvedOutput }
+      })
+    }
   }
 
   return {
-    iterations: iteration,
-    toolCalls: collectedToolCalls.length,
+    iterations: runtime.iterations,
+    toolCalls: runtime.toolCallCount,
     lastStreamingText: streamingText,
-    fullOutput,
-    finalReportMarkdown,
+    fullOutput: resolvedOutput,
     taskCompleted,
-    reason,
-    usage: accumulatedUsage
+    reason: runtime.reason,
+    usage: runtime.usage
   }
 }
 
@@ -520,16 +493,14 @@ export function findNextClaimableTask(): TeamTask | null {
   const team = useTeamStore.getState().activeTeam
   if (!team) return null
 
-  // Get completed task IDs for dependency checking
   const completedTaskIds = new Set(
-    team.tasks.filter((t) => t.status === 'completed').map((t) => t.id)
+    team.tasks.filter((task) => task.status === 'completed').map((task) => task.id)
   )
 
   for (const task of team.tasks) {
     if (task.status !== 'pending') continue
-    if (task.owner) continue // already assigned
+    if (task.owner) continue
 
-    // Check dependencies are all completed
     const allDepsCompleted = task.dependsOn.every((depId) => completedTaskIds.has(depId))
     if (!allDepsCompleted) continue
 
@@ -556,15 +527,14 @@ function emitCompletionMessage(
   }
 ): void {
   const team = useTeamStore.getState().activeTeam
-  if (!team) return // team already deleted
+  if (!team) return
 
   const header = [
     `**${memberName}** finished (${endReason}).`,
     `Iterations: ${stats.totalIterations}, Tool calls: ${stats.totalToolCalls}, Tasks completed: ${stats.tasksCompleted}.`
   ].join(' ')
 
-  // Priority: task.report (post-run final markdown) > fullOutput > lastStreamingText
-  const task = stats.taskId ? team.tasks.find((t) => t.id === stats.taskId) : null
+  const task = stats.taskId ? team.tasks.find((item) => item.id === stats.taskId) : null
   const reportText = task?.report || stats.fullOutput || stats.lastStreamingText
   let report = ''
   if (reportText) {
@@ -577,7 +547,7 @@ function emitCompletionMessage(
 
   const content = header + report
 
-  const msg: TeamMessage = {
+  const message: TeamMessage = {
     id: nanoid(8),
     from: memberName,
     to: 'lead',
@@ -587,7 +557,7 @@ function emitCompletionMessage(
     timestamp: Date.now()
   }
 
-  teamEvents.emit({ type: 'team_message', message: msg })
+  teamEvents.emit({ type: 'team_message', message })
 }
 
 // --- Helpers ---
@@ -632,129 +602,17 @@ function buildTeammateSystemPrompt(options: {
   parts.push(
     `\n## Coordination Rules`,
     `- Only modify files related to your assigned task.`,
-    `- When your task is done, call TaskUpdate with status="completed" to finalize task state. The framework will generate the final Markdown report after execution ends.`,
+    `- When your task is done, call TaskUpdate with status="completed" to finalize task state.`,
     `- Use SendMessage to communicate with the lead or other teammates if needed.`,
+    `- Never spawn another background teammate. If parallel help is needed, message the lead instead.`,
     `- After completing your task, you will stop. The framework will automatically assign remaining pending tasks to new teammates.`,
     `- If you receive a shutdown request, finish your current work promptly and stop.`,
     `- Be concise and efficient — you have limited iterations.`,
-    `\n## Reporting`,
-    `IMPORTANT: Mark task status correctly with the TaskUpdate tool when your assigned work is done:`,
-    `\`TaskUpdate(task_id="...", status="completed")\``,
-    `The framework will generate and forward the final Markdown report automatically after execution ends.`,
-    `Still ensure your actual work, file changes, findings, and decisions are reflected in the execution trace so the final report can summarize them accurately.`
+    `\n## Final Output`,
+    `IMPORTANT: Your last assistant message should clearly summarize what you completed, what changed, and any follow-up the lead should know.`,
+    `Mark task status correctly with the TaskUpdate tool when your assigned work is done:`,
+    `\`TaskUpdate(task_id="...", status="completed")\``
   )
 
   return parts.join('\n')
-}
-
-/**
- * Merge incoming TokenUsage into an accumulator (mutates target).
- * Sums inputTokens, outputTokens, and optional cache/reasoning fields.
- */
-async function generateTeammateFinalReport(options: {
-  providerConfig: ProviderConfig
-  signal: AbortSignal
-  taskPrompt: string
-  contextParts: string[]
-  finalOutput: string
-  status: SingleTaskResult['reason']
-}): Promise<string> {
-  const { providerConfig, signal, taskPrompt, contextParts, finalOutput, status } = options
-  const provider = createProvider(providerConfig)
-  const prompt = [
-    'Produce a professional final teammate report in Markdown based strictly on the execution evidence provided below.',
-    'Do not fabricate files, actions, findings, rationale, risks, or unresolved items.',
-    'Write in clear, concise, engineering-oriented English.',
-    'Use exactly the following section headings and preserve this order:',
-    '# Task Summary',
-    '## Objective',
-    '## Outcome',
-    '## Actions Taken',
-    '## Files and Artifacts',
-    '## Key Findings',
-    '## Decision Rationale',
-    '## Risks and Limitations',
-    '## Open Questions',
-    '## Recommended Next Steps',
-    '',
-    `Execution Status: ${status}`,
-    `Original Task:\n${taskPrompt}`,
-    contextParts.join('\n\n'),
-    `\n## Final Output\n${finalOutput || '(empty)'}`
-  ].join('\n')
-
-  const messages: UnifiedMessage[] = [
-    { id: nanoid(), role: 'user', content: prompt, createdAt: Date.now() }
-  ]
-
-  let report = ''
-  try {
-    const stream = provider.sendMessage(messages, [], { ...providerConfig }, signal)
-    for await (const event of stream) {
-      if (signal.aborted) break
-      if (event.type === 'text_delta' && event.text) report += event.text
-    }
-  } catch {
-    report = ''
-  }
-
-  if (report.trim()) return report.trim()
-
-  return [
-    '# Task Summary',
-    '## Objective',
-    taskPrompt,
-    '## Outcome',
-    status,
-    '## Actions Taken',
-    finalOutput || '- No execution output was captured.',
-    '## Files and Artifacts',
-    '- Summary generation failed, so a complete artifact extraction is unavailable.',
-    '## Key Findings',
-    '- The reporting stage failed, so this fallback summary is based on the available execution trace only.',
-    '## Decision Rationale',
-    '- This fallback report was derived from the recorded execution evidence.',
-    '## Risks and Limitations',
-    '- Manual review may be required to inspect the full execution trace in detail.',
-    '## Open Questions',
-    '- Remaining uncertainties should be reviewed manually if the task outcome is business-critical.',
-    '## Recommended Next Steps',
-    '- Re-run the task or review the execution trace manually if a higher-confidence report is required.'
-  ].join('\n')
-}
-
-function formatTeamToolCallSummary(toolCall: ToolCallState): string {
-  const renderedOutput =
-    typeof toolCall.output === 'string'
-      ? toolCall.output
-      : toolCall.output
-        ? JSON.stringify(toolCall.output)
-        : ''
-
-  return [
-    `## Tool Call: ${toolCall.name}`,
-    `- Status: ${toolCall.status}`,
-    `- Input: ${JSON.stringify(toolCall.input)}`,
-    renderedOutput ? `- Output: ${renderedOutput}` : '',
-    toolCall.error ? `- Error: ${toolCall.error}` : ''
-  ]
-    .filter(Boolean)
-    .join('\n')
-}
-
-function mergeTeammateUsage(target: TokenUsage, incoming: TokenUsage): void {
-  target.inputTokens += incoming.inputTokens
-  target.outputTokens += incoming.outputTokens
-  if (incoming.billableInputTokens != null) {
-    target.billableInputTokens = (target.billableInputTokens ?? 0) + incoming.billableInputTokens
-  }
-  if (incoming.cacheCreationTokens) {
-    target.cacheCreationTokens = (target.cacheCreationTokens ?? 0) + incoming.cacheCreationTokens
-  }
-  if (incoming.cacheReadTokens) {
-    target.cacheReadTokens = (target.cacheReadTokens ?? 0) + incoming.cacheReadTokens
-  }
-  if (incoming.reasoningTokens) {
-    target.reasoningTokens = (target.reasoningTokens ?? 0) + incoming.reasoningTokens
-  }
 }

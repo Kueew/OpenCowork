@@ -136,6 +136,7 @@ function scheduleNextTask(teamName: string): void {
         prompt: `Work on the following task:\n**Subject:** ${nextTask.subject}\n**Description:** ${nextTask.description}`,
         taskId: nextTask.id,
         model: null,
+        agentName: null,
         workingFolder: ctx.workingFolder
       }).finally(() => {
         limiter.release()
@@ -185,9 +186,22 @@ async function executeBackgroundTeammate(
   input: Record<string, unknown>,
   ctx: ToolContext
 ): Promise<ToolResultContent> {
+  if (ctx.callerAgent === 'teammate') {
+    return encodeToolError(
+      'Background teammate spawning is not allowed from a teammate. Send a message to the lead instead.'
+    )
+  }
+
   const team = useTeamStore.getState().activeTeam
   if (!team) {
     return encodeToolError('No active team. Call TeamCreate first.')
+  }
+
+  const requestedTeamName = input.team_name ? String(input.team_name) : null
+  if (requestedTeamName && requestedTeamName !== team.name) {
+    return encodeToolError(
+      `Active team is "${team.name}", but received team_name="${requestedTeamName}".`
+    )
   }
 
   const memberName = String(input.name ?? '')
@@ -198,6 +212,12 @@ async function executeBackgroundTeammate(
   const existing = team.members.find((m) => m.name === memberName)
   if (existing) {
     return encodeToolError(`Teammate "${memberName}" already exists in the team.`)
+  }
+
+  const subType = input.subagent_type ? String(input.subagent_type) : null
+  const agentDefinition = subType ? subAgentRegistry.get(subType) : null
+  if (subType && !agentDefinition) {
+    return encodeToolError(`Unknown subagent_type "${subType}".`)
   }
 
   const teamName = team.name
@@ -222,6 +242,7 @@ async function executeBackgroundTeammate(
     id: nanoid(),
     name: memberName,
     model: String(input.model ?? 'default'),
+    ...(agentDefinition ? { agentName: agentDefinition.name } : {}),
     status: willQueue ? 'waiting' : 'idle',
     currentTaskId: assignedTaskId,
     iteration: 0,
@@ -254,6 +275,7 @@ async function executeBackgroundTeammate(
         prompt: String(input.prompt),
         taskId: assignedTaskId,
         model: input.model ? String(input.model) : null,
+        agentName: agentDefinition?.name ?? null,
         workingFolder: ctx.workingFolder
       }).finally(() => {
         limiter.release()
@@ -351,6 +373,11 @@ export function createTaskTool(providerGetter: () => ProviderConfig): ToolHandle
               team_name: {
                 type: 'string',
                 description: 'Team name for spawning. Uses current team context if omitted.'
+              },
+              subagent_type: {
+                type: 'string',
+                enum: subTypeEnum,
+                description: 'Optional specialized background agent type to use for this teammate.'
               },
               model: {
                 type: 'string',
@@ -473,12 +500,12 @@ export function createTaskTool(providerGetter: () => ProviderConfig): ToolHandle
               error: result.error ?? 'SubAgent failed',
               toolCalls: result.toolCallCount,
               iterations: result.iterations,
-              report: result.finalReportMarkdown
+              result: result.output || undefined
             })
           )
         }
 
-        return metaStr + (result.finalReportMarkdown || result.output)
+        return metaStr + result.output
       } finally {
         subAgentLimiter.release()
       }

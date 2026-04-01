@@ -9,6 +9,7 @@ export interface TeamMember {
   id: string
   name: string
   model: string
+  agentName?: string
   status: TeamMemberStatus
   currentTaskId: string | null
   iteration: number
@@ -32,7 +33,7 @@ export interface TeamTask {
   owner: string | null
   dependsOn: string[]
   activeForm?: string
-  /** Final report submitted by the teammate when completing the task */
+  /** Final result text captured for the completed task */
   report?: string
 }
 

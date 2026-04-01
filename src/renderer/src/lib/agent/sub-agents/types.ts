@@ -21,10 +21,16 @@ export interface SubAgentDefinition {
   icon?: string
   /** Focused system prompt for this SubAgent */
   systemPrompt: string
-  /** Names of tools this SubAgent is allowed to use (subset of registered tools) */
-  allowedTools: string[]
-  /** Max LLM iterations before forced stop */
-  maxIterations: number
+  /** Allowed tool names. Supports '*' to expose all currently registered tools. */
+  tools: string[]
+  /** Tools explicitly denied for this SubAgent even when tools='*'. */
+  disallowedTools: string[]
+  /** Max LLM turns before forced stop. <= 0 means unlimited. */
+  maxTurns: number
+  /** Optional initial task prefix appended before runtime input. */
+  initialPrompt?: string
+  /** Whether this agent definition is intended for background execution. */
+  background?: boolean
   /** Optional model override (e.g. use cheaper/faster model) */
   model?: string
   /** Optional temperature override */
@@ -61,14 +67,10 @@ export interface SubAgentRunConfig {
 
 export interface SubAgentResult {
   success: boolean
-  /** Final text output (the SubAgent's last text response) */
+  /** Final text output resolved from the sub-agent's actual assistant messages. */
   output: string
-  /** Final Markdown report generated after execution */
-  finalReportMarkdown?: string
-  /** Whether a non-empty report was submitted through the dedicated tool */
+  /** Whether a non-empty final result was captured. */
   reportSubmitted?: boolean
-  /** Whether an automatic report retry prompt was injected */
-  reportRetried?: boolean
   /** Number of tool calls executed */
   toolCallCount: number
   /** Number of LLM iterations */

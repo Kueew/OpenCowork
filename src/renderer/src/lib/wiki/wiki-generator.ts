@@ -250,10 +250,11 @@ function buildLeafDefinition(): SubAgentDefinition {
       '输出必须为中文 Markdown，适合 AI 查阅，结构清晰，避免空话。',
       '必须覆盖：模块职责、关键入口、核心流程、重要类型/接口、数据流、依赖关系、边界条件、异常/风险、维护提示。',
       '不要编造不存在的实现；不确定的内容要明确说明。',
-      '完成后必须调用 SubAgentWriteReport，并把完整 Markdown 填入 report。'
+      '最后一条 assistant 消息必须直接输出完整 Markdown，不要额外生成报告工具调用。'
     ].join('\n'),
-    allowedTools: ['Read', 'Glob', 'Grep'],
-    maxIterations: 12,
+    tools: ['Read', 'Glob', 'Grep'],
+    disallowedTools: [],
+    maxTurns: 12,
     inputSchema: {
       type: 'object',
       properties: {
@@ -266,7 +267,7 @@ function buildLeafDefinition(): SubAgentDefinition {
       },
       required: ['title', 'description', 'sourceFiles', 'projectName', 'workingFolder']
     },
-    formatOutput: (result) => result.finalReportMarkdown || result.output
+    formatOutput: (result) => result.output
   }
 }
 
@@ -672,7 +673,7 @@ async function generateLeafMarkdown(args: {
     onApprovalNeeded: async () => true
   })
 
-  const markdown = result.finalReportMarkdown?.trim() || result.output.trim()
+  const markdown = result.output.trim()
   if (!markdown) {
     throw new Error(`叶子节点生成失败：${args.document.name}`)
   }
