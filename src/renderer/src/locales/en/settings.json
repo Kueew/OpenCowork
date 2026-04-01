@@ -264,6 +264,64 @@
       }
     }
   },
+  "migration": {
+    "title": "Migration Center",
+    "subtitle": "Preview and migrate OpenCode configuration into OpenCowork",
+    "sourceTitle": "OpenCode Source",
+    "sourceDesc": "Currently reads only ~/.config/opencode/opencode.json and migrates providers, model selections, commands, agents, MCP servers, and instructions.",
+    "reloadAction": "Refresh Preview",
+    "applyAction": "Apply Migration",
+    "applyingAction": "Applying...",
+    "sourcePathLabel": "Source Config Path",
+    "detectedLabel": "Detection",
+    "detected": "Detected",
+    "notDetected": "Not detected",
+    "summary": {
+      "total": "Total Items",
+      "conflicts": "Conflicts",
+      "warnings": "Warnings",
+      "actionable": "Actionable"
+    },
+    "backupHint": "Back up target files before apply",
+    "globalWarningsTitle": "Global Warnings",
+    "groupCount": "{{count}} item(s)",
+    "conflict": "Conflict",
+    "warningCount": "{{count}} warning(s)",
+    "unsupportedFields": "Preview-only fields",
+    "itemWarnings": "Migration warnings",
+    "empty": "No migration items yet, or preview has not been generated.",
+    "resultTitle": "Migration Result",
+    "resultSubtitle": "Result of the latest apply operation.",
+    "resultApplied": "Applied {{count}}",
+    "resultSkipped": "Skipped {{count}}",
+    "resultFailed": "Failed {{count}}",
+    "backupPathLabel": "Backup Directory",
+    "backupPathUnavailable": "No backup created for this run (no existing target files required backup)",
+    "resultStatus": {
+      "success": "Success",
+      "skipped": "Skipped",
+      "failed": "Failed"
+    },
+    "previewFailed": "Failed to build migration preview: {{error}}",
+    "applyPartial": "Migration finished with {{failed}} failure(s); {{applied}} item(s) applied.",
+    "applySuccess": "Migration finished: {{applied}} applied, {{skipped}} skipped.",
+    "applyFailed": "Failed to apply migration: {{error}}",
+    "actions": {
+      "create": "Create",
+      "skip": "Skip",
+      "replace": "Replace",
+      "duplicate": "Duplicate"
+    },
+    "kinds": {
+      "provider": "Providers",
+      "mainModelSelection": "Main Model Selection",
+      "fastModelSelection": "Fast Model Selection",
+      "command": "Commands",
+      "agent": "Agents",
+      "mcp": "MCP Servers",
+      "instructions": "Instructions / MEMORY"
+    }
+  },
   "about": {
     "title": "About",
     "subtitle": "Version info & project links",

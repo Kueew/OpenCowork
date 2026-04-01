@@ -14,6 +14,7 @@ import { join, extname } from 'path'
 import { mkdirSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import { randomUUID } from 'crypto'
+import { spawn } from 'child_process'
 
 // Delay import of @electron-toolkit/utils to avoid accessing app before ready
 let electronApp: any
@@ -51,12 +52,14 @@ import { registerOauthHandlers } from './ipc/oauth-handlers'
 import { registerImageGifHandlers } from './ipc/image-gif-handlers'
 import { registerGitHandlers } from './ipc/git-handlers'
 import { registerWikiHandlers } from './ipc/wiki-handlers'
+import { registerMigrationHandlers } from './ipc/migration-handlers'
 import { loadPersistedJobs, cancelAllJobs } from './cron/cron-scheduler'
 import { McpManager } from './mcp/mcp-manager'
 import { closeDb } from './db/database'
 import { registerSshHandlers, closeAllSshSessions } from './ipc/ssh-handlers'
 import { writeCrashLog, getCrashLogDir } from './crash-logger'
 import { setupAutoUpdater } from './updater'
+import { safeSendToWindow } from './window-ipc'
 
 import { createFeishuService } from './channels/providers/feishu/feishu-service'
 import { FeishuApi } from './channels/providers/feishu/feishu-api'
@@ -99,6 +102,103 @@ let tray: Tray | null = null
 let isQuiting = false
 
 const GENERATED_IMAGES_DIR = 'generated-images'
+const MACOS_SHELL_ENV_TIMEOUT_MS = 4000
+const SHELL_ENV_LINE_RE = /^[A-Za-z_][A-Za-z0-9_]*=/
+const SHELL_ENV_SKIP_KEYS = new Set(['PWD', 'OLDPWD', 'SHLVL', '_'])
+
+function parseShellEnvironmentOutput(output: string): Record<string, string> {
+  const nextEnv: Record<string, string> = {}
+  const lines = output.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
+
+  for (const line of lines) {
+    if (!SHELL_ENV_LINE_RE.test(line)) continue
+    const separatorIndex = line.indexOf('=')
+    if (separatorIndex <= 0) continue
+
+    const key = line.slice(0, separatorIndex)
+    if (SHELL_ENV_SKIP_KEYS.has(key)) continue
+
+    nextEnv[key] = line.slice(separatorIndex + 1)
+  }
+
+  return nextEnv
+}
+
+async function syncMacOSShellEnvironment(): Promise<void> {
+  if (process.platform !== 'darwin') return
+
+  const shellPath = process.env.SHELL?.trim() || '/bin/zsh'
+
+  await new Promise<void>((resolve) => {
+    let settled = false
+    let stdout = ''
+    let stderr = ''
+    let timedOut = false
+
+    const finish = (): void => {
+      if (settled) return
+      settled = true
+      resolve()
+    }
+
+    const child = spawn(shellPath, ['-l', '-i', '-c', '/usr/bin/env'], {
+      cwd: homedir(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: process.env
+    })
+
+    const timer = setTimeout(() => {
+      timedOut = true
+      try {
+        child.kill('SIGKILL')
+      } catch {
+        finish()
+      }
+    }, MACOS_SHELL_ENV_TIMEOUT_MS)
+
+    child.stdout?.on('data', (data: Buffer) => {
+      stdout += data.toString('utf8')
+    })
+
+    child.stderr?.on('data', (data: Buffer) => {
+      stderr += data.toString('utf8')
+    })
+
+    child.on('error', (error) => {
+      clearTimeout(timer)
+      console.warn('[Main] Failed to load macOS shell environment:', error)
+      finish()
+    })
+
+    child.on('close', (code) => {
+      clearTimeout(timer)
+
+      if (timedOut) {
+        console.warn('[Main] Timed out while loading macOS shell environment')
+        finish()
+        return
+      }
+
+      if (code !== 0) {
+        console.warn(
+          `[Main] macOS shell environment exited with code ${code}${stderr.trim() ? `: ${stderr.trim()}` : ''}`
+        )
+        finish()
+        return
+      }
+
+      const shellEnv = parseShellEnvironmentOutput(stdout)
+      if (Object.keys(shellEnv).length === 0) {
+        console.warn('[Main] macOS shell environment output was empty')
+        finish()
+        return
+      }
+
+      Object.assign(process.env, shellEnv)
+      finish()
+    })
+  })
+}
 
 function getGeneratedImagesDir(): string {
   const dir = join(app.getPath('userData'), GENERATED_IMAGES_DIR)
@@ -179,6 +279,7 @@ function getWindowDiagnosticContext(window: BrowserWindow): Record<string, unkno
 
 function attachWindowCrashLogging(window: BrowserWindow): void {
   const webContents = window.webContents
+  let attemptedOomReload = false
 
   webContents.on('render-process-gone', (_event, details) => {
     const crashInfo = {
@@ -187,6 +288,19 @@ function attachWindowCrashLogging(window: BrowserWindow): void {
     }
     console.error('[Main] Window render process gone:', crashInfo)
     recordCrash('window_render_process_gone', crashInfo)
+
+    // One automatic reload after OOM may recover a white screen; avoid loops if memory stays tight.
+    if (details.reason === 'oom' && !attemptedOomReload) {
+      attemptedOomReload = true
+      setTimeout(() => {
+        try {
+          if (window.isDestroyed()) return
+          window.reload()
+        } catch (err) {
+          console.warn('[Main] Post-OOM window reload failed:', err)
+        }
+      }, 400)
+    }
   })
 
   webContents.on('unresponsive', () => {
@@ -233,6 +347,15 @@ function configureChromiumCachePaths(): void {
   } catch (error) {
     console.error('[Main] Failed to configure Chromium cache paths:', error)
     recordCrash('configure_chromium_cache_failed', { error })
+  }
+}
+
+/** Raise V8 old-space limit (default ~4GB) to reduce renderer OOM on long sessions. Must run before ready. */
+function configureRendererHeapLimit(): void {
+  try {
+    app.commandLine.appendSwitch('js-flags', '--max-old-space-size=8192')
+  } catch (error) {
+    console.warn('[Main] Failed to set renderer heap limit:', error)
   }
 }
 
@@ -346,9 +469,9 @@ function createWindow(): void {
 
   // Forward maximize state changes to renderer
 
-  window.on('maximize', () => window.webContents.send('window:maximized', true))
+  window.on('maximize', () => safeSendToWindow(window, 'window:maximized', true))
 
-  window.on('unmaximize', () => window.webContents.send('window:maximized', false))
+  window.on('unmaximize', () => safeSendToWindow(window, 'window:maximized', false))
 
   window.on('ready-to-show', () => {
     window.show()
@@ -416,6 +539,7 @@ app.on('before-quit', () => {
 })
 
 configureChromiumCachePaths()
+configureRendererHeapLimit()
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
 if (!gotSingleInstanceLock) {
@@ -427,12 +551,14 @@ if (gotSingleInstanceLock) {
     showMainWindow()
   })
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     // Import @electron-toolkit/utils after app is ready
     const utils = require('@electron-toolkit/utils')
     electronApp = utils.electronApp
     optimizer = utils.optimizer
     is = utils.is
+
+    await syncMacOSShellEnvironment()
 
     recordCrash('app_started', {
       userDataPath: app.getPath('userData'),
@@ -492,6 +618,7 @@ if (gotSingleInstanceLock) {
     registerImageGifHandlers()
     registerGitHandlers()
     registerWikiHandlers()
+    registerMigrationHandlers()
 
     // Clipboard: write PNG image from base64 data
     ipcMain.handle('clipboard:write-image', (_event, args: { data: string }) => {

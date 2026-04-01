@@ -264,6 +264,64 @@
       }
     }
   },
+  "migration": {
+    "title": "迁移中心",
+    "subtitle": "预览并迁移 OpenCode 配置到 OpenCowork",
+    "sourceTitle": "OpenCode 迁移源",
+    "sourceDesc": "当前仅支持读取 ~/.config/opencode/opencode.json，并迁移 provider、模型选择、commands、agents、MCP 和 instructions。",
+    "reloadAction": "重新预览",
+    "applyAction": "应用迁移",
+    "applyingAction": "迁移中...",
+    "sourcePathLabel": "源配置路径",
+    "detectedLabel": "检测状态",
+    "detected": "已检测到",
+    "notDetected": "未检测到",
+    "summary": {
+      "total": "总项目数",
+      "conflicts": "冲突项",
+      "warnings": "告警数",
+      "actionable": "待应用项"
+    },
+    "backupHint": "应用前自动备份目标文件",
+    "globalWarningsTitle": "全局告警",
+    "groupCount": "共 {{count}} 项",
+    "conflict": "存在冲突",
+    "warningCount": "{{count}} 条告警",
+    "unsupportedFields": "仅预览、不落地的字段",
+    "itemWarnings": "迁移提醒",
+    "empty": "暂无可迁移内容，或尚未生成预览。",
+    "resultTitle": "迁移结果",
+    "resultSubtitle": "以下是最近一次应用的执行结果。",
+    "resultApplied": "成功 {{count}}",
+    "resultSkipped": "跳过 {{count}}",
+    "resultFailed": "失败 {{count}}",
+    "backupPathLabel": "备份目录",
+    "backupPathUnavailable": "本次未生成备份（没有可备份的既有目标文件）",
+    "resultStatus": {
+      "success": "成功",
+      "skipped": "已跳过",
+      "failed": "失败"
+    },
+    "previewFailed": "生成迁移预览失败：{{error}}",
+    "applyPartial": "迁移完成，但有 {{failed}} 项失败，成功 {{applied}} 项。",
+    "applySuccess": "迁移完成：成功 {{applied}} 项，跳过 {{skipped}} 项。",
+    "applyFailed": "应用迁移失败：{{error}}",
+    "actions": {
+      "create": "创建",
+      "skip": "跳过",
+      "replace": "覆盖",
+      "duplicate": "另存为副本"
+    },
+    "kinds": {
+      "provider": "Providers",
+      "mainModelSelection": "主模型选择",
+      "fastModelSelection": "快速模型选择",
+      "command": "Commands",
+      "agent": "Agents",
+      "mcp": "MCP 服务器",
+      "instructions": "Instructions / MEMORY"
+    }
+  },
   "about": {
     "title": "关于",
     "subtitle": "版本信息与项目链接",

@@ -15,6 +15,7 @@ import {
   HardDriveUpload,
   Trash2,
   Globe,
+  ArrowRightLeft,
   Wand2,
   BookOpen,
   Save,
@@ -58,6 +59,7 @@ import { McpPanel } from './McpPanel'
 import { WebSearchPanel } from './WebSearchPanel'
 import { SkillsMarketPanel } from './SkillsMarketPanel'
 import { AnalyticsOverview } from './AnalyticsOverview'
+import { MigrationPanel } from './MigrationPanel'
 import { ModelIcon, ProviderIcon } from './provider-icons'
 import { IPC } from '@renderer/lib/ipc/channels'
 import { ipcClient } from '@renderer/lib/ipc/ipc-client'
@@ -285,6 +287,12 @@ const menuGroupDefs: Array<{
         icon: <BarChart3 className="size-4" />,
         labelKey: 'analytics.title',
         descKey: 'analytics.subtitle'
+      },
+      {
+        id: 'migration',
+        icon: <ArrowRightLeft className="size-4" />,
+        labelKey: 'migration.title',
+        descKey: 'migration.subtitle'
       }
     ]
   },
@@ -2628,6 +2636,7 @@ const panelMap: Record<SettingsTab, () => React.JSX.Element> = {
   general: GeneralPanel,
   memory: MemoryPanel,
   analytics: AnalyticsPanel,
+  migration: MigrationPanel,
   provider: ProviderPanel,
   modelManagement: ModelManagementPanel,
   plugin: AppPluginPanel,

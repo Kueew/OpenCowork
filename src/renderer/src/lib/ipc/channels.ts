@@ -58,6 +58,10 @@ export const IPC = {
   SETTINGS_GET: 'settings:get',
   SETTINGS_SET: 'settings:set',
 
+  // Migration
+  MIGRATION_PREVIEW: 'migration:preview',
+  MIGRATION_APPLY: 'migration:apply',
+
   // Usage Analytics
   USAGE_EVENTS_ADD: 'usage-events:add',
   USAGE_EVENTS_OVERVIEW: 'usage-events:overview',
