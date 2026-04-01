@@ -165,6 +165,62 @@ function recordCrash(event: string, details: unknown): void {
   writeCrashLog(event, details)
 }
 
+function getWindowDiagnosticContext(window: BrowserWindow): Record<string, unknown> {
+  const webContents = window.webContents
+  return {
+    windowId: window.id,
+    webContentsId: webContents.id,
+    url: webContents.getURL(),
+    title: window.getTitle(),
+    isVisible: window.isVisible(),
+    processId: webContents.getProcessId()
+  }
+}
+
+function attachWindowCrashLogging(window: BrowserWindow): void {
+  const webContents = window.webContents
+
+  webContents.on('render-process-gone', (_event, details) => {
+    const crashInfo = {
+      ...getWindowDiagnosticContext(window),
+      details
+    }
+    console.error('[Main] Window render process gone:', crashInfo)
+    recordCrash('window_render_process_gone', crashInfo)
+  })
+
+  webContents.on('unresponsive', () => {
+    const hangInfo = getWindowDiagnosticContext(window)
+    console.error('[Main] Renderer became unresponsive:', hangInfo)
+    recordCrash('window_renderer_unresponsive', hangInfo)
+  })
+
+  webContents.on(
+    'did-fail-load',
+    (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      if (!isMainFrame || errorCode === -3) return
+      const failInfo = {
+        ...getWindowDiagnosticContext(window),
+        validatedURL,
+        errorCode,
+        errorDescription
+      }
+      console.error('[Main] Renderer failed to load:', failInfo)
+      recordCrash('window_did_fail_load', failInfo)
+    }
+  )
+
+  webContents.on('preload-error', (_event, preloadPath, error) => {
+    const preloadInfo = {
+      ...getWindowDiagnosticContext(window),
+      preloadPath,
+      error
+    }
+    console.error('[Main] Renderer preload error:', preloadInfo)
+    recordCrash('window_preload_error', preloadInfo)
+  })
+}
+
 function configureChromiumCachePaths(): void {
   const sessionDataPath = join(app.getPath('userData'), 'session-data')
   const diskCachePath = join(sessionDataPath, 'Cache')
@@ -321,44 +377,6 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
-  window.webContents.on('render-process-gone', (_event, details) => {
-    const crashInfo = {
-      windowId: window.id,
-      webContentsId: window.webContents.id,
-      url: window.webContents.getURL(),
-      details
-    }
-    console.error('[Main] Window render process gone:', crashInfo)
-    recordCrash('window_render_process_gone', crashInfo)
-  })
-
-  window.webContents.on('unresponsive', () => {
-    const hangInfo = {
-      windowId: window.id,
-      webContentsId: window.webContents.id,
-      url: window.webContents.getURL()
-    }
-    console.error('[Main] Renderer became unresponsive:', hangInfo)
-    recordCrash('window_renderer_unresponsive', hangInfo)
-  })
-
-  window.webContents.on(
-    'did-fail-load',
-    (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
-      if (!isMainFrame || errorCode === -3) return
-      const failInfo = {
-        windowId: window.id,
-        webContentsId: window.webContents.id,
-        url: window.webContents.getURL(),
-        validatedURL,
-        errorCode,
-        errorDescription
-      }
-      console.error('[Main] Renderer failed to load:', failInfo)
-      recordCrash('window_did_fail_load', failInfo)
-    }
-  )
-
   // HMR for renderer base on electron-vite cli.
 
   // Load the remote URL for development or the local html file for production.
@@ -434,6 +452,7 @@ if (gotSingleInstanceLock) {
 
     app.on('browser-window-created', (_, window) => {
       optimizer.watchWindowShortcuts(window)
+      attachWindowCrashLogging(window)
     })
 
     // IPC test
