@@ -3,6 +3,7 @@ import { dirname } from 'node:path'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { writeCrashLog } from './crash-logger'
+import { safeSendToWindow } from './window-ipc'
 import { readSettings } from './ipc/settings-handlers'
 
 type WindowGetter = () => BrowserWindow | null
@@ -356,7 +357,7 @@ async function handleUpdateAvailable(
 
   const releaseNotes = getReleaseNotesText(info.releaseNotes)
 
-  win.webContents.send('update:available', {
+  safeSendToWindow(win, 'update:available', {
     currentVersion,
     newVersion,
     releaseNotes
@@ -375,7 +376,7 @@ function handleDownloadProgress(progress: { percent: number }, getMainWindow: Wi
   win.setProgressBar(progressValue, { mode: 'normal' })
 
   // Send progress to renderer
-  win.webContents.send('update:download-progress', {
+  safeSendToWindow(win, 'update:download-progress', {
     percent: progress.percent
   })
 }
@@ -393,7 +394,7 @@ function handleUpdateDownloaded(info: { version: string }, options: AutoUpdateOp
 
   const win = getValidWindow(options.getMainWindow)
   if (win) {
-    win.webContents.send('update:downloaded', { version: info.version })
+    safeSendToWindow(win, 'update:downloaded', { version: info.version })
   }
 
   options.markAppWillQuit()
@@ -554,7 +555,7 @@ export function setupAutoUpdater(options: AutoUpdateOptions): void {
 
     const win = getValidWindow(options.getMainWindow)
     if (win) {
-      win.webContents.send('update:error', { error: message })
+      safeSendToWindow(win, 'update:error', { error: message })
     }
   })
 
