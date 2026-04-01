@@ -201,10 +201,7 @@ class OpenAIResponsesProvider implements APIProvider {
         url,
         method: 'POST',
         headers: maskHeaders(headers),
-        body:
-          httpBodyStr.length > 4_000
-            ? `${httpBodyStr.slice(0, 4_000)}\n... [truncated, ${httpBodyStr.length} chars total]`
-            : httpBodyStr,
+        body: httpBodyStr,
         timestamp: Date.now()
       }
     }

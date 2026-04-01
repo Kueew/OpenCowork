@@ -638,6 +638,34 @@ function GeneralPanel(): React.JSX.Element {
         )}
       </section>
 
+      {/* Network */}
+      <section className="space-y-3">
+        <div>
+          <label className="text-sm font-medium">{t('general.systemProxy')}</label>
+          <p className="text-xs text-muted-foreground">{t('general.systemProxyDesc')}</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            type="text"
+            value={settings.systemProxyUrl}
+            onChange={(e) => settings.updateSettings({ systemProxyUrl: e.target.value })}
+            placeholder="http://127.0.0.1:7890"
+            className="max-w-lg text-xs"
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 text-xs"
+            onClick={() => settings.updateSettings({ systemProxyUrl: '' })}
+          >
+            {t('general.appearance.reset')}
+          </Button>
+        </div>
+      </section>
+
+      <Separator />
+
       {/* Theme */}
       <section className="space-y-3">
         <div>

@@ -11,6 +11,7 @@ import type {
 import { useChatStore } from '@renderer/stores/chat-store'
 import { useProviderStore } from '@renderer/stores/provider-store'
 import { getBillableInputTokens } from '@renderer/lib/format-tokens'
+import { truncateRequestDebugForPersistence } from '@renderer/lib/debug-store'
 
 export interface UsageAnalyticsQuery {
   from: number
@@ -236,7 +237,9 @@ export async function recordUsageEvent(input: {
     total_ms: input.timing?.totalMs ?? null,
     tps: input.timing?.tps ?? null,
     provider_response_id: input.providerResponseId ?? null,
-    request_debug_json: input.debugInfo ? JSON.stringify(input.debugInfo) : null,
+    request_debug_json: input.debugInfo
+      ? JSON.stringify(truncateRequestDebugForPersistence(input.debugInfo))
+      : null,
     usage_raw_json: input.usage ? JSON.stringify(input.usage) : null,
     meta_json: input.meta ? JSON.stringify(input.meta) : null
   })

@@ -290,6 +290,30 @@ function upsertSubAgentHistory(history: SubAgentState[], sa: SubAgentState): voi
   const snapshot = cloneSubAgentStateSnapshot(sa)
   const existingIndex = history.findIndex((item) => item.toolUseId === snapshot.toolUseId)
   if (existingIndex !== -1) {
+    const existing = history[existingIndex]
+    if (
+      existing.status === snapshot.status &&
+      existing.isRunning === snapshot.isRunning &&
+      existing.success === snapshot.success &&
+      existing.startedAt === snapshot.startedAt &&
+      existing.completedAt === snapshot.completedAt &&
+      existing.error === snapshot.error &&
+      existing.reportStatus === snapshot.reportStatus &&
+      existing.title === snapshot.title &&
+      existing.summary === snapshot.summary &&
+      existing.model === snapshot.model &&
+      existing.provider === snapshot.provider &&
+      existing.toolUseId === snapshot.toolUseId &&
+      existing.sessionId === snapshot.sessionId &&
+      existing.sessionTitle === snapshot.sessionTitle &&
+      existing.inputText === snapshot.inputText &&
+      existing.thinking === snapshot.thinking &&
+      existing.outputText === snapshot.outputText &&
+      existing.transcript.length === snapshot.transcript.length &&
+      existing.toolCalls.length === snapshot.toolCalls.length
+    ) {
+      return
+    }
     history[existingIndex] = snapshot
   } else {
     history.push(snapshot)
@@ -1147,8 +1171,10 @@ export const useAgentStore = create<AgentStore>()(
       handleSubAgentEvent: (event, sessionId) => {
         set((state) => {
           const id = event.toolUseId
+          const existing = state.activeSubAgents[id] ?? state.completedSubAgents[id]
           switch (event.type) {
-            case 'sub_agent_start':
+            case 'sub_agent_start': {
+              if (existing?.isRunning) return
               state.activeSubAgents[id] = {
                 name: event.subAgentName,
                 displayName: String(event.input.subagent_type ?? event.subAgentName),
@@ -1178,6 +1204,7 @@ export const useAgentStore = create<AgentStore>()(
               }
               rebuildRunningSubAgentDerived(state)
               break
+            }
             case 'sub_agent_iteration': {
               const sa = state.activeSubAgents[id] ?? state.completedSubAgents[id]
               if (sa) {

@@ -374,6 +374,8 @@
     "homeTitleClarify": "Clarify the task first",
     "homeTitleCowork": "Work inside the project",
     "homeTitleCode": "Start coding",
+    "homeTitleAcp": "Start ACP collaboration",
+    "homeDescAcp": "Start ACP mode for architecture confirmation, constraint clarification, and execution breakdown.",
     "homeDescAutoChat": "After you send, it picks a better model automatically based on task complexity.",
     "homeDescAutoClarify": "After you send, it picks a model better suited for questioning and narrowing the plan.",
     "homeDescAutoCowork": "After you send, it picks a model better suited for project work, file edits, and tools.",

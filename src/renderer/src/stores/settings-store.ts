@@ -117,6 +117,9 @@ interface SettingsStore {
   webSearchMaxResults: number
   webSearchTimeout: number
 
+  // Network Settings
+  systemProxyUrl: string
+
   // Skills Market Settings
   skillsMarketProvider: 'skillsmp'
   skillsMarketApiKey: string
@@ -176,6 +179,9 @@ export const useSettingsStore = create<SettingsStore>()(
       webSearchMaxResults: 5,
       webSearchTimeout: 30000,
 
+      // Network Settings
+      systemProxyUrl: '',
+
       // Skills Market Settings
       skillsMarketProvider: 'skillsmp',
       skillsMarketApiKey: '',
@@ -209,6 +215,9 @@ export const useSettingsStore = create<SettingsStore>()(
           state.webSearchEngine = 'google'
           state.webSearchMaxResults = 5
           state.webSearchTimeout = 30000
+        }
+        if (state.systemProxyUrl === undefined) {
+          state.systemProxyUrl = ''
         }
         // Add skills market settings if missing
         if (state.skillsMarketProvider === undefined || state.skillsMarketProvider !== 'skillsmp') {
@@ -317,6 +326,8 @@ export const useSettingsStore = create<SettingsStore>()(
         webSearchEngine: state.webSearchEngine,
         webSearchMaxResults: state.webSearchMaxResults,
         webSearchTimeout: state.webSearchTimeout,
+        // Network Settings
+        systemProxyUrl: state.systemProxyUrl,
         // Skills Market Settings
         skillsMarketProvider: state.skillsMarketProvider,
         skillsMarketApiKey: state.skillsMarketApiKey,

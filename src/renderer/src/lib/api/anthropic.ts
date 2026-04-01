@@ -115,10 +115,7 @@ class AnthropicProvider implements APIProvider {
         url,
         method: 'POST',
         headers: maskHeaders(headers),
-        body:
-          bodyStr.length > 4_000
-            ? `${bodyStr.slice(0, 4_000)}\n... [truncated, ${bodyStr.length} chars total]`
-            : bodyStr,
+        body: bodyStr,
         timestamp: Date.now()
       }
     }

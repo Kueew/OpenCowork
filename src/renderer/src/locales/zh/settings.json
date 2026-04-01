@@ -35,6 +35,8 @@
     "languageDesc": "设置界面显示语言",
     "animations": "启用动画",
     "animationsDesc": "默认开启。关闭后将尽可能禁用界面过渡、动效与平滑滚动。",
+    "systemProxy": "系统代理",
+    "systemProxyDesc": "设置整个应用进程使用的代理地址，例如 http://127.0.0.1:7890 或 http://host:port。",
     "toolbarCollapsedByDefault": "工具栏默认收起",
     "toolbarCollapsedByDefaultDesc": "默认不收起。新打开应用时按此状态初始化左侧工具栏。",
     "chinese": "中文",

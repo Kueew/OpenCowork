@@ -7,7 +7,8 @@ import {
   Tray,
   clipboard,
   nativeImage,
-  dialog
+  dialog,
+  session
 } from 'electron'
 
 import { join, extname } from 'path'
@@ -105,6 +106,28 @@ const GENERATED_IMAGES_DIR = 'generated-images'
 const MACOS_SHELL_ENV_TIMEOUT_MS = 4000
 const SHELL_ENV_LINE_RE = /^[A-Za-z_][A-Za-z0-9_]*=/
 const SHELL_ENV_SKIP_KEYS = new Set(['PWD', 'OLDPWD', 'SHLVL', '_'])
+const SYSTEM_PROXY_ENV_KEYS = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']
+
+function getEnvProxyUrl(): string | null {
+  for (const key of SYSTEM_PROXY_ENV_KEYS) {
+    const value = process.env[key]?.trim()
+    if (value) return value
+  }
+  return null
+}
+
+async function configureSystemProxy(): Promise<void> {
+  try {
+    const { readSettings } = await import('./ipc/settings-handlers')
+    const saved = readSettings().systemProxyUrl
+    const proxyUrl = (typeof saved === 'string' && saved.trim()) ? saved.trim() : getEnvProxyUrl()
+
+    await session.defaultSession.setProxy({ proxyRules: proxyUrl || '' })
+    console.log(proxyUrl ? `[Main] System proxy configured: ${proxyUrl}` : '[Main] No system proxy')
+  } catch (err) {
+    console.error('[Main] Failed to configure system proxy:', err)
+  }
+}
 
 function parseShellEnvironmentOutput(output: string): Record<string, string> {
   const nextEnv: Record<string, string> = {}
@@ -559,6 +582,7 @@ if (gotSingleInstanceLock) {
     is = utils.is
 
     await syncMacOSShellEnvironment()
+    await configureSystemProxy()
 
     recordCrash('app_started', {
       userDataPath: app.getPath('userData'),

@@ -2425,11 +2425,6 @@ export function useChatActions(): {
                   lastRequestDebugInfo = event.debugInfo
                   currentUsageProviderId = event.debugInfo.providerId ?? currentUsageProviderId
                   currentUsageModelId = event.debugInfo.model ?? currentUsageModelId
-                  setRequestTraceInfo(assistantMsgId, {
-                    providerId: event.debugInfo.providerId,
-                    providerBuiltinId: event.debugInfo.providerBuiltinId,
-                    model: event.debugInfo.model
-                  })
                   setLastDebugInfo(assistantMsgId, event.debugInfo)
                 }
                 break
@@ -3205,11 +3200,6 @@ async function runSimpleChat(
         case 'request_debug':
           streamDeltaBuffer.flushNow()
           if (event.debugInfo) {
-            setRequestTraceInfo(assistantMsgId, {
-              providerId: config.providerId,
-              providerBuiltinId: config.providerBuiltinId,
-              model: config.model
-            })
             setLastDebugInfo(assistantMsgId, {
               ...event.debugInfo,
               providerId: config.providerId,
