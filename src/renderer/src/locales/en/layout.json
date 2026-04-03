@@ -42,7 +42,8 @@
     "collapseOlderSessions": "Hide history",
     "sessions": "sessions",
     "msgs": "msgs",
-    "changeWorkingFolder": "Working folder"
+    "changeWorkingFolder": "Working folder",
+    "projectGit": "Git"
   },
   "sidebar_toast": {
     "sessionDeleted": "Session deleted",

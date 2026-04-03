@@ -67,6 +67,7 @@ interface LayeredSshError {
 }
 
 const sshSessions = new Map<string, SshSession>()
+;(globalThis as typeof globalThis & { __openCoworkSshSessions?: typeof sshSessions }).__openCoworkSshSessions = sshSessions
 let nextSessionId = 1
 const MAX_OUTPUT_BUFFER_BYTES = 1024 * 1024
 const SFTP_LIST_DIR_TIMEOUT_MS = 15000
@@ -2676,6 +2677,27 @@ async function deleteSshFile(connectionId: string, filePath: string): Promise<vo
 }
 
 // ── Cleanup ──
+
+/**
+ * 供 git-handlers 等在远程执行命令：优先使用已连接的终端会话，否则建立与 SFTP 相同的文件会话。
+ * 仅绑定 SSH 工作目录、未打开终端时也能执行 `git`。
+ */
+export async function getSshClientForGitExec(connectionId: string): Promise<Client | null> {
+  for (const session of sshSessions.values()) {
+    if (session.connectionId === connectionId && session.status === 'connected') {
+      return session.client
+    }
+  }
+  try {
+    const fileSession = await ensureFileSession(connectionId)
+    if (fileSession.status === 'connected') {
+      return fileSession.client
+    }
+  } catch {
+    // 连接不可用或未配置
+  }
+  return null
+}
 
 export function closeAllSshSessions(): void {
   for (const session of sshSessions.values()) {

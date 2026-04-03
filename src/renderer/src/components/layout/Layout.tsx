@@ -35,6 +35,7 @@ import { SettingsDialog } from '@renderer/components/settings/SettingsDialog'
 import { ChatHomePage } from '@renderer/components/chat/ChatHomePage'
 import { ProjectHomePage } from '@renderer/components/chat/ProjectHomePage'
 import { ProjectArchivePage } from '@renderer/components/chat/ProjectArchivePage'
+import { GitPage } from '@renderer/components/chat/GitPage'
 import { WorkingFolderSelectorDialog } from '@renderer/components/chat/WorkingFolderSelectorDialog'
 import { KeyboardShortcutsDialog } from '@renderer/components/settings/KeyboardShortcutsDialog'
 import { PermissionDialog } from '@renderer/components/cowork/PermissionDialog'
@@ -830,6 +831,13 @@ export function Layout({ updateInfo, onOpenUpdateDialog }: LayoutProps): React.J
                     className="flex flex-1 min-w-0 flex-col overflow-hidden"
                   >
                     <ProjectArchivePage />
+                  </PageTransition>
+                ) : chatView === 'git' ? (
+                  <PageTransition
+                    key="project-git"
+                    className="flex flex-1 min-w-0 flex-col overflow-hidden"
+                  >
+                    <GitPage />
                   </PageTransition>
                 ) : (
                   <PageTransition

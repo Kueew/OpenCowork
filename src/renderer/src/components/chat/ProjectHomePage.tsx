@@ -7,6 +7,7 @@ import {
   FolderOpen,
   BookOpen,
   MessageSquare,
+  GitBranch,
   PanelLeftOpen
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -248,6 +249,15 @@ export function ProjectHomePage(): React.JSX.Element {
                 >
                   <MessageSquare className="size-3.5" />
                   {t('projectHome.openChannels', { defaultValue: '聊天频道' })}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 rounded-full px-3 text-[12px] text-muted-foreground hover:text-foreground"
+                  onClick={() => useUIStore.getState().navigateToGit()}
+                >
+                  <GitBranch className="size-3.5" />
+                  {t('projectHome.openGit', { defaultValue: 'Git' })}
                 </Button>
               </div>
             </div>

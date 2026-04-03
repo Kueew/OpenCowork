@@ -32,6 +32,7 @@ import {
   Pencil,
   FileText,
   MessageSquare,
+  GitBranch,
   Copy,
   Eraser
 } from 'lucide-react'
@@ -322,6 +323,7 @@ export function WorkspaceSidebar(): React.JSX.Element {
     (chatView === 'project' ||
       chatView === 'archive' ||
       chatView === 'channels' ||
+      chatView === 'git' ||
       chatView === 'session')
   const scopedProjectId = isProjectScoped ? (activeProject?.id ?? null) : null
   const projectIcon = scopedProjectId ? deriveProjectIcon(scopedProjectId, sessions) : undefined
@@ -391,6 +393,10 @@ export function WorkspaceSidebar(): React.JSX.Element {
 
   const openChannels = useCallback(() => {
     useUIStore.getState().navigateToChannels()
+  }, [])
+
+  const openGit = useCallback(() => {
+    useUIStore.getState().navigateToGit()
   }, [])
 
   const openSession = useCallback((sessionId: string) => {
@@ -629,6 +635,14 @@ export function WorkspaceSidebar(): React.JSX.Element {
               >
                 <MessageSquare className="size-4" />
                 {t('sidebar.projectChannels', { defaultValue: '聊天频道' })}
+              </Button>
+              <Button
+                variant={chatView === 'git' ? 'secondary' : 'ghost'}
+                className="h-8 w-full justify-start gap-2 text-[12px]"
+                onClick={openGit}
+              >
+                <GitBranch className="size-4" />
+                {t('sidebar.projectGit', { defaultValue: 'Git' })}
               </Button>
               <Button
                 variant="ghost"

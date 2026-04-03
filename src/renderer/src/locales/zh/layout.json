@@ -42,7 +42,8 @@
     "collapseOlderSessions": "收起历史记录",
     "sessions": "会话",
     "msgs": "消息",
-    "changeWorkingFolder": "工作目录"
+    "changeWorkingFolder": "工作目录",
+    "projectGit": "Git"
   },
   "sidebar_toast": {
     "sessionDeleted": "会话已删除",
