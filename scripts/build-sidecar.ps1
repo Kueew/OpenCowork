@@ -1,5 +1,5 @@
 # Build the .NET AOT sidecar for the current platform
-# Usage: .\scripts\build-sidecar.ps1 [-Runtime win-x64|osx-arm64|linux-x64] [-Configuration Release]
+# Usage: .\scripts\build-sidecar.ps1 [-Runtime win-x64|win-arm64|osx-x64|osx-arm64|linux-x64|linux-arm64] [-Configuration Release]
 
 param(
     [string]$Runtime = "",
@@ -46,7 +46,14 @@ $binary = Join-Path $OutputDir "OpenCowork.Agent$ext"
 if (Test-Path $binary) {
     $size = (Get-Item $binary).Length
     $sizeMB = [math]::Round($size / 1MB, 2)
+
+    $stagedBinary = Join-Path $OutputBase "OpenCowork.Agent$ext"
+    Get-ChildItem $OutputDir -File | ForEach-Object {
+        Copy-Item $_.FullName (Join-Path $OutputBase $_.Name) -Force
+    }
+
     Write-Host "Built successfully: $binary ($sizeMB MB)" -ForegroundColor Green
+    Write-Host "Staged sidecar assets at $OutputBase (entry: $stagedBinary)" -ForegroundColor Green
 } else {
     Write-Host "Binary not found at $binary" -ForegroundColor Yellow
 }
