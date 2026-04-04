@@ -111,7 +111,22 @@ const LinuxIcon = ({ className }: { className?: string }) => (
   </svg>
 )
 
-const downloads = [
+const githubReleaseBase = 'https://github.com/AIDotNet/OpenCowork/releases/latest/download'
+
+type DownloadFile = {
+  name: string
+  url: string
+  fallbackUrl?: string
+  isMirror?: boolean
+}
+
+const downloads: Array<{
+  platform: string
+  icon: ReactNode
+  color: string
+  borderColor: string
+  files: DownloadFile[]
+}> = [
   {
     platform: 'Windows',
     icon: <WindowsIcon className="size-6 text-[#0078D4]" />,
@@ -121,12 +136,12 @@ const downloads = [
       {
         name: 'Windows Installer (AMD64 / x64)',
         url: '/downloads/OpenCowork-Windows-Setup.exe',
-        isLocal: true
+        fallbackUrl: `${githubReleaseBase}/OpenCowork-win-amd64-setup.exe`,
+        isMirror: true
       },
       {
-        name: 'Portable (.zip)',
-        url: 'https://github.com/AIDotNet/OpenCowork/releases/latest/download/OpenCowork-win.zip',
-        isLocal: false
+        name: 'Windows Installer (ARM64)',
+        url: `${githubReleaseBase}/OpenCowork-win-arm64-setup.exe`
       }
     ]
   },
@@ -138,13 +153,11 @@ const downloads = [
     files: [
       {
         name: 'Apple Silicon (.dmg)',
-        url: 'https://github.com/AIDotNet/OpenCowork/releases/latest/download/OpenCowork-arm64.dmg',
-        isLocal: false
+        url: `${githubReleaseBase}/OpenCowork-mac-arm64.dmg`
       },
       {
         name: 'Intel (.dmg)',
-        url: 'https://github.com/AIDotNet/OpenCowork/releases/latest/download/OpenCowork-x64.dmg',
-        isLocal: false
+        url: `${githubReleaseBase}/OpenCowork-mac-amd64.dmg`
       }
     ]
   },
@@ -154,8 +167,18 @@ const downloads = [
     color: 'from-amber-500/20 to-orange-500/20',
     borderColor: 'group-hover:border-amber-500/50',
     files: [
-      { name: 'AppImage', url: '/downloads/OpenCowork.AppImage', isLocal: true },
-      { name: 'Debian (.deb)', url: '/downloads/OpenCowork.deb', isLocal: true }
+      {
+        name: 'AppImage',
+        url: '/downloads/OpenCowork.AppImage',
+        fallbackUrl: `${githubReleaseBase}/OpenCowork-linux-amd64.AppImage`,
+        isMirror: true
+      },
+      {
+        name: 'Debian (.deb)',
+        url: '/downloads/OpenCowork.deb',
+        fallbackUrl: `${githubReleaseBase}/OpenCowork-linux-amd64.deb`,
+        isMirror: true
+      }
     ]
   }
 ]
@@ -249,7 +272,7 @@ export default function HomePage() {
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full size-2 bg-emerald-500"></span>
             </span>
-            v0.7.10 已发布 <span className="text-zinc-600">|</span> Apache 2.0
+            v0.7.11 已发布 <span className="text-zinc-600">|</span> Apache 2.0
             <span className="text-zinc-600">|</span> 完全开源
           </motion.div>
 
@@ -444,13 +467,28 @@ export default function HomePage() {
                       <a
                         key={file.name}
                         href={file.url}
+                        onClick={(event) => {
+                          if (!file.fallbackUrl) {
+                            return
+                          }
+
+                          event.preventDefault()
+
+                          fetch(file.url, { method: 'HEAD' })
+                            .then((response) => {
+                              window.location.href = response.ok ? file.url : file.fallbackUrl!
+                            })
+                            .catch(() => {
+                              window.location.href = file.fallbackUrl!
+                            })
+                        }}
                         className="flex items-center justify-between gap-3 rounded-lg border border-border/50 bg-background/50 px-4 py-3 text-sm hover:bg-accent hover:border-accent-foreground/30 transition-all hover:shadow-md"
                       >
                         <div className="flex items-center gap-2 overflow-hidden">
                           <span className="font-medium truncate">{file.name.split(' - ')[0]}</span>
-                          {file.isLocal && (
+                          {file.isMirror && (
                             <span className="shrink-0 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider border border-emerald-500/20">
-                              本地直链
+                              本站镜像
                             </span>
                           )}
                         </div>
