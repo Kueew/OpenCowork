@@ -3,6 +3,27 @@
 All notable changes to **OpenCowork** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com).
 
+## [0.7.12] - 2026-04-06
+
+### Added
+
+- Added persisted team runtime state so team manifests, messages, and member sync survive across the lead and worker IPC flows.
+- Added isolated renderer-backed team workers so teammate runs can spawn outside the main agent loop when needed.
+
+### Changed
+
+- Bumped the app version to `v0.7.12`.
+- Updated the docs homepage release badge from `v0.7.11` to `v0.7.12`.
+
+### Fixed
+
+- Restored the Node agent-loop fallback when the sidecar cannot be used so runs continue instead of failing immediately.
+- Kept assistant tool activity visible in chat and ensured the model switcher stays focused on the current active model.
+
+### Notes
+
+- This release hardens the team runtime path by persisting runtime state in the main process and adding the isolated worker bridge for renderer-side teammate execution.
+
 ## [0.7.10] - 2026-03-30
 
 ### Added
