@@ -8,10 +8,16 @@ import { ipcStorage } from '../lib/ipc/ipc-storage'
 import { ipcClient } from '../lib/ipc/ipc-client'
 import { IPC } from '../lib/ipc/channels'
 import { useTeamStore } from './team-store'
+import { sendApprovalResponse } from '../lib/agent/teams/inbox-poller'
+import { sendPlanApprovalResponse } from '../lib/agent/teams/plan-approval-bridge'
 
 // Approval resolvers live outside the store — they hold non-serializable
 // callbacks and don't need to trigger React re-renders.
 const approvalResolvers = new Map<string, (approved: boolean) => void>()
+const approvalMetadata = new Map<
+  string,
+  { requestId: string; replyTo: string; source: 'teammate' | 'teammate-plan' }
+>()
 
 const MAX_TRACKED_TOOL_CALLS = 200
 const MAX_TRACKED_SUBAGENT_TOOL_CALLS = 80
@@ -700,6 +706,10 @@ interface AgentStore {
 
   // Approval flow
   requestApproval: (toolCallId: string) => Promise<boolean>
+  registerApprovalSource: (
+    toolCallId: string,
+    meta: { requestId: string; replyTo: string; source?: 'teammate' | 'teammate-plan' }
+  ) => void
   resolveApproval: (toolCallId: string, approved: boolean) => void
   /** Resolve all pending approvals as denied and clear pendingToolCalls (e.g. on team delete) */
   clearPendingApprovals: () => void
@@ -1391,6 +1401,14 @@ export const useAgentStore = create<AgentStore>()(
         })
       },
 
+      registerApprovalSource: (toolCallId, meta) => {
+        approvalMetadata.set(toolCallId, {
+          requestId: meta.requestId,
+          replyTo: meta.replyTo,
+          source: meta.source ?? 'teammate'
+        })
+      },
+
       clearSessionData: (sessionId) => {
         const processIdsToKill: string[] = []
         set((state) => {
@@ -1435,6 +1453,7 @@ export const useAgentStore = create<AgentStore>()(
           resolve(false)
         }
         approvalResolvers.clear()
+        approvalMetadata.clear()
         // Move all pending tool calls to executed
         set((state) => {
           for (const tc of state.pendingToolCalls) {
@@ -1453,6 +1472,30 @@ export const useAgentStore = create<AgentStore>()(
           resolve(approved)
           approvalResolvers.delete(toolCallId)
         }
+
+        const meta = approvalMetadata.get(toolCallId)
+        if (meta?.source === 'teammate') {
+          void sendApprovalResponse({
+            requestId: meta.requestId,
+            approved,
+            to: meta.replyTo,
+            summary: approved ? 'Leader approved tool use' : 'Leader denied tool use'
+          }).catch((error) => {
+            console.error('[TeamRuntime] Failed to send approval response:', error)
+          })
+          approvalMetadata.delete(toolCallId)
+        } else if (meta?.source === 'teammate-plan') {
+          void sendPlanApprovalResponse({
+            requestId: meta.requestId,
+            approved,
+            to: meta.replyTo,
+            feedback: approved ? 'Leader approved plan' : 'Leader rejected plan'
+          }).catch((error) => {
+            console.error('[TeamRuntime] Failed to send plan approval response:', error)
+          })
+          approvalMetadata.delete(toolCallId)
+        }
+
         // Move tool call from pending to executed so the dialog advances
         // to the next pending item. Without this, teammate tool calls
         // stay in pendingToolCalls and block subsequent approvals.

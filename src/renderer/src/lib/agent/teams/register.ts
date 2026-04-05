@@ -7,6 +7,8 @@ import { teamCreateTool } from './tools/team-create'
 import { sendMessageTool } from './tools/send-message'
 import { teamDeleteTool } from './tools/team-delete'
 import { teamStatusTool } from './tools/team-status'
+import { getTeamRuntimeSnapshot } from './runtime-client'
+import { startTeamInboxPoller } from './inbox-poller'
 
 const TEAM_TOOLS = [teamCreateTool, sendMessageTool, teamStatusTool, teamDeleteTool]
 
@@ -46,4 +48,19 @@ export function registerTeamTools(): void {
       ui.setRightPanelTab('team')
     }
   })
+
+  const activeTeam = useTeamStore.getState().activeTeam
+  if (activeTeam?.name) {
+    void getTeamRuntimeSnapshot({ teamName: activeTeam.name, limit: 10 })
+      .then((snapshot) => {
+        if (!snapshot) return
+        const sessionId = useChatStore.getState().activeSessionId ?? undefined
+        useTeamStore.getState().syncRuntimeSnapshot(snapshot, sessionId)
+      })
+      .catch((error) => {
+        console.error('[TeamRuntime] Failed to load active team snapshot:', error)
+      })
+  }
+
+  startTeamInboxPoller()
 }

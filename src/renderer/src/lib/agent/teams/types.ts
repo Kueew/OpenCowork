@@ -1,5 +1,10 @@
 import type { ToolCallState } from '../types'
 import type { TokenUsage } from '../../api/types'
+import type {
+  TeamRuntimeBackendType,
+  TeamRuntimeMessageType,
+  TeamRuntimePermissionMode
+} from '../../../../../shared/team-runtime-types'
 
 // --- Team Member ---
 
@@ -10,6 +15,8 @@ export interface TeamMember {
   name: string
   model: string
   agentName?: string
+  backendType?: TeamRuntimeBackendType
+  role?: 'lead' | 'worker'
   status: TeamMemberStatus
   currentTaskId: string | null
   iteration: number
@@ -39,7 +46,7 @@ export interface TeamTask {
 
 // --- Team Message ---
 
-export type TeamMessageType = 'message' | 'broadcast' | 'shutdown_request' | 'shutdown_response'
+export type TeamMessageType = TeamRuntimeMessageType
 
 export interface TeamMessage {
   id: string
@@ -54,7 +61,17 @@ export interface TeamMessage {
 // --- Team Events (yielded to UI) ---
 
 export type TeamEvent =
-  | { type: 'team_start'; teamName: string; description: string }
+  | {
+      type: 'team_start'
+      teamName: string
+      description: string
+      runtimePath?: string
+      leadAgentId?: string
+      defaultBackend?: TeamRuntimeBackendType
+      permissionMode?: TeamRuntimePermissionMode
+      teamAllowedPaths?: string[]
+      createdAt?: number
+    }
   | { type: 'team_member_add'; member: TeamMember }
   | { type: 'team_member_update'; memberId: string; patch: Partial<TeamMember> }
   | { type: 'team_member_remove'; memberId: string }

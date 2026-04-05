@@ -99,6 +99,7 @@ interface AssistantMessageProps {
   msgId?: string
   showRetry?: boolean
   showContinue?: boolean
+  isLastAssistantMessage?: boolean
   onRetry?: (messageId: string) => void
   onContinue?: () => void
   onDelete?: (messageId: string) => void
@@ -668,6 +669,7 @@ export function AssistantMessage({
   msgId,
   showRetry,
   showContinue,
+  isLastAssistantMessage,
   onRetry,
   onContinue,
   onDelete
@@ -920,7 +922,13 @@ export function AssistantMessage({
               output={liveTc?.output ?? result?.content}
               status={
                 liveTc?.status ??
-                (result?.isError ? 'error' : result?.content ? 'completed' : 'canceled')
+                (result?.isError
+                  ? 'error'
+                  : result?.content
+                    ? 'completed'
+                    : isStreaming || isLastAssistantMessage
+                      ? 'running'
+                      : 'canceled')
               }
               isLive={!!isStreaming}
             />

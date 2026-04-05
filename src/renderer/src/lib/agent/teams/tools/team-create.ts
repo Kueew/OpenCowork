@@ -1,6 +1,7 @@
 import type { ToolHandler } from '../../../tools/tool-types'
-import { encodeStructuredToolResult } from '../../../tools/tool-result-format'
+import { encodeStructuredToolResult, encodeToolError } from '../../../tools/tool-result-format'
 import { teamEvents } from '../events'
+import { createTeamRuntime } from '../runtime-client'
 
 export const teamCreateTool: ToolHandler = {
   definition: {
@@ -17,22 +18,54 @@ export const teamCreateTool: ToolHandler = {
         description: {
           type: 'string',
           description: 'What this team is working on'
+        },
+        default_backend: {
+          type: 'string',
+          enum: ['in-process', 'isolated-renderer'],
+          description: 'Optional default backend for teammate execution.'
         }
       },
       required: ['team_name', 'description']
     }
   },
-  execute: async (input) => {
+  execute: async (input, ctx) => {
     const teamName = String(input.team_name)
     const description = String(input.description)
+    const defaultBackend =
+      input.default_backend === 'isolated-renderer' ? 'isolated-renderer' : 'in-process'
 
-    teamEvents.emit({ type: 'team_start', teamName, description })
+    try {
+      const runtime = await createTeamRuntime({
+        teamName,
+        description,
+        sessionId: ctx.sessionId,
+        workingFolder: ctx.workingFolder,
+        defaultBackend
+      })
 
-    return encodeStructuredToolResult({
-      success: true,
-      team_name: teamName,
-      message: `Team "${teamName}" created. Now create tasks with TaskCreate and spawn teammates with Task (run_in_background=true).`
-    })
+      teamEvents.emit({
+        type: 'team_start',
+        teamName: runtime.teamName,
+        description,
+        runtimePath: runtime.runtimePath,
+        leadAgentId: runtime.leadAgentId,
+        defaultBackend: runtime.defaultBackend,
+        permissionMode: runtime.permissionMode,
+        teamAllowedPaths: runtime.teamAllowedPaths,
+        createdAt: runtime.createdAt
+      })
+
+      return encodeStructuredToolResult({
+        success: true,
+        team_name: runtime.teamName,
+        runtime_path: runtime.runtimePath,
+        lead_agent_id: runtime.leadAgentId,
+        default_backend: runtime.defaultBackend,
+        message: `Team "${runtime.teamName}" created. Now create tasks with TaskCreate and spawn teammates with Task (run_in_background=true).`
+      })
+    } catch (error) {
+      return encodeToolError(error instanceof Error ? error.message : String(error))
+    }
   },
   requiresApproval: () => false
 }

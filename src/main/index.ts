@@ -55,6 +55,8 @@ import { registerGitHandlers } from './ipc/git-handlers'
 import { registerWikiHandlers } from './ipc/wiki-handlers'
 import { registerMigrationHandlers } from './ipc/migration-handlers'
 import { registerSidecarHandlers, getSidecarManager } from './ipc/sidecar-manager'
+import { registerTeamRuntimeHandlers } from './ipc/team-runtime-handlers'
+import { registerTeamWorkerHandlers, stopAllIsolatedTeamWorkers } from './ipc/team-worker-handlers'
 import { loadPersistedJobs, cancelAllJobs } from './cron/cron-scheduler'
 import { McpManager } from './mcp/mcp-manager'
 import { closeDb } from './db/database'
@@ -647,6 +649,8 @@ if (gotSingleInstanceLock) {
     registerWikiHandlers()
     registerMigrationHandlers()
     registerSidecarHandlers()
+    registerTeamRuntimeHandlers()
+    registerTeamWorkerHandlers()
 
     try {
       const sidecarReady = await getSidecarManager().ensureStarted()
@@ -776,6 +780,7 @@ app.on('window-all-closed', () => {
   killAllManagedProcesses()
   closeAllSshSessions()
   cancelAllJobs()
+  stopAllIsolatedTeamWorkers()
   getSidecarManager().stop().catch(() => {})
   closeDb()
   if (process.platform !== 'darwin') {

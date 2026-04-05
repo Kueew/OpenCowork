@@ -1,5 +1,15 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
+import type {
+  AppendTeamRuntimeMessageArgs,
+  ConsumeTeamRuntimeMessagesArgs,
+  CreateTeamRuntimeArgs,
+  DeleteTeamRuntimeArgs,
+  GetTeamRuntimeSnapshotArgs,
+  SpawnIsolatedTeamWorkerArgs,
+  StopIsolatedTeamWorkerArgs,
+  UpdateTeamRuntimeMemberArgs
+} from '../shared/team-runtime-types'
 
 // Custom APIs for renderer
 const api = {
@@ -7,7 +17,21 @@ const api = {
     ipcRenderer.invoke('image:download', args),
   fetchImageBase64: (args: { url: string }) => ipcRenderer.invoke('image:fetch-base64', args),
   writeImageToClipboard: (args: { data: string }) =>
-    ipcRenderer.invoke('clipboard:write-image', args)
+    ipcRenderer.invoke('clipboard:write-image', args),
+  teamRuntimeCreate: (args: CreateTeamRuntimeArgs) => ipcRenderer.invoke('team-runtime:create', args),
+  teamRuntimeDelete: (args: DeleteTeamRuntimeArgs) => ipcRenderer.invoke('team-runtime:delete', args),
+  teamRuntimeAppendMessage: (args: AppendTeamRuntimeMessageArgs) =>
+    ipcRenderer.invoke('team-runtime:message:append', args),
+  teamRuntimeGetSnapshot: (args: GetTeamRuntimeSnapshotArgs) =>
+    ipcRenderer.invoke('team-runtime:snapshot', args),
+  teamRuntimeUpdateMember: (args: UpdateTeamRuntimeMemberArgs) =>
+    ipcRenderer.invoke('team-runtime:member:update', args),
+  teamRuntimeConsumeMessages: (args: ConsumeTeamRuntimeMessagesArgs) =>
+    ipcRenderer.invoke('team-runtime:messages:consume', args),
+  teamWorkerSpawn: (args: SpawnIsolatedTeamWorkerArgs) =>
+    ipcRenderer.invoke('team-worker:spawn', args),
+  teamWorkerStop: (args: StopIsolatedTeamWorkerArgs) =>
+    ipcRenderer.invoke('team-worker:stop', args)
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

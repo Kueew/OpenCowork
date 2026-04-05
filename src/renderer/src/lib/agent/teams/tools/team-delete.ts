@@ -5,6 +5,7 @@ import { useTeamStore } from '../../../../stores/team-store'
 import { useAgentStore } from '../../../../stores/agent-store'
 import { abortAllTeammates } from '../teammate-runner'
 import { removeTeamLimiter } from '../../sub-agents/create-tool'
+import { deleteTeamRuntime } from '../runtime-client'
 
 export const teamDeleteTool: ToolHandler = {
   definition: {
@@ -38,15 +39,20 @@ export const teamDeleteTool: ToolHandler = {
     // Clean up per-team concurrency limiter
     removeTeamLimiter(teamName)
 
-    teamEvents.emit({ type: 'team_end' })
+    try {
+      await deleteTeamRuntime({ teamName })
+      teamEvents.emit({ type: 'team_end' })
 
-    return encodeStructuredToolResult({
-      success: true,
-      team_name: teamName,
-      members_removed: memberCount,
-      tasks_total: taskCount,
-      tasks_completed: completedCount
-    })
+      return encodeStructuredToolResult({
+        success: true,
+        team_name: teamName,
+        members_removed: memberCount,
+        tasks_total: taskCount,
+        tasks_completed: completedCount
+      })
+    } catch (error) {
+      return encodeToolError(error instanceof Error ? error.message : String(error))
+    }
   },
   requiresApproval: () => true
 }

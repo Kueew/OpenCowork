@@ -384,6 +384,10 @@ export function ModelSwitcher(): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const searchRef = useRef<HTMLInputElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  const autoModelRef = useRef<HTMLButtonElement>(null)
+  const activeModelRef = useRef<HTMLButtonElement>(null)
+  const hasAutoScrolledToSelectionRef = useRef(false)
   const activeProviderId = useProviderStore((s) => s.activeProviderId)
   const activeModelId = useProviderStore((s) => s.activeModelId)
   const providers = useProviderStore((s) => s.providers)
@@ -446,17 +450,6 @@ export function ModelSwitcher(): React.JSX.Element {
     return `${Math.round(value)}%`
   }
 
-  useEffect(() => {
-    if (!open) return
-
-    const timer = setTimeout(() => {
-      setSearch('')
-      searchRef.current?.focus()
-    }, 50)
-
-    return () => clearTimeout(timer)
-  }, [open])
-
   const groups = useMemo<ProviderGroup[]>(() => {
     const q = search.toLowerCase().trim()
     return enabledProviders
@@ -471,6 +464,43 @@ export function ModelSwitcher(): React.JSX.Element {
       })
       .filter((g) => g.models.length > 0)
   }, [enabledProviders, search])
+
+  useEffect(() => {
+    if (!open) {
+      hasAutoScrolledToSelectionRef.current = false
+      return
+    }
+
+    const timer = setTimeout(() => {
+      setSearch('')
+      searchRef.current?.focus()
+    }, 50)
+
+    return () => clearTimeout(timer)
+  }, [open])
+
+  useEffect(() => {
+    if (!open || search.trim() || hasAutoScrolledToSelectionRef.current) return
+
+    const timer = setTimeout(() => {
+      const target = isAutoModeActive ? autoModelRef.current : activeModelRef.current
+      const container = listRef.current
+      if (!target || !container) return
+
+      const containerRect = container.getBoundingClientRect()
+      const targetRect = target.getBoundingClientRect()
+      const offsetTop = targetRect.top - containerRect.top + container.scrollTop
+      const scrollTop = offsetTop - container.clientHeight / 2 + targetRect.height / 2
+
+      container.scrollTo({
+        top: Math.max(0, scrollTop),
+        behavior: 'auto'
+      })
+      hasAutoScrolledToSelectionRef.current = true
+    }, 0)
+
+    return () => clearTimeout(timer)
+  }, [open, search, groups, isAutoModeActive])
 
   return (
     <div className="inline-flex items-center h-8 rounded-lg border border-transparent hover:border-border/50 hover:bg-muted/30 transition-colors">
@@ -537,8 +567,9 @@ export function ModelSwitcher(): React.JSX.Element {
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <div className="max-h-[360px] overflow-y-auto p-1">
+          <div ref={listRef} className="max-h-[360px] overflow-y-auto p-1">
             <button
+              ref={autoModelRef}
               className={cn(
                 'mb-2 flex w-full items-start gap-2.5 rounded-md px-2 py-2 text-left hover:bg-muted/60 transition-colors group',
                 isAutoModeActive && 'bg-primary/5'
@@ -600,6 +631,7 @@ export function ModelSwitcher(): React.JSX.Element {
                     return (
                       <button
                         key={`${provider.id}-${m.id}`}
+                        ref={isActive ? activeModelRef : undefined}
                         className={cn(
                           'flex w-full items-start gap-2.5 rounded-md px-2 py-2 text-left hover:bg-muted/60 transition-colors group',
                           isActive && 'bg-primary/5'

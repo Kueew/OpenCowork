@@ -4,12 +4,20 @@ import { encodeStructuredToolResult, encodeToolError } from '../../../tools/tool
 import { teamEvents } from '../events'
 import { useTeamStore } from '../../../../stores/team-store'
 import type { TeamMessage, TeamMessageType } from '../types'
+import { appendTeamRuntimeMessage } from '../runtime-client'
 
 const VALID_TYPES: TeamMessageType[] = [
   'message',
   'broadcast',
   'shutdown_request',
-  'shutdown_response'
+  'shutdown_response',
+  'idle_notification',
+  'permission_request',
+  'permission_response',
+  'plan_approval_request',
+  'plan_approval_response',
+  'team_permission_update',
+  'mode_set_request'
 ]
 
 export const sendMessageTool: ToolHandler = {
@@ -22,9 +30,21 @@ export const sendMessageTool: ToolHandler = {
       properties: {
         type: {
           type: 'string',
-          enum: ['message', 'broadcast', 'shutdown_request', 'shutdown_response'],
+          enum: [
+            'message',
+            'broadcast',
+            'shutdown_request',
+            'shutdown_response',
+            'idle_notification',
+            'permission_request',
+            'permission_response',
+            'plan_approval_request',
+            'plan_approval_response',
+            'team_permission_update',
+            'mode_set_request'
+          ],
           description:
-            'Message type: "message" for direct, "broadcast" for all, "shutdown_request" to ask a teammate to stop'
+            'Structured team message type. Use "message" for direct messages, "broadcast" for team-wide messages, and approval/protocol types for team coordination flows.'
         },
         recipient: {
           type: 'string',
@@ -70,14 +90,22 @@ export const sendMessageTool: ToolHandler = {
       timestamp: Date.now()
     }
 
-    teamEvents.emit({ type: 'team_message', message: msg })
+    try {
+      await appendTeamRuntimeMessage({
+        teamName: team.name,
+        message: msg
+      })
+      teamEvents.emit({ type: 'team_message', message: msg })
 
-    return encodeStructuredToolResult({
-      success: true,
-      message_id: msg.id,
-      type: msgType,
-      to: recipient
-    })
+      return encodeStructuredToolResult({
+        success: true,
+        message_id: msg.id,
+        type: msgType,
+        to: recipient
+      })
+    } catch (error) {
+      return encodeToolError(error instanceof Error ? error.message : String(error))
+    }
   },
   requiresApproval: () => false
 }

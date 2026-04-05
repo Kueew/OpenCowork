@@ -15,6 +15,10 @@ import { buildRuntimeCompression } from '../context-compression-runtime'
 import { subAgentRegistry } from '../sub-agents/registry'
 import { resolveSubAgentTools } from '../sub-agents/resolve-tools'
 import { runSharedAgentRuntime } from '../shared-runtime'
+import { appendTeamRuntimeMessage } from './runtime-client'
+import { requestTeammatePermission, stopWorkerPermissionPoller } from './permission-bridge'
+import { requestPlanApproval, stopWorkerPlanApprovalPoller } from './plan-approval-bridge'
+import { buildTeammateAddendum } from './prompts'
 
 // --- AbortController registry for individual teammates ---
 const teammateAbortControllers = new Map<string, AbortController>()
@@ -195,6 +199,8 @@ export async function runTeammate(options: RunTeammateOptions): Promise<void> {
     teammateAbortControllers.delete(memberId)
     teammateShutdownRequested.delete(memberId)
     unsubMessages()
+    stopWorkerPermissionPoller(memberName)
+    stopWorkerPlanApprovalPoller(memberName)
 
     if (endReason !== 'aborted') {
       emitCompletionMessage(memberName, endReason, {
@@ -293,7 +299,7 @@ async function runSingleTaskLoop(opts: {
     ? `${agentDefinition.initialPrompt}\n\n${prompt}`
     : prompt
 
-  const coordinationPrompt = buildTeammateSystemPrompt({
+  const coordinationPrompt = buildTeammateAddendum({
     memberName,
     teamName: team?.name ?? 'team',
     prompt: effectivePrompt,
@@ -301,7 +307,8 @@ async function runSingleTaskLoop(opts: {
       ? { id: taskInfo.id, subject: taskInfo.subject, description: taskInfo.description }
       : null,
     workingFolder,
-    language: settings.language
+    language: settings.language,
+    permissionMode: team?.permissionMode
   })
   const systemPrompt = agentDefinition
     ? `${agentDefinition.systemPrompt}\n\n${coordinationPrompt}`
@@ -321,12 +328,68 @@ async function runSingleTaskLoop(opts: {
     ...(compression ? { contextCompression: compression } : {})
   }
 
-  const userMsg: UnifiedMessage = {
+  const initialMessages: UnifiedMessage[] = []
+
+  if (team?.permissionMode === 'plan') {
+    const planPrompt = buildPlanRequestText(taskInfo ?? null, effectivePrompt)
+    const planRuntime = await runSharedAgentRuntime({
+      initialMessages: [
+        {
+          id: nanoid(),
+          role: 'user',
+          content: planPrompt,
+          createdAt: Date.now()
+        }
+      ],
+      loopConfig: {
+        ...loopConfig,
+        maxIterations: 1
+      },
+      toolContext: {
+        workingFolder,
+        signal: abortController.signal,
+        ipc: ipcClient,
+        callerAgent: 'teammate'
+      },
+      isReadOnlyTool: () => true
+    })
+
+    const planText = planRuntime.finalOutput.trim()
+    const approval = await requestPlanApproval({
+      memberName,
+      plan: planText,
+      taskId
+    })
+
+    if (!approval.approved) {
+      const rejectedOutput = approval.feedback
+        ? `${planText}\n\nLead feedback: ${approval.feedback}`
+        : planText
+      return {
+        iterations: planRuntime.iterations,
+        toolCalls: planRuntime.toolCallCount,
+        lastStreamingText: rejectedOutput,
+        fullOutput: rejectedOutput,
+        taskCompleted: false,
+        reason: 'completed',
+        usage: planRuntime.usage
+      }
+    }
+
+    initialMessages.push({
+      id: nanoid(),
+      role: 'user',
+      content: `Lead approved your plan. Proceed with execution. ${approval.feedback ?? ''}`.trim(),
+      createdAt: Date.now()
+    })
+  }
+
+  initialMessages.push({
     id: nanoid(),
     role: 'user',
     content: effectivePrompt,
     createdAt: Date.now()
-  }
+  })
 
   teamEvents.emit({
     type: 'team_member_update',
@@ -356,7 +419,7 @@ async function runSingleTaskLoop(opts: {
   }
 
   const runtime = await runSharedAgentRuntime({
-    initialMessages: [userMsg],
+    initialMessages,
     loopConfig,
     toolContext: {
       workingFolder,
@@ -370,7 +433,14 @@ async function runSingleTaskLoop(opts: {
       if (autoApprove) return true
       const approved = useAgentStore.getState().approvedToolNames
       if (approved.includes(toolCall.name)) return true
-      const result = await useAgentStore.getState().requestApproval(toolCall.id)
+      const result = await requestTeammatePermission({
+        memberName,
+        toolCall: {
+          ...toolCall,
+          status: 'pending_approval',
+          requiresApproval: true
+        }
+      })
       if (result) useAgentStore.getState().addApprovedTool(toolCall.name)
       return result
     },
@@ -557,6 +627,13 @@ function emitCompletionMessage(
     timestamp: Date.now()
   }
 
+  void appendTeamRuntimeMessage({
+    teamName: team.name,
+    message
+  }).catch((error) => {
+    console.error('[TeamRuntime] Failed to append completion message:', error)
+  })
+
   teamEvents.emit({ type: 'team_message', message })
 }
 
@@ -564,55 +641,18 @@ function emitCompletionMessage(
 
 const READ_ONLY_TOOLS = new Set(['Read', 'LS', 'Glob', 'Grep', 'TaskList', 'TaskGet', 'TeamStatus'])
 
-function buildTeammateSystemPrompt(options: {
-  memberName: string
-  teamName: string
-  prompt: string
-  task: { id: string; subject: string; description: string } | null
-  workingFolder?: string
-  language?: string
-}): string {
-  const { memberName, teamName, prompt, task, workingFolder, language } = options
-
-  const parts: string[] = []
-
-  parts.push(
-    `You are "${memberName}", a teammate agent in the "${teamName}" team.`,
-    `You are part of a multi-agent team working in parallel on a shared codebase.`,
-    `You should focus exclusively on your assigned work and avoid modifying files outside your scope.`,
-    `**You MUST respond in ${language === 'zh' ? 'Chinese (中文)' : 'English'} unless explicitly instructed otherwise.**`
-  )
-
-  if (task) {
-    parts.push(
-      `\n## Your Task`,
-      `**ID:** ${task.id}`,
-      `**Subject:** ${task.subject}`,
-      `**Description:** ${task.description}`
-    )
-  }
-
-  parts.push(`\n## Instructions\n${prompt}`)
-
-  if (workingFolder) {
-    parts.push(`\n## Working Folder\n\`${workingFolder}\``)
-    parts.push(`All relative paths should be resolved against this folder.`)
-  }
-
-  parts.push(
-    `\n## Coordination Rules`,
-    `- Only modify files related to your assigned task.`,
-    `- When your task is done, call TaskUpdate with status="completed" to finalize task state.`,
-    `- Use SendMessage to communicate with the lead or other teammates if needed.`,
-    `- Never spawn another background teammate. If parallel help is needed, message the lead instead.`,
-    `- After completing your task, you will stop. The framework will automatically assign remaining pending tasks to new teammates.`,
-    `- If you receive a shutdown request, finish your current work promptly and stop.`,
-    `- Be concise and efficient — you have limited iterations.`,
-    `\n## Final Output`,
-    `IMPORTANT: Your last assistant message should clearly summarize what you completed, what changed, and any follow-up the lead should know.`,
-    `Mark task status correctly with the TaskUpdate tool when your assigned work is done:`,
-    `\`TaskUpdate(task_id="...", status="completed")\``
-  )
-
-  return parts.join('\n')
+function buildPlanRequestText(task: TeamTask | null, prompt: string): string {
+  const subject = task?.subject ?? 'Assigned Task'
+  const description = task?.description ?? prompt
+  return [
+    `Create a short execution plan for the task below.`,
+    `Task Subject: ${subject}`,
+    `Task Description: ${description}`,
+    '',
+    'Requirements:',
+    '- Keep it concise and implementation-focused.',
+    '- Mention key files or subsystems you expect to touch.',
+    '- Mention verification approach.',
+    '- End with a single sentence stating you are waiting for lead approval.'
+  ].join('\n')
 }

@@ -73,6 +73,7 @@ import {
   compressMessages,
   resolveCompressionThreshold
 } from '@renderer/lib/agent/context-compression'
+import { runAgentLoop } from '@renderer/lib/agent/agent-loop'
 import type { CompressionConfig } from '@renderer/lib/agent/context-compression'
 import { useChannelStore } from '@renderer/stores/channel-store'
 import { useAppPluginStore } from '@renderer/stores/app-plugin-store'
@@ -1359,6 +1360,83 @@ function getUnsupportedSidecarToolNames(toolNames: string[]): string[] {
   return [...new Set(toolNames)].filter((toolName) => !supportedToolNames.has(toolName))
 }
 
+function createNodeAgentLoop(args: {
+  messages: UnifiedMessage[]
+  provider: ProviderConfig
+  tools: ToolDefinition[]
+  systemPrompt: string
+  workingFolder?: string
+  signal: AbortSignal
+  sessionId: string
+  assistantMessageId: string
+  session?: {
+    pluginId?: string
+    externalChatId?: string
+    pluginChatType?: 'p2p' | 'group'
+    pluginSenderId?: string
+    pluginSenderName?: string
+    sshConnectionId?: string
+  }
+  forceApproval: boolean
+  compression?: CompressionConfig | null
+}): AsyncIterable<AgentEvent> {
+  const pluginChatId = extractPluginChatId(args.session?.externalChatId)
+  const loopConfig = {
+    maxIterations: DEFAULT_AGENT_MAX_ITERATIONS,
+    provider: args.provider,
+    tools: args.tools,
+    systemPrompt: args.systemPrompt,
+    workingFolder: args.workingFolder,
+    signal: args.signal,
+    forceApproval: args.forceApproval,
+    ...(args.compression
+      ? {
+          contextCompression: {
+            config: args.compression,
+            compressFn: async (messages: UnifiedMessage[]) => {
+              const { messages: compressed } = await compressMessages(messages, args.provider, args.signal)
+              return compressed
+            }
+          }
+        }
+      : {})
+  }
+
+  const toolCtx: ToolContext = {
+    sessionId: args.sessionId,
+    workingFolder: args.workingFolder,
+    sshConnectionId: args.session?.sshConnectionId,
+    signal: args.signal,
+    ipc: ipcClient,
+    agentRunId: args.assistantMessageId,
+    ...(args.session?.pluginId ? { pluginId: args.session.pluginId } : {}),
+    ...(pluginChatId ? { pluginChatId } : {}),
+    ...(args.session?.pluginChatType ? { pluginChatType: args.session.pluginChatType } : {}),
+    ...(args.session?.pluginSenderId ? { pluginSenderId: args.session.pluginSenderId } : {}),
+    ...(args.session?.pluginSenderName ? { pluginSenderName: args.session.pluginSenderName } : {}),
+    sharedState: {}
+  }
+
+  return runAgentLoop(args.messages, loopConfig, toolCtx, async (toolCall) => {
+    const autoApprove = useSettingsStore.getState().autoApprove
+    const agentState = useAgentStore.getState()
+
+    if (autoApprove || agentState.approvedToolNames.includes(toolCall.name)) {
+      if (!autoApprove) {
+        agentState.addApprovedTool(toolCall.name)
+      }
+      return true
+    }
+
+    agentState.addToolCall(toolCall)
+    const approved = await agentState.requestApproval(toolCall.id)
+    if (approved) {
+      agentState.addApprovedTool(toolCall.name)
+    }
+    return approved
+  })
+}
+
 async function canUseSidecarForAgentRun(args: {
   messages: UnifiedMessage[]
   provider: ProviderConfig
@@ -2123,6 +2201,7 @@ export function useChatActions(): {
             sshConnection
           })
 
+          const activeTeam = useTeamStore.getState().activeTeam
           agentSystemPrompt = buildSystemPrompt({
             mode: mode as 'clarify' | 'cowork' | 'code' | 'acp',
             workingFolder: session?.workingFolder,
@@ -2131,6 +2210,8 @@ export function useChatActions(): {
             toolDefs: finalEffectiveToolDefs,
             language: useSettingsStore.getState().language,
             planMode: isPlanMode,
+            hasActiveTeam: !!activeTeam,
+            activeTeam,
             memorySnapshot,
             sessionScope,
             environmentContext
@@ -2317,7 +2398,7 @@ export function useChatActions(): {
           console.log('[ChatActions] Agent execution path', {
             sessionId,
             useSidecar,
-            executionPath: 'sidecar',
+            executionPath: useSidecar ? 'sidecar' : 'node',
             providerType: agentProviderConfig.type,
             toolNames: effectiveToolDefs.map((tool) => tool.name),
             hasSidecarRequest: !!sidecarRequest,
@@ -2327,34 +2408,16 @@ export function useChatActions(): {
             hasMcps: activeMcps.length > 0
           })
 
-          if (!sidecarRequest) {
-            throw new Error('Sidecar agent request build failed')
-          }
-          if (!useSidecar) {
-            const requestedToolNames = [...new Set(sidecarRequest.tools.map((tool) => tool.name))]
-            const unsupportedToolNames = getUnsupportedSidecarToolNames(requestedToolNames)
-            if (unsupportedToolNames.length > 0) {
-              throw new Error(
-                `Sidecar does not yet support tools: ${unsupportedToolNames.join(', ')}`
-              )
-            }
-            console.warn('[ChatActions] Proceeding with sidecar after capability gating failure', {
-              sessionId,
-              providerType: sidecarRequest.provider.type,
-              requestedToolNames,
-              isPlanMode,
-              sessionMode: mode,
-              hasChannels: scopedActiveChannels.length > 0,
-              hasMcps: activeMcps.length > 0
-            })
-          }
-
-          setRequestTraceInfo(assistantMsgId, {
-            executionPath: 'sidecar'
-          })
-
           let loop: AsyncIterable<AgentEvent>
-          {
+          if (useSidecar) {
+            if (!sidecarRequest) {
+              throw new Error('Sidecar agent request build failed')
+            }
+
+            setRequestTraceInfo(assistantMsgId, {
+              executionPath: 'sidecar'
+            })
+
             const initialized = await agentBridge.initialize()
             if (!initialized) {
               throw new Error('Sidecar unavailable')
@@ -2427,6 +2490,38 @@ export function useChatActions(): {
                 }
               }
             }
+          } else {
+            console.warn('[ChatActions] Falling back to node agent loop', {
+              sessionId,
+              providerType: agentProviderConfig.type,
+              toolNames: effectiveToolDefs.map((tool) => tool.name),
+              hasSidecarRequest: !!sidecarRequest,
+              unsupportedToolNames: sidecarRequest
+                ? getUnsupportedSidecarToolNames(sidecarRequest.tools.map((tool) => tool.name))
+                : [],
+              isPlanMode,
+              sessionMode: mode,
+              hasChannels: scopedActiveChannels.length > 0,
+              hasMcps: activeMcps.length > 0
+            })
+
+            setRequestTraceInfo(assistantMsgId, {
+              executionPath: 'node'
+            })
+
+            loop = createNodeAgentLoop({
+              messages: messagesToSend,
+              provider: agentProviderConfig,
+              tools: effectiveToolDefs,
+              systemPrompt: agentSystemPrompt,
+              workingFolder: session?.workingFolder,
+              signal: abortController.signal,
+              sessionId,
+              assistantMessageId: assistantMsgId,
+              session,
+              forceApproval: false,
+              compression: compressionConfig
+            })
           }
 
           let thinkingDone = false

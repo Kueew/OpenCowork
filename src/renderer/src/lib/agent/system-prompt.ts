@@ -3,6 +3,8 @@ import type { UnifiedMessage } from '../api/types'
 import { buildMemoryContext } from './dynamic-context'
 import { toolRegistry } from './tool-registry'
 import { getRegisteredSkills } from '../tools/skill-tool'
+import { buildLeadCoordinatorPrompt } from './teams/prompts'
+import type { ActiveTeam } from '../../stores/team-store'
 
 export type PromptEnvironmentContext = {
   target: 'local' | 'ssh'
@@ -251,6 +253,7 @@ export function buildSystemPrompt(options: {
   language?: string
   planMode?: boolean
   hasActiveTeam?: boolean
+  activeTeam?: ActiveTeam | null
   memorySnapshot?: LayeredMemorySnapshot
   sessionScope?: SessionMemoryScope
   environmentContext?: PromptEnvironmentContext
@@ -261,6 +264,7 @@ export function buildSystemPrompt(options: {
     language,
     planMode,
     hasActiveTeam,
+    activeTeam,
     memorySnapshot,
     sessionScope = 'main'
   } = options
@@ -463,6 +467,9 @@ export function buildSystemPrompt(options: {
           `When all tasks finish, deliver one consolidated summary and call TeamDelete.`,
           `If tasks remain, acknowledge briefly and wait without calling tools.`
         )
+        if (activeTeam) {
+          parts.push(`\n${buildLeadCoordinatorPrompt(activeTeam)}`)
+        }
       } else {
         parts.push(
           `\n## Agent Teams`,

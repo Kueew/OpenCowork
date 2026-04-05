@@ -13,6 +13,8 @@ import { ConcurrencyLimiter } from '../concurrency-limiter'
 import { teamEvents } from '../teams/events'
 import { useTeamStore } from '../../../stores/team-store'
 import { runTeammate, findNextClaimableTask } from '../teams/teammate-runner'
+import { spawnIsolatedTeamWorker } from '../teams/backend-client'
+import { updateTeamRuntimeMember } from '../teams/runtime-client'
 import type { TeamMember } from '../teams/types'
 
 /** Global concurrency limiter: at most 2 SubAgents run simultaneously. */
@@ -68,6 +70,7 @@ export const TASK_TOOL_NAME = 'Task'
 interface TeamContext {
   limiter: ConcurrencyLimiter
   workingFolder?: string
+  defaultBackend?: 'in-process' | 'isolated-renderer'
 }
 
 const teamContexts = new Map<string, TeamContext>()
@@ -110,6 +113,8 @@ function scheduleNextTask(teamName: string): void {
     id: nanoid(),
     name: memberName,
     model: 'default',
+    backendType: 'in-process',
+    role: 'worker',
     status: 'idle',
     currentTaskId: nextTask.id,
     iteration: 0,
@@ -175,7 +180,8 @@ Usage notes:
 3. Each sub-agent invocation is stateless.
 4. The sub-agent's outputs should generally be trusted.
 5. Clearly tell the sub-agent whether you expect it to write code or just do research.
-6. Set run_in_background=true to spawn a teammate agent that runs independently. When done, the teammate sends its results to you via SendMessage. Your turn ends after spawning — you will be notified when teammates finish.`
+6. Set run_in_background=true to spawn a teammate agent that runs independently. When done, the teammate sends its results to you via SendMessage. Your turn ends after spawning — you will be notified when teammates finish.
+7. Optional: set backend_type to choose between in-process and isolated-renderer teammate backends.`
 }
 
 /**
@@ -223,7 +229,12 @@ async function executeBackgroundTeammate(
   const teamName = team.name
   const teamCtx = getTeamContext(teamName)
   teamCtx.workingFolder = ctx.workingFolder
+  teamCtx.defaultBackend = team.defaultBackend
   const limiter = teamCtx.limiter
+  const backendType =
+    input.backend_type === 'isolated-renderer' || input.backend_type === 'in-process'
+      ? (input.backend_type as 'in-process' | 'isolated-renderer')
+      : (team.defaultBackend ?? 'in-process')
   const willQueue = limiter.activeCount >= 2
 
   const assignedTaskId = input.task_id ? String(input.task_id) : null
@@ -242,6 +253,8 @@ async function executeBackgroundTeammate(
     id: nanoid(),
     name: memberName,
     model: String(input.model ?? 'default'),
+    backendType,
+    role: 'worker',
     ...(agentDefinition ? { agentName: agentDefinition.name } : {}),
     status: willQueue ? 'waiting' : 'idle',
     currentTaskId: assignedTaskId,
@@ -253,6 +266,25 @@ async function executeBackgroundTeammate(
   }
 
   teamEvents.emit({ type: 'team_member_add', member })
+  void updateTeamRuntimeMember({
+    teamName,
+    memberId: member.id,
+    patch: {
+      agentId: member.id,
+      name: member.name,
+      role: 'worker',
+      backendType,
+      model: member.model,
+      agentType: agentDefinition?.name,
+      status: willQueue ? 'waiting' : 'idle',
+      currentTaskId: assignedTaskId,
+      isActive: true,
+      startedAt: member.startedAt,
+      completedAt: null
+    }
+  }).catch((error) => {
+    console.error('[TeamRuntime] Failed to sync teammate member record:', error)
+  })
 
   // If a task was assigned, mark it in_progress immediately
   if (assignedTaskId) {
@@ -269,15 +301,29 @@ async function executeBackgroundTeammate(
   limiter
     .acquire()
     .then(() => {
-      return runTeammate({
-        memberId: member.id,
-        memberName,
-        prompt: String(input.prompt),
-        taskId: assignedTaskId,
-        model: input.model ? String(input.model) : null,
-        agentName: agentDefinition?.name ?? null,
-        workingFolder: ctx.workingFolder
-      }).finally(() => {
+      const runPromise =
+        backendType === 'isolated-renderer'
+          ? spawnIsolatedTeamWorker({
+              teamName,
+              memberId: member.id,
+              memberName,
+              prompt: String(input.prompt),
+              taskId: assignedTaskId,
+              model: input.model ? String(input.model) : null,
+              agentName: agentDefinition?.name ?? null,
+              workingFolder: ctx.workingFolder
+            }).then(() => undefined)
+          : runTeammate({
+              memberId: member.id,
+              memberName,
+              prompt: String(input.prompt),
+              taskId: assignedTaskId,
+              model: input.model ? String(input.model) : null,
+              agentName: agentDefinition?.name ?? null,
+              workingFolder: ctx.workingFolder
+            })
+
+      return runPromise.finally(() => {
         limiter.release()
         // Framework scheduler: auto-dispatch next pending task
         scheduleNextTask(teamName)
@@ -294,7 +340,8 @@ async function executeBackgroundTeammate(
     member_id: member.id,
     name: memberName,
     team_name: teamName,
-    message: `Teammate "${memberName}" spawned and running in background.`,
+    backend_type: backendType,
+    message: `Teammate "${memberName}" spawned and running in background via ${backendType}.`,
     instruction:
       'IMPORTANT: End your turn NOW. Do not call any more tools. Output a brief status summary and stop. You will be notified automatically when this teammate finishes.'
   })
@@ -386,6 +433,11 @@ export function createTaskTool(providerGetter: () => ProviderConfig): ToolHandle
               task_id: {
                 type: 'string',
                 description: 'Optional task ID to assign to the teammate immediately'
+              },
+              backend_type: {
+                type: 'string',
+                enum: ['in-process', 'isolated-renderer'],
+                description: 'Optional backend override for the teammate runtime.'
               }
             },
             required: ['description', 'prompt', 'run_in_background', 'name'],

@@ -2,12 +2,23 @@ import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
 import { persist, createJSONStorage } from 'zustand/middleware'
 import type { TeamMember, TeamTask, TeamMessage, TeamEvent } from '../lib/agent/teams/types'
+import type {
+  TeamRuntimeBackendType,
+  TeamRuntimePermissionMode,
+  TeamRuntimeSnapshot
+} from '../../../shared/team-runtime-types'
 import { ipcStorage } from '../lib/ipc/ipc-storage'
 
 export interface ActiveTeam {
   name: string
   description: string
   sessionId?: string
+  runtimePath?: string
+  leadAgentId?: string
+  defaultBackend?: TeamRuntimeBackendType
+  permissionMode?: TeamRuntimePermissionMode
+  teamAllowedPaths?: string[]
+  lastRuntimeSyncAt?: number
   members: TeamMember[]
   tasks: TeamTask[]
   messages: TeamMessage[]
@@ -34,6 +45,7 @@ interface TeamStore {
 
   /** Unified event handler — called from use-chat-actions subscription */
   handleTeamEvent: (event: TeamEvent, sessionId?: string) => void
+  syncRuntimeSnapshot: (snapshot: TeamRuntimeSnapshot, sessionId?: string) => void
 
   /** Remove all team data that belongs to the given session */
   clearSessionTeam: (sessionId: string) => void
@@ -56,7 +68,8 @@ export const useTeamStore = create<TeamStore>()(
             members: [],
             tasks: [],
             messages: [],
-            createdAt: Date.now()
+            createdAt: Date.now(),
+            teamAllowedPaths: []
           }
         }),
 
@@ -112,10 +125,16 @@ export const useTeamStore = create<TeamStore>()(
                 name: event.teamName,
                 description: event.description,
                 sessionId,
+                runtimePath: event.runtimePath,
+                leadAgentId: event.leadAgentId,
+                defaultBackend: event.defaultBackend,
+                permissionMode: event.permissionMode,
+                teamAllowedPaths: event.teamAllowedPaths ?? [],
                 members: [],
                 tasks: [],
                 messages: [],
-                createdAt: Date.now()
+                createdAt: event.createdAt ?? Date.now(),
+                lastRuntimeSyncAt: Date.now()
               }
               break
             case 'team_member_add':
@@ -171,6 +190,34 @@ export const useTeamStore = create<TeamStore>()(
               }
               state.activeTeam = null
               break
+          }
+        })
+      },
+      syncRuntimeSnapshot: (snapshot, sessionId) => {
+        set((state) => {
+          const previous = state.activeTeam
+          state.activeTeam = {
+            name: snapshot.team.name,
+            description: snapshot.team.description,
+            sessionId: previous?.sessionId ?? sessionId,
+            runtimePath: snapshot.team.runtimePath,
+            leadAgentId: snapshot.team.leadAgentId,
+            defaultBackend: snapshot.team.defaultBackend,
+            permissionMode: snapshot.team.permissionMode,
+            teamAllowedPaths: [...snapshot.team.teamAllowedPaths],
+            createdAt: snapshot.team.createdAt,
+            lastRuntimeSyncAt: Date.now(),
+            members: previous?.members ?? [],
+            tasks: previous?.tasks ?? [],
+            messages: snapshot.recentMessages.map((msg) => ({
+              id: msg.id,
+              from: msg.from,
+              to: msg.to,
+              type: msg.type,
+              content: msg.content,
+              summary: msg.summary,
+              timestamp: msg.timestamp
+            }))
           }
         })
       },

@@ -163,6 +163,7 @@ function MessageItemInner({
             msgId={message.id}
             showRetry
             showContinue={showContinue && isLastAssistantMessage}
+            isLastAssistantMessage={isLastAssistantMessage}
             onRetry={onRetryAssistantMessage}
             onContinue={onContinueAssistantMessage}
             onDelete={onDeleteMessage}
