@@ -312,7 +312,18 @@ async function executeBackgroundTeammate(
               model: input.model ? String(input.model) : null,
               agentName: agentDefinition?.name ?? null,
               workingFolder: ctx.workingFolder
-            }).then(() => undefined)
+            }).then(async () => {
+              teamEvents.emit({
+                type: 'team_member_update',
+                memberId: member.id,
+                patch: { status: 'working' }
+              })
+              await updateTeamRuntimeMember({
+                teamName,
+                memberId: member.id,
+                patch: { status: 'working' }
+              })
+            })
           : runTeammate({
               memberId: member.id,
               memberName,

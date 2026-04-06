@@ -3,10 +3,14 @@ import { nanoid } from 'nanoid'
 import type {
   SpawnIsolatedTeamWorkerArgs,
   SpawnIsolatedTeamWorkerResult,
-  StopIsolatedTeamWorkerArgs
+  StopIsolatedTeamWorkerArgs,
+  StopIsolatedTeamWorkersArgs
 } from '../../shared/team-runtime-types'
 
-const workerWindows = new Map<string, BrowserWindow>()
+const workerWindows = new Map<
+  string,
+  { window: BrowserWindow; teamName: string; memberId: string }
+>()
 
 function buildWorkerUrl(args: SpawnIsolatedTeamWorkerArgs): string {
   const params = new URLSearchParams({
@@ -43,7 +47,11 @@ export async function spawnIsolatedTeamWorker(
     }
   })
 
-  workerWindows.set(workerId, workerWindow)
+  workerWindows.set(workerId, {
+    window: workerWindow,
+    teamName: args.teamName,
+    memberId: args.memberId
+  })
 
   workerWindow.on('closed', () => {
     workerWindows.delete(workerId)
@@ -60,18 +68,29 @@ export async function spawnIsolatedTeamWorker(
 }
 
 export async function stopIsolatedTeamWorker(args: StopIsolatedTeamWorkerArgs): Promise<{ success: true }> {
-  const workerWindow = workerWindows.get(args.workerId)
-  if (workerWindow && !workerWindow.isDestroyed()) {
-    workerWindow.close()
+  const record = workerWindows.get(args.workerId)
+  if (record && !record.window.isDestroyed()) {
+    record.window.close()
   }
   workerWindows.delete(args.workerId)
   return { success: true }
 }
 
+export async function stopIsolatedTeamWorkers(args: StopIsolatedTeamWorkersArgs): Promise<{ success: true }> {
+  for (const [workerId, record] of workerWindows.entries()) {
+    if (record.teamName !== args.teamName) continue
+    if (!record.window.isDestroyed()) {
+      record.window.close()
+    }
+    workerWindows.delete(workerId)
+  }
+  return { success: true }
+}
+
 export function stopAllIsolatedTeamWorkers(): void {
-  for (const workerWindow of workerWindows.values()) {
-    if (!workerWindow.isDestroyed()) {
-      workerWindow.close()
+  for (const record of workerWindows.values()) {
+    if (!record.window.isDestroyed()) {
+      record.window.close()
     }
   }
   workerWindows.clear()
@@ -84,5 +103,9 @@ export function registerTeamWorkerHandlers(): void {
 
   ipcMain.handle('team-worker:stop', async (_event, args: StopIsolatedTeamWorkerArgs) => {
     return stopIsolatedTeamWorker(args)
+  })
+
+  ipcMain.handle('team-worker:stop-team', async (_event, args: StopIsolatedTeamWorkersArgs) => {
+    return stopIsolatedTeamWorkers(args)
   })
 }

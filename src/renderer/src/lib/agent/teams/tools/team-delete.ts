@@ -6,6 +6,7 @@ import { useAgentStore } from '../../../../stores/agent-store'
 import { abortAllTeammates } from '../teammate-runner'
 import { removeTeamLimiter } from '../../sub-agents/create-tool'
 import { deleteTeamRuntime } from '../runtime-client'
+import { stopIsolatedTeamWorkers } from '../backend-client'
 
 export const teamDeleteTool: ToolHandler = {
   definition: {
@@ -31,6 +32,7 @@ export const teamDeleteTool: ToolHandler = {
 
     // Stop all running teammate agent loops
     abortAllTeammates()
+    await stopIsolatedTeamWorkers({ teamName })
 
     // Resolve any pending approval promises from aborted teammates
     // so they don't block the PermissionDialog or leak memory

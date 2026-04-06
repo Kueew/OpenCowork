@@ -62,5 +62,8 @@ export function registerTeamTools(): void {
       })
   }
 
-  startTeamInboxPoller()
+  const search = new URLSearchParams(window.location.search)
+  if (search.get('ocWorker') !== 'team') {
+    startTeamInboxPoller()
+  }
 }
