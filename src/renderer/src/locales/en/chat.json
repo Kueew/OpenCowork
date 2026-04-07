@@ -413,6 +413,7 @@
     "homeDescAutoClarify": "After you send, it picks a model better suited for questioning and narrowing the plan.",
     "homeDescAutoCowork": "After you send, it picks a model better suited for project work, file edits, and tools.",
     "homeDescAutoCode": "After you send, it picks a model better suited for coding, refactoring, and analysis.",
+    "homeDescAutoAcp": "After you send, it picks a model better suited for architecture confirmation, constraint clarification, and execution breakdown.",
     "homeDescChatGeneral": "Good for everyday chat, writing, and lightweight questions.",
     "homeDescChatVision": "Good for chat and can also respond quickly with image context.",
     "homeDescClarifyGeneral": "Good for follow-up questions, goal shaping, and filling in constraints.",

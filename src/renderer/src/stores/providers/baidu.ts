@@ -7,7 +7,7 @@ export const baiduCodingPreset: BuiltinProviderPreset = {
   defaultBaseUrl: 'https://qianfan.baidubce.com/anthropic/coding',
   homepage: 'https://cloud.baidu.com/product/codingplan.html',
   apiKeyUrl: 'https://console.bce.baidu.com/qianfan/resource/subscribe',
-  defaultEnabled: true,
+  defaultEnabled: false,
   defaultModels: [
     {
       id: 'deepseek-v3.2',

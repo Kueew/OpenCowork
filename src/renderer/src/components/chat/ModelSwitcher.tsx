@@ -593,7 +593,15 @@ export function ModelSwitcher(): React.JSX.Element {
                           ? 'topbar.autoModelMain'
                           : 'topbar.autoModelFast'
                       ),
-                      model: autoSelection.modelName
+                      model: autoSelection.modelName,
+                      taskType: autoSelection.taskType ?? t('topbar.autoModelTaskTypeUnknown'),
+                      confidence:
+                        autoSelection.confidence ?? t('topbar.autoModelConfidenceUnknown'),
+                      reason: autoSelection.fallbackReason
+                        ? t(`topbar.autoModelFallback.${autoSelection.fallbackReason}`, {
+                            defaultValue: autoSelection.fallbackReason
+                          })
+                        : ''
                     })
                   : t('topbar.autoModelTooltipIdle')
               : displayModel?.name || displayModelId || t('topbar.noModel')}
@@ -650,7 +658,15 @@ export function ModelSwitcher(): React.JSX.Element {
                               ? 'topbar.autoModelMain'
                               : 'topbar.autoModelFast'
                           ),
-                          model: autoSelection.modelName
+                          model: autoSelection.modelName,
+                          taskType: autoSelection.taskType ?? t('topbar.autoModelTaskTypeUnknown'),
+                          confidence:
+                            autoSelection.confidence ?? t('topbar.autoModelConfidenceUnknown'),
+                          reason: autoSelection.fallbackReason
+                            ? t(`topbar.autoModelFallback.${autoSelection.fallbackReason}`, {
+                                defaultValue: autoSelection.fallbackReason
+                              })
+                            : ''
                         })
                       : t('topbar.autoModelDesc')}
                 </span>

@@ -482,7 +482,9 @@ function buildProviderConfigWithRuntimeSettings(
 async function resolveMainRequestProvider(options: {
   sessionId: string
   latestUserInput: string
+  mode?: 'chat' | 'clarify' | 'cowork' | 'code' | 'acp'
   allowTools: boolean
+  isContinue?: boolean
   signal?: AbortSignal
 }): Promise<{
   providerConfig: ProviderConfig | null
@@ -524,14 +526,18 @@ async function resolveMainRequestProvider(options: {
       const providerConfig = providerStore.getActiveProviderConfig()
       return {
         providerConfig,
-        modelConfig: findProviderModel(providerConfig?.providerId, providerConfig?.model).modelConfig,
+        modelConfig: findProviderModel(providerConfig?.providerId, providerConfig?.model)
+          .modelConfig,
         autoSelection: null
       }
     }
 
     const autoSelection = await selectAutoModel({
       latestUserInput: options.latestUserInput,
+      sessionId: options.sessionId,
+      mode: options.mode,
       allowTools: options.allowTools,
+      isContinue: options.isContinue,
       signal: options.signal
     })
     const providerConfig =
@@ -1394,7 +1400,11 @@ function createNodeAgentLoop(args: {
           contextCompression: {
             config: args.compression,
             compressFn: async (messages: UnifiedMessage[]) => {
-              const { messages: compressed } = await compressMessages(messages, args.provider, args.signal)
+              const { messages: compressed } = await compressMessages(
+                messages,
+                args.provider,
+                args.signal
+              )
               return compressed
             }
           }
@@ -1793,7 +1803,9 @@ export function useChatActions(): {
       const providerResolution = await resolveMainRequestProvider({
         sessionId,
         latestUserInput,
-        allowTools: resolvedSessionMode !== 'chat'
+        mode: resolvedSessionMode,
+        allowTools: resolvedSessionMode !== 'chat',
+        isContinue: source === 'continue'
       })
       const baseProviderConfig = buildProviderConfigWithRuntimeSettings(
         providerResolution.providerConfig,
@@ -1803,6 +1815,11 @@ export function useChatActions(): {
       )
 
       useUIStore.getState().setAutoModelSelection(sessionId, providerResolution.autoSelection)
+      if (providerResolution.autoSelection?.confidence === 'high') {
+        useUIStore
+          .getState()
+          .setAutoModelHighConfidenceSelection(sessionId, providerResolution.autoSelection)
+      }
       if (shouldShowAutoRouting) {
         useUIStore.getState().setAutoModelRoutingState(sessionId, 'idle')
       }
@@ -2330,9 +2347,11 @@ export function useChatActions(): {
         }
 
         try {
-          let messagesToSend = await useChatStore.getState().getSessionMessagesForRequest(sessionId, {
-            includeTrailingAssistantPlaceholder: !!existingAssistantMessage
-          })
+          let messagesToSend = await useChatStore
+            .getState()
+            .getSessionMessagesForRequest(sessionId, {
+              includeTrailingAssistantPlaceholder: !!existingAssistantMessage
+            })
 
           // Build and inject a runtime reminder into the last user message
           const sessionSnapshot = useChatStore.getState().sessions.find((s) => s.id === sessionId)
@@ -2872,7 +2891,12 @@ export function useChatActions(): {
                     toolResults: event.toolResults.map((tr) => ({
                       toolUseId: tr.toolUseId,
                       isError: tr.isError,
-                      contentType: typeof tr.content === 'string' ? 'string' : Array.isArray(tr.content) ? 'blocks' : typeof tr.content
+                      contentType:
+                        typeof tr.content === 'string'
+                          ? 'string'
+                          : Array.isArray(tr.content)
+                            ? 'blocks'
+                            : typeof tr.content
                     }))
                   })
                 }
@@ -2944,7 +2968,19 @@ export function useChatActions(): {
                     },
                     timing: event.timing,
                     debugInfo: lastRequestDebugInfo,
-                    providerResponseId: event.providerResponseId
+                    providerResponseId: event.providerResponseId,
+                    meta: providerResolution.autoSelection
+                      ? {
+                          autoRouting: {
+                            mode: providerResolution.autoSelection.mode ?? mode,
+                            taskType: providerResolution.autoSelection.taskType ?? null,
+                            route: providerResolution.autoSelection.target,
+                            confidence: providerResolution.autoSelection.confidence ?? null,
+                            decisionSource: providerResolution.autoSelection.decisionSource ?? null,
+                            fallbackReason: providerResolution.autoSelection.fallbackReason ?? null
+                          }
+                        }
+                      : undefined
                   })
                 }
                 break

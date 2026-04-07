@@ -520,22 +520,27 @@ class OpenAIChatProvider implements APIProvider {
       const toolResults = blocks.filter((b) => b.type === 'tool_result')
       if (toolResults.length > 0) {
         for (const tr of toolResults) {
-          if (tr.type === 'tool_result') {
-            if (Array.isArray(tr.content)) {
-              const parts: unknown[] = []
-              for (const cb of tr.content) {
-                if (cb.type === 'text') {
-                  parts.push({ type: 'text', text: cb.text })
-                } else if (cb.type === 'image') {
-                  const dataUrl = `data:${cb.source.mediaType || 'image/png'};base64,${cb.source.data}`
-                  parts.push({ type: 'image_url', image_url: { url: dataUrl } })
-                }
+          if (tr.type !== 'tool_result') continue
+
+          if (Array.isArray(tr.content)) {
+            const parts: unknown[] = []
+            for (const cb of tr.content) {
+              if (cb.type === 'text') {
+                parts.push({ type: 'text', text: cb.text })
+              } else if (cb.type === 'image') {
+                const dataUrl = `data:${cb.source.mediaType || 'image/png'};base64,${cb.source.data}`
+                parts.push({ type: 'image_url', image_url: { url: dataUrl } })
               }
-              formatted.push({ role: 'tool', tool_call_id: tr.toolUseId, content: parts })
-            } else {
-              formatted.push({ role: 'tool', tool_call_id: tr.toolUseId, content: tr.content })
             }
+            formatted.push({ role: 'tool', tool_call_id: tr.toolUseId, content: parts })
+            continue
           }
+
+          formatted.push({
+            role: 'tool',
+            tool_call_id: tr.toolUseId,
+            content: typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content)
+          })
         }
         continue
       }

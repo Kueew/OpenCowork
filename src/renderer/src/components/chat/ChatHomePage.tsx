@@ -159,7 +159,8 @@ export function ChatHomePage(): React.JSX.Element {
       chat: t('messageList.homeDescAutoChat'),
       clarify: t('messageList.homeDescAutoClarify'),
       cowork: t('messageList.homeDescAutoCowork'),
-      code: t('messageList.homeDescAutoCode')
+      code: t('messageList.homeDescAutoCode'),
+      acp: t('messageList.homeDescAutoAcp')
     }[mode]
   } else if (mode === 'clarify') {
     homeDescription = homeHasThinking

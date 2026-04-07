@@ -1,6 +1,13 @@
 import { ensureProviderAuthReady } from '@renderer/lib/auth/provider-auth'
 import { useProviderStore } from '@renderer/stores/provider-store'
-import type { AutoModelSelectionStatus } from '@renderer/stores/ui-store'
+import { useUIStore } from '@renderer/stores/ui-store'
+import type {
+  AppMode,
+  AutoModelConfidence,
+  AutoModelDecisionSource,
+  AutoModelSelectionStatus,
+  AutoModelTaskType
+} from '@renderer/stores/ui-store'
 import { agentBridge, canSidecarHandle, runSidecarCleanup } from '@renderer/lib/ipc/agent-bridge'
 import {
   buildSidecarAgentRunRequest,
@@ -9,7 +16,7 @@ import {
 } from '@renderer/lib/ipc/sidecar-protocol'
 import type { ProviderConfig, UnifiedMessage } from './types'
 
-const AUTO_MODEL_SELECTOR_PROMPT = [
+const AUTO_MODEL_LEGACY_SELECTOR_PROMPT = [
   'You are a strict model router.',
   'Decide whether the latest user input should use the main model or the fast model.',
   'Return ONLY one token: main or fast.',
@@ -17,6 +24,23 @@ const AUTO_MODEL_SELECTOR_PROMPT = [
   'Choose fast for simple Q&A, short rewrites, lightweight summaries, quick formatting, or other straightforward requests.',
   'Never output anything except main or fast.'
 ].join(' ')
+
+const AUTO_MODEL_CLASSIFIER_PROMPT = [
+  'You are a strict task router for a desktop AI coding product.',
+  'Classify ONLY the current user request.',
+  'You will receive a short routing header and the raw user text.',
+  'Return ONLY valid compact JSON with keys taskType, route, confidence.',
+  'Allowed taskType values: rewrite, summarize, translate, format, qa, explain, compare, extract, plan, debug, implement, analyze, other.',
+  'Allowed route values: main, fast.',
+  'Allowed confidence values: high, medium, low.',
+  'Prefer fast ONLY for clearly lightweight text transforms: rewrite, summarize, translate, format.',
+  'Prefer main for qa, explain, compare, extract, plan, debug, implement, analyze, other.',
+  'If the request is ambiguous, underspecified, tool-heavy, architecture-heavy, debugging-heavy, code-writing-heavy, or multi-step, choose route=main.',
+  'Respect the MODE in the routing header as hidden context, but classify primarily from the user text.',
+  'Never output markdown, prose, or code fences.'
+].join(' ')
+
+const MODE_AWARE_AUTO_ROUTING_MODES = new Set<AppMode>(['clarify', 'cowork', 'code', 'acp'])
 
 function stripRoutingArtifacts(value: string): string {
   return value
@@ -74,15 +98,24 @@ function resolveDescriptor(
   }
 }
 
-function buildSelectionStatus(
-  target: AutoModelSelectionStatus['target'],
-  config: ProviderConfig | null,
+function buildSelectionStatus(options: {
+  target: AutoModelSelectionStatus['target']
+  config: ProviderConfig | null
+  mode?: AppMode
+  taskType?: AutoModelTaskType
+  confidence?: AutoModelConfidence
+  decisionSource?: AutoModelDecisionSource
   fallbackReason?: string
-): AutoModelSelectionStatus {
+}): AutoModelSelectionStatus {
+  const { target, config, mode, taskType, confidence, decisionSource, fallbackReason } = options
   return {
     source: 'auto',
+    ...(mode ? { mode } : {}),
     target,
     ...resolveDescriptor(config),
+    ...(taskType ? { taskType } : {}),
+    ...(confidence ? { confidence } : {}),
+    ...(decisionSource ? { decisionSource } : {}),
     ...(fallbackReason ? { fallbackReason } : {}),
     selectedAt: Date.now()
   }
@@ -97,6 +130,93 @@ function normalizeRoute(value: string): 'main' | 'fast' | null {
   return null
 }
 
+function normalizeTaskType(value: string | undefined): AutoModelTaskType | null {
+  if (!value) return null
+  const normalized = value.trim().toLowerCase()
+  const allowed = new Set<AutoModelTaskType>([
+    'rewrite',
+    'summarize',
+    'translate',
+    'format',
+    'qa',
+    'explain',
+    'compare',
+    'extract',
+    'plan',
+    'debug',
+    'implement',
+    'analyze',
+    'other'
+  ])
+  return allowed.has(normalized as AutoModelTaskType) ? (normalized as AutoModelTaskType) : null
+}
+
+function normalizeConfidence(value: string | undefined): AutoModelConfidence | null {
+  if (!value) return null
+  const normalized = value.trim().toLowerCase()
+  if (normalized === 'high' || normalized === 'medium' || normalized === 'low') {
+    return normalized
+  }
+  return null
+}
+
+function tryParseClassifierResult(
+  value: string
+): { taskType: AutoModelTaskType; route: 'main' | 'fast'; confidence: AutoModelConfidence } | null {
+  try {
+    const parsed = JSON.parse(value) as {
+      taskType?: string
+      route?: string
+      confidence?: string
+    }
+    const taskType = normalizeTaskType(parsed.taskType)
+    const route = normalizeRoute(parsed.route ?? '')
+    const confidence = normalizeConfidence(parsed.confidence)
+    if (!taskType || !route || !confidence) return null
+    return { taskType, route, confidence }
+  } catch {
+    return null
+  }
+}
+
+function shouldUseModeAwareRouting(mode: AppMode | undefined): mode is AppMode {
+  return !!mode && MODE_AWARE_AUTO_ROUTING_MODES.has(mode)
+}
+
+function buildClassifierInput(options: {
+  latestUserInput: string
+  mode: AppMode
+  allowTools: boolean
+  isContinue?: boolean
+}): string {
+  return [
+    `MODE=${options.mode}`,
+    `ALLOW_TOOLS=${options.allowTools ? 'true' : 'false'}`,
+    `IS_CONTINUE=${options.isContinue ? 'true' : 'false'}`,
+    '',
+    options.latestUserInput.slice(0, 4000)
+  ].join('\n')
+}
+
+function resolveRouteForTaskType(taskType: AutoModelTaskType): 'main' | 'fast' {
+  switch (taskType) {
+    case 'rewrite':
+    case 'summarize':
+    case 'translate':
+    case 'format':
+      return 'fast'
+    default:
+      return 'main'
+  }
+}
+
+function getLastHighConfidenceSelection(
+  sessionId: string | undefined
+): AutoModelSelectionStatus | null {
+  if (!sessionId) return null
+  return useUIStore.getState().getAutoModelHighConfidenceSelection(sessionId)
+}
+
 function getFastModelSupportsTools(): boolean {
   const fastConfig = useProviderStore.getState().getFastProviderConfig()
   if (!fastConfig?.providerId || !fastConfig.model) return false
@@ -109,38 +229,79 @@ function getFastModelSupportsTools(): boolean {
 
 export async function selectAutoModel(options: {
   latestUserInput: string
+  sessionId?: string
+  mode?: AppMode
   allowTools?: boolean
+  isContinue?: boolean
   signal?: AbortSignal
 }): Promise<AutoModelSelectionStatus> {
   const providerStore = useProviderStore.getState()
   const mainConfig = providerStore.getActiveProviderConfig()
   const fastConfig = providerStore.getFastProviderConfig()
   const latestUserInput = options.latestUserInput.trim()
+  const mode = options.mode
+  const allowTools = options.allowTools === true
 
   if (!mainConfig) {
-    return buildSelectionStatus('main', null, 'main_unavailable')
+    return buildSelectionStatus({
+      target: 'main',
+      config: null,
+      mode,
+      decisionSource: 'fallback-main',
+      fallbackReason: 'main_unavailable'
+    })
   }
 
   if (!latestUserInput) {
-    return buildSelectionStatus('main', mainConfig, 'empty_input')
+    return buildSelectionStatus({
+      target: 'main',
+      config: mainConfig,
+      mode,
+      decisionSource: 'fallback-main',
+      fallbackReason: 'empty_input'
+    })
   }
 
   if (!fastConfig) {
-    return buildSelectionStatus('main', mainConfig, 'fast_unavailable')
+    return buildSelectionStatus({
+      target: 'main',
+      config: mainConfig,
+      mode,
+      decisionSource: 'fallback-main',
+      fallbackReason: 'fast_unavailable'
+    })
   }
 
-  if (options.allowTools && !getFastModelSupportsTools()) {
-    return buildSelectionStatus('main', mainConfig, 'fast_model_tools_unsupported')
+  if (allowTools && !getFastModelSupportsTools()) {
+    return buildSelectionStatus({
+      target: 'main',
+      config: mainConfig,
+      mode,
+      decisionSource: 'fallback-main',
+      fallbackReason: 'fast_model_tools_unsupported'
+    })
   }
 
   if (fastConfig.requiresApiKey !== false && !fastConfig.apiKey) {
-    return buildSelectionStatus('main', mainConfig, 'fast_auth_missing')
+    return buildSelectionStatus({
+      target: 'main',
+      config: mainConfig,
+      mode,
+      decisionSource: 'fallback-main',
+      fallbackReason: 'fast_auth_missing'
+    })
   }
 
   if (fastConfig.providerId) {
     const fastReady = await ensureProviderAuthReady(fastConfig.providerId)
     if (!fastReady) {
-      return buildSelectionStatus('main', mainConfig, 'fast_auth_unavailable')
+      return buildSelectionStatus({
+        target: 'main',
+        config: mainConfig,
+        mode,
+        decisionSource: 'fallback-main',
+        fallbackReason: 'fast_auth_unavailable'
+      })
     }
   }
 
@@ -150,19 +311,31 @@ export async function selectAutoModel(options: {
   options.signal?.addEventListener('abort', abort, { once: true })
 
   try {
+    const useModeAwareRouting = shouldUseModeAwareRouting(mode)
+    const routingPrompt = useModeAwareRouting
+      ? AUTO_MODEL_CLASSIFIER_PROMPT
+      : AUTO_MODEL_LEGACY_SELECTOR_PROMPT
+    const routingInput = useModeAwareRouting
+      ? buildClassifierInput({
+          latestUserInput,
+          mode,
+          allowTools,
+          isContinue: options.isContinue
+        })
+      : latestUserInput.slice(0, 4000)
     const routingConfig: ProviderConfig = {
       ...fastConfig,
-      maxTokens: 8,
+      maxTokens: useModeAwareRouting ? 64 : 8,
       temperature: 0,
       thinkingEnabled: false,
-      systemPrompt: AUTO_MODEL_SELECTOR_PROMPT
+      systemPrompt: routingPrompt
     }
 
     const messages: UnifiedMessage[] = [
       {
         id: 'auto-model-route',
         role: 'user',
-        content: latestUserInput.slice(0, 4000),
+        content: routingInput,
         createdAt: Date.now()
       }
     ]
@@ -175,18 +348,36 @@ export async function selectAutoModel(options: {
       forceApproval: false
     })
     if (!sidecarRequest) {
-      return buildSelectionStatus('main', mainConfig, 'sidecar_request_build_failed')
+      return buildSelectionStatus({
+        target: 'main',
+        config: mainConfig,
+        mode,
+        decisionSource: 'fallback-main',
+        fallbackReason: 'sidecar_request_build_failed'
+      })
     }
 
     const supportsAgentRun = await canSidecarHandle('agent.run')
     const supportsProvider = await canSidecarHandle(`provider.${routingConfig.type}`)
     if (!supportsAgentRun || !supportsProvider) {
-      return buildSelectionStatus('main', mainConfig, 'sidecar_capability_unavailable')
+      return buildSelectionStatus({
+        target: 'main',
+        config: mainConfig,
+        mode,
+        decisionSource: 'fallback-main',
+        fallbackReason: 'sidecar_capability_unavailable'
+      })
     }
 
     const initialized = await agentBridge.initialize()
     if (!initialized) {
-      return buildSelectionStatus('main', mainConfig, 'sidecar_unavailable')
+      return buildSelectionStatus({
+        target: 'main',
+        config: mainConfig,
+        mode,
+        decisionSource: 'fallback-main',
+        fallbackReason: 'sidecar_unavailable'
+      })
     }
 
     const result = await agentBridge.runAgent(sidecarRequest)
@@ -210,9 +401,13 @@ export async function selectAutoModel(options: {
           return
         }
 
-        abortController.signal.addEventListener('abort', () => {
-          void onAbort()
-        }, { once: true })
+        abortController.signal.addEventListener(
+          'abort',
+          () => {
+            void onAbort()
+          },
+          { once: true }
+        )
 
         unsubscribe = agentBridge.on('agent/event', (payload) => {
           const record = normalizeSidecarRecord(payload)
@@ -222,7 +417,7 @@ export async function selectAutoModel(options: {
 
           if (event.type === 'text_delta' && event.text) {
             output += event.text
-            if (output.length >= 32) {
+            if (useModeAwareRouting ? output.length >= 256 : output.length >= 32) {
               finished = true
               resolve()
             }
@@ -252,16 +447,112 @@ export async function selectAutoModel(options: {
       }
     }
 
-    const target = normalizeRoute(stripRoutingArtifacts(output))
-    if (!target) {
-      return buildSelectionStatus('main', mainConfig, 'invalid_classifier_output')
+    const normalizedOutput = stripRoutingArtifacts(output)
+
+    if (!useModeAwareRouting) {
+      const target = normalizeRoute(normalizedOutput)
+      if (!target) {
+        return buildSelectionStatus({
+          target: 'main',
+          config: mainConfig,
+          mode,
+          decisionSource: 'fallback-main',
+          fallbackReason: 'invalid_classifier_output'
+        })
+      }
+
+      return target === 'fast'
+        ? buildSelectionStatus({
+            target: 'fast',
+            config: fastConfig,
+            mode,
+            decisionSource: 'legacy-classifier'
+          })
+        : buildSelectionStatus({
+            target: 'main',
+            config: mainConfig,
+            mode,
+            decisionSource: 'legacy-classifier'
+          })
     }
 
+    const parsed = tryParseClassifierResult(normalizedOutput)
+    if (!parsed) {
+      return buildSelectionStatus({
+        target: 'main',
+        config: mainConfig,
+        mode,
+        decisionSource: 'fallback-main',
+        fallbackReason: 'invalid_classifier_output'
+      })
+    }
+
+    if (allowTools && parsed.route === 'fast' && !getFastModelSupportsTools()) {
+      return buildSelectionStatus({
+        target: 'main',
+        config: mainConfig,
+        mode,
+        taskType: parsed.taskType,
+        confidence: parsed.confidence,
+        decisionSource: 'fallback-main',
+        fallbackReason: 'fast_model_tools_unsupported'
+      })
+    }
+
+    const mappedRoute = resolveRouteForTaskType(parsed.taskType)
+    const lowConfidence = parsed.confidence === 'low'
+    if (lowConfidence) {
+      const previousHighConfidence = getLastHighConfidenceSelection(options.sessionId)
+      if (previousHighConfidence) {
+        return previousHighConfidence.target === 'fast'
+          ? buildSelectionStatus({
+              target: 'fast',
+              config: fastConfig,
+              mode,
+              taskType: parsed.taskType,
+              confidence: parsed.confidence,
+              decisionSource: 'fallback-last-high-confidence',
+              fallbackReason: 'low_confidence_reuse_last_route'
+            })
+          : buildSelectionStatus({
+              target: 'main',
+              config: mainConfig,
+              mode,
+              taskType: parsed.taskType,
+              confidence: parsed.confidence,
+              decisionSource: 'fallback-last-high-confidence',
+              fallbackReason: 'low_confidence_reuse_last_route'
+            })
+      }
+    }
+
+    const target = lowConfidence ? 'main' : mappedRoute
     return target === 'fast'
-      ? buildSelectionStatus('fast', fastConfig)
-      : buildSelectionStatus('main', mainConfig)
+      ? buildSelectionStatus({
+          target: 'fast',
+          config: fastConfig,
+          mode,
+          taskType: parsed.taskType,
+          confidence: parsed.confidence,
+          decisionSource: 'classifier'
+        })
+      : buildSelectionStatus({
+          target: 'main',
+          config: mainConfig,
+          mode,
+          taskType: parsed.taskType,
+          confidence: parsed.confidence,
+          decisionSource: lowConfidence ? 'fallback-main' : 'classifier',
+          ...(lowConfidence ? { fallbackReason: 'low_confidence_main' } : {})
+        })
   } catch {
-    return buildSelectionStatus('main', mainConfig, 'classification_failed')
+    return buildSelectionStatus({
+      target: 'main',
+      config: mainConfig,
+      mode,
+      decisionSource: 'fallback-main',
+      fallbackReason: 'classification_failed'
+    })
   } finally {
     clearTimeout(timeout)
     options.signal?.removeEventListener('abort', abort)

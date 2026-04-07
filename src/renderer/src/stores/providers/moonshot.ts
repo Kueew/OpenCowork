@@ -7,7 +7,7 @@ export const moonshotCodingPreset: BuiltinProviderPreset = {
   defaultBaseUrl: 'https://api.kimi.com/coding/',
   homepage: 'https://www.kimi.com',
   apiKeyUrl: 'https://www.kimi.com/code/console?from=membership',
-  defaultEnabled: true,
+  defaultEnabled: false,
   userAgent: 'RooCode/3.48.0',
   defaultModels: [
     {

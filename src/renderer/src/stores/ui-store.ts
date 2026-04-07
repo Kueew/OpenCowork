@@ -34,13 +34,40 @@ export type PreviewSource = 'file' | 'dev-server' | 'markdown'
 
 export type AutoModelRoute = 'main' | 'fast'
 
+export type AutoModelTaskType =
+  | 'rewrite'
+  | 'summarize'
+  | 'translate'
+  | 'format'
+  | 'qa'
+  | 'explain'
+  | 'compare'
+  | 'extract'
+  | 'plan'
+  | 'debug'
+  | 'implement'
+  | 'analyze'
+  | 'other'
+
+export type AutoModelConfidence = 'high' | 'medium' | 'low'
+
+export type AutoModelDecisionSource =
+  | 'classifier'
+  | 'legacy-classifier'
+  | 'fallback-main'
+  | 'fallback-last-high-confidence'
+
 export interface AutoModelSelectionStatus {
   source: 'auto'
+  mode?: AppMode
   target: AutoModelRoute
   providerId?: string
   modelId?: string
   providerName?: string
   modelName?: string
+  taskType?: AutoModelTaskType
+  confidence?: AutoModelConfidence
+  decisionSource?: AutoModelDecisionSource
   fallbackReason?: string
   selectedAt: number
 }
@@ -253,9 +280,17 @@ interface UIStore {
   setMessageListViewState: (sessionId: string, state: MessageListViewState | null) => void
   getMessageListViewState: (sessionId?: string | null) => MessageListViewState | null
   autoModelSelectionsBySession: Record<string, AutoModelSelectionStatus | null>
+  autoModelHighConfidenceSelectionsBySession: Record<string, AutoModelSelectionStatus | null>
   autoModelRoutingStatesBySession: Record<string, AutoModelRoutingState>
   setAutoModelSelection: (sessionId: string, status: AutoModelSelectionStatus | null) => void
   getAutoModelSelection: (sessionId?: string | null) => AutoModelSelectionStatus | null
+  setAutoModelHighConfidenceSelection: (
+    sessionId: string,
+    status: AutoModelSelectionStatus | null
+  ) => void
+  getAutoModelHighConfidenceSelection: (
+    sessionId?: string | null
+  ) => AutoModelSelectionStatus | null
   setAutoModelRoutingState: (sessionId: string, status: AutoModelRoutingState) => void
   getAutoModelRoutingState: (sessionId?: string | null) => AutoModelRoutingState
 
@@ -294,11 +329,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
       mode,
       rightPanelOpen: mode === 'cowork' || mode === 'acp',
       rightPanelTab:
-        mode === 'acp'
-          ? 'acp'
-          : state.rightPanelTab === 'acp'
-            ? 'steps'
-            : state.rightPanelTab,
+        mode === 'acp' ? 'acp' : state.rightPanelTab === 'acp' ? 'steps' : state.rightPanelTab,
       rightPanelSection: mode === 'acp' ? 'monitoring' : state.rightPanelSection,
       leftSidebarOpen: mode === 'cowork' || mode === 'acp' ? false : state.leftSidebarOpen
     })),
@@ -501,6 +532,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   activeScopedSessionId: null,
   messageListViewStatesBySession: {},
   autoModelSelectionsBySession: {},
+  autoModelHighConfidenceSelectionsBySession: {},
   autoModelRoutingStatesBySession: {},
   syncSessionScopedState: (sessionId) =>
     set((state) => {
@@ -541,6 +573,18 @@ export const useUIStore = create<UIStore>((set, get) => ({
     const targetSessionId = resolveScopedSessionId(sessionId, get().activeScopedSessionId)
     if (!targetSessionId) return null
     return get().autoModelSelectionsBySession[targetSessionId] ?? null
+  },
+  setAutoModelHighConfidenceSelection: (sessionId, status) =>
+    set((state) => ({
+      autoModelHighConfidenceSelectionsBySession: {
+        ...state.autoModelHighConfidenceSelectionsBySession,
+        [sessionId]: status
+      }
+    })),
+  getAutoModelHighConfidenceSelection: (sessionId) => {
+    const targetSessionId = resolveScopedSessionId(sessionId, get().activeScopedSessionId)
+    if (!targetSessionId) return null
+    return get().autoModelHighConfidenceSelectionsBySession[targetSessionId] ?? null
   },
   setAutoModelRoutingState: (sessionId, status) =>
     set((state) => ({

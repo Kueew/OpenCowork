@@ -413,6 +413,7 @@
     "homeDescAutoClarify": "发送后会自动挑选更适合追问、澄清和收敛方案的模型。",
     "homeDescAutoCowork": "发送后会自动挑选更适合读项目、改文件和调用工具的模型。",
     "homeDescAutoCode": "发送后会自动挑选更适合写代码、重构和分析问题的模型。",
+    "homeDescAutoAcp": "发送后会自动挑选更适合架构确认、约束澄清和执行拆分的模型。",
     "homeDescChatGeneral": "适合日常对话、写作整理和轻量问题。",
     "homeDescChatVision": "适合日常对话，也能结合图片内容快速回答。",
     "homeDescClarifyGeneral": "适合连续提问、梳理目标和补齐约束。",

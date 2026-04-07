@@ -7,7 +7,7 @@ export const minimaxCodingPreset: BuiltinProviderPreset = {
   defaultBaseUrl: 'https://api.minimaxi.com/anthropic',
   homepage: 'https://platform.minimaxi.com/subscribe/coding-plan',
   apiKeyUrl: 'https://platform.minimaxi.com/user-center/basic-information/interface-key',
-  defaultEnabled: true,
+  defaultEnabled: false,
   defaultModels: [
     // Coding Plan models (official docs: same Anthropic endpoint, dedicated Coding Plan key)
     {

@@ -3,6 +3,7 @@ export type { BuiltinProviderPreset } from './types'
 import { routinAiPlanPreset, routinAiPreset } from './routin-ai'
 import { openaiPreset } from './openai'
 import { anthropicPreset } from './anthropic'
+import { longcatPreset } from './longcat'
 import { googlePreset } from './google'
 import { deepseekPreset } from './deepseek'
 import { openrouterPreset } from './openrouter'
@@ -25,6 +26,7 @@ export const builtinProviderPresets: BuiltinProviderPreset[] = [
   routinAiPlanPreset,
   openaiPreset,
   anthropicPreset,
+  longcatPreset,
   googlePreset,
   deepseekPreset,
   openrouterPreset,

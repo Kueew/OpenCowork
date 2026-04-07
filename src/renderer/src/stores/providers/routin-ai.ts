@@ -948,6 +948,7 @@ export const routinAiPreset: BuiltinProviderPreset = {
       icon: 'doubao',
       enabled: true,
       supportsVision: true,
+      supportsFunctionCall: true,
       contextLength: 256_000,
       inputPrice: 0.2,
       outputPrice: 2,

@@ -7,7 +7,7 @@ export const bigmodelCodingPreset: BuiltinProviderPreset = {
   defaultBaseUrl: 'https://open.bigmodel.cn/api/anthropic',
   homepage: 'https://bigmodel.cn/glm-coding',
   apiKeyUrl: 'https://bigmodel.cn/usercenter/apikeys',
-  defaultEnabled: true,
+  defaultEnabled: false,
   defaultModels: [
     // GLM-5 (Max & Pro tiers only, consumes 2-3x quota)
     {

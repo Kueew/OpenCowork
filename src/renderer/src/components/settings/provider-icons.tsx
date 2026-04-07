@@ -19,6 +19,7 @@ const providerIconSlugMap: Record<string, string> = {
   'azure-openai': 'azureai',
   moonshot: 'moonshot',
   'moonshot-coding': 'moonshot',
+  longcat: 'anthropic',
   qwen: 'qwen',
   'qwen-coding': 'qwen',
   baidu: 'baidu',

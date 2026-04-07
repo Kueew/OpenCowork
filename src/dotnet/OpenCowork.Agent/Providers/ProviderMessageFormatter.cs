@@ -553,7 +553,7 @@ internal static class ProviderMessageFormatter
 
     private static JsonNode FormatOpenAiToolResultContent(object? content)
     {
-        return ToJsonNode(content) ?? JsonValue.Create(string.Empty)!;
+        return ParseJsonString(SerializeToolResultContent(content));
     }
 
     private static JsonNode FormatAnthropicToolResultContent(object? content)
