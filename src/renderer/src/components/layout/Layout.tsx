@@ -1185,12 +1185,13 @@ export function Layout({ updateInfo, onOpenUpdateDialog }: LayoutProps): React.J
       >
         <DialogContent
           showCloseButton={false}
-          className="flex h-[calc(100vh-5rem)] w-[70vw] max-w-[70vw] flex-col overflow-hidden p-0 sm:max-w-[70vw]"
+          className="flex h-[calc(100vh-5rem)] flex-col overflow-hidden p-0"
+          style={{ width: '70vw', maxWidth: '70vw' }}
         >
           <DialogHeader className="shrink-0 border-b px-4 py-3">
             <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <DialogTitle className="truncate text-sm">
+              <div className="min-w-0 flex-1">
+                <DialogTitle className="truncate pr-2 text-sm">
                   {miniWindowSession?.title ?? t('topbar.openSession')}
                 </DialogTitle>
                 <div className="mt-1 max-w-full truncate text-xs text-muted-foreground">
