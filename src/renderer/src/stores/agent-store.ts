@@ -463,6 +463,10 @@ function rebuildRunningSubAgentDerived(state: {
   state.runningSubAgentSessionIdsSig = Array.from(runningSessionIds).sort().join('\u0000')
 }
 
+function buildSubAgentSummary(agent: SubAgentState): SubAgentState {
+  return cloneSubAgentStateSnapshot(agent)
+}
+
 export interface BackgroundProcessState {
   id: string
   command: string
@@ -535,6 +539,13 @@ function trimBackgroundProcessMap(map: Record<string, BackgroundProcessState>): 
   const removeCount = entries.length - MAX_BACKGROUND_PROCESS_ENTRIES
   for (let i = 0; i < removeCount; i++) {
     delete map[entries[i][0]]
+  }
+}
+
+function buildBackgroundProcessSummary(process: BackgroundProcessState): BackgroundProcessState {
+  return {
+    ...process,
+    output: ''
   }
 }
 
@@ -638,6 +649,8 @@ interface AgentStore {
   pendingToolCalls: ToolCallState[]
   executedToolCalls: ToolCallState[]
   runChangesByRunId: Record<string, AgentRunChangeSet>
+  sessionSubAgentSummaries: Record<string, SubAgentState[]>
+  sessionBackgroundProcessSummaries: Record<string, BackgroundProcessState[]>
 
   /** Per-session agent running state for sidebar indicators */
   runningSessions: Record<string, 'running' | 'completed'>
@@ -659,6 +672,8 @@ interface AgentStore {
   /** Tool names approved by user during this session — auto-approve on repeat */
   approvedToolNames: string[]
   addApprovedTool: (name: string) => void
+  getSessionSubAgentSummaries: (sessionId: string) => SubAgentState[]
+  getSessionBackgroundProcessSummaries: (sessionId: string) => BackgroundProcessState[]
 
   /** Background command sessions (spawned by Bash with run_in_background=true) */
   backgroundProcesses: Record<string, BackgroundProcessState>
@@ -703,6 +718,7 @@ interface AgentStore {
 
   /** Remove all subagent / tool-call data that belongs to the given session */
   clearSessionData: (sessionId: string) => void
+  releaseDormantSessionData: (residentSessionIds: string[]) => void
 
   // Approval flow
   requestApproval: (toolCallId: string) => Promise<boolean>
@@ -733,6 +749,8 @@ export const useAgentStore = create<AgentStore>()(
       runningSubAgentNamesSig: '',
       runningSubAgentSessionIdsSig: '',
       approvedToolNames: [],
+      sessionSubAgentSummaries: {},
+      sessionBackgroundProcessSummaries: {},
       backgroundProcesses: {},
       foregroundShellExecByToolUseId: {},
 
@@ -877,6 +895,11 @@ export const useAgentStore = create<AgentStore>()(
         })
       },
 
+      getSessionSubAgentSummaries: (sessionId) => get().sessionSubAgentSummaries[sessionId] ?? [],
+
+      getSessionBackgroundProcessSummaries: (sessionId) =>
+        get().sessionBackgroundProcessSummaries[sessionId] ?? [],
+
       registerForegroundShellExec: (toolUseId, execId) => {
         set((state) => {
           state.foregroundShellExecByToolUseId[toolUseId] = execId
@@ -907,7 +930,7 @@ export const useAgentStore = create<AgentStore>()(
           set((state) => {
             for (const item of list) {
               const existing = state.backgroundProcesses[item.id]
-              state.backgroundProcesses[item.id] = {
+              const nextProcess = {
                 id: item.id,
                 command: item.command ?? existing?.command ?? '',
                 cwd: item.cwd ?? existing?.cwd,
@@ -921,6 +944,14 @@ export const useAgentStore = create<AgentStore>()(
                 exitCode: item.exitCode ?? existing?.exitCode,
                 createdAt: item.createdAt ?? existing?.createdAt ?? Date.now(),
                 updatedAt: Date.now()
+              } satisfies BackgroundProcessState
+              state.backgroundProcesses[item.id] = nextProcess
+              if (nextProcess.sessionId) {
+                const previous = state.sessionBackgroundProcessSummaries[nextProcess.sessionId] ?? []
+                state.sessionBackgroundProcessSummaries[nextProcess.sessionId] = [
+                  buildBackgroundProcessSummary(nextProcess),
+                  ...previous.filter((process) => process.id !== nextProcess.id)
+                ].slice(0, MAX_BACKGROUND_PROCESS_ENTRIES)
               }
             }
             trimBackgroundProcessMap(state.backgroundProcesses)
@@ -944,11 +975,19 @@ export const useAgentStore = create<AgentStore>()(
           set((state) => {
             const now = Date.now()
             for (const payload of pending) {
-              state.backgroundProcesses[payload.id] = applyProcessOutputEvent(
+              const nextProcess = applyProcessOutputEvent(
                 state.backgroundProcesses[payload.id],
                 payload,
                 now
               )
+              state.backgroundProcesses[payload.id] = nextProcess
+              if (nextProcess.sessionId) {
+                const previous = state.sessionBackgroundProcessSummaries[nextProcess.sessionId] ?? []
+                state.sessionBackgroundProcessSummaries[nextProcess.sessionId] = [
+                  buildBackgroundProcessSummary(nextProcess),
+                  ...previous.filter((process) => process.id !== nextProcess.id)
+                ].slice(0, MAX_BACKGROUND_PROCESS_ENTRIES)
+              }
             }
             trimBackgroundProcessMap(state.backgroundProcesses)
           })
@@ -989,7 +1028,7 @@ export const useAgentStore = create<AgentStore>()(
       registerBackgroundProcess: (process) => {
         set((state) => {
           const now = Date.now()
-          state.backgroundProcesses[process.id] = {
+          const nextProcess = {
             id: process.id,
             command: process.command,
             cwd: process.cwd,
@@ -1003,6 +1042,14 @@ export const useAgentStore = create<AgentStore>()(
             exitCode: undefined,
             createdAt: state.backgroundProcesses[process.id]?.createdAt ?? now,
             updatedAt: now
+          } satisfies BackgroundProcessState
+          state.backgroundProcesses[process.id] = nextProcess
+          if (nextProcess.sessionId) {
+            const previous = state.sessionBackgroundProcessSummaries[nextProcess.sessionId] ?? []
+            state.sessionBackgroundProcessSummaries[nextProcess.sessionId] = [
+              buildBackgroundProcessSummary(nextProcess),
+              ...previous.filter((item) => item.id !== nextProcess.id)
+            ].slice(0, MAX_BACKGROUND_PROCESS_ENTRIES)
           }
           trimBackgroundProcessMap(state.backgroundProcesses)
         })
@@ -1081,6 +1128,8 @@ export const useAgentStore = create<AgentStore>()(
           state.approvedToolNames = []
           state.foregroundShellExecByToolUseId = {}
           state.sessionToolCallsCache = {}
+          state.sessionSubAgentSummaries = {}
+          state.sessionBackgroundProcessSummaries = {}
         })
       },
 
@@ -1222,6 +1271,13 @@ export const useAgentStore = create<AgentStore>()(
                 usage: undefined,
                 startedAt: Date.now(),
                 completedAt: null
+              }
+              if (sessionId) {
+                const previous = state.sessionSubAgentSummaries[sessionId] ?? []
+                state.sessionSubAgentSummaries[sessionId] = [
+                  buildSubAgentSummary(state.activeSubAgents[id]),
+                  ...previous.filter((item) => item.toolUseId !== id)
+                ].slice(0, MAX_SUBAGENT_HISTORY)
               }
               rebuildRunningSubAgentDerived(state)
               break
@@ -1376,6 +1432,13 @@ export const useAgentStore = create<AgentStore>()(
                 sa.usage = event.result.usage
                 sa.reportStatus = sa.report.trim() ? 'submitted' : 'missing'
                 state.completedSubAgents[id] = sa
+                if (sa.sessionId) {
+                  const previous = state.sessionSubAgentSummaries[sa.sessionId] ?? []
+                  state.sessionSubAgentSummaries[sa.sessionId] = [
+                    buildSubAgentSummary(sa),
+                    ...previous.filter((item) => item.toolUseId !== id)
+                  ].slice(0, MAX_SUBAGENT_HISTORY)
+                }
                 upsertSubAgentHistory(state.subAgentHistory, sa)
                 trimCompletedSubAgentsMap(state.completedSubAgents)
                 delete state.activeSubAgents[id]
@@ -1424,6 +1487,7 @@ export const useAgentStore = create<AgentStore>()(
           // Remove history entries belonging to the session
           state.subAgentHistory = state.subAgentHistory.filter((sa) => sa.sessionId !== sessionId)
           trimSubAgentHistory(state.subAgentHistory)
+          delete state.sessionSubAgentSummaries[sessionId]
 
           // Remove cached tool calls for this session
           delete state.sessionToolCallsCache[sessionId]
@@ -1441,10 +1505,40 @@ export const useAgentStore = create<AgentStore>()(
               delete state.backgroundProcesses[key]
             }
           }
+          delete state.sessionBackgroundProcessSummaries[sessionId]
         })
         for (const id of processIdsToKill) {
           ipcClient.invoke(IPC.PROCESS_KILL, { id }).catch(() => {})
         }
+      },
+
+      releaseDormantSessionData: (residentSessionIds) => {
+        const residentSet = new Set(residentSessionIds)
+        set((state) => {
+          const targetSessionIds = new Set<string>([
+            ...Object.keys(state.sessionToolCallsCache),
+            ...Object.keys(state.sessionSubAgentSummaries),
+            ...Object.keys(state.sessionBackgroundProcessSummaries)
+          ])
+
+          for (const sessionId of targetSessionIds) {
+            if (residentSet.has(sessionId)) continue
+
+            delete state.sessionToolCallsCache[sessionId]
+
+            const subAgents = state.sessionSubAgentSummaries[sessionId]
+            if (subAgents && subAgents.length > 0) {
+              state.sessionSubAgentSummaries[sessionId] = subAgents.map(buildSubAgentSummary)
+            }
+
+            const processes = state.sessionBackgroundProcessSummaries[sessionId]
+            if (processes && processes.length > 0) {
+              state.sessionBackgroundProcessSummaries[sessionId] = processes.map(
+                buildBackgroundProcessSummary
+              )
+            }
+          }
+        })
       },
 
       clearPendingApprovals: () => {

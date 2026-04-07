@@ -9,6 +9,20 @@ param(
 $ProjectPath = Join-Path $PSScriptRoot "..\src\dotnet\OpenCowork.Agent\OpenCowork.Agent.csproj"
 $OutputBase = Join-Path $PSScriptRoot "..\resources\sidecar"
 
+# Force UTF-8 for native tool output to avoid mojibake in Windows terminals and log viewers.
+if ($IsWindows -or $env:OS -eq "Windows_NT") {
+    try {
+        chcp 65001 | Out-Null
+    } catch {
+        # Ignore if the host disallows code page changes.
+    }
+}
+
+[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$env:DOTNET_CLI_UI_LANGUAGE = "en"
+
 # Auto-detect runtime if not specified
 if (-not $Runtime) {
     if ($IsWindows -or $env:OS -eq "Windows_NT") {

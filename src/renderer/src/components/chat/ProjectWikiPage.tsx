@@ -242,6 +242,12 @@ export function ProjectWikiPage(): React.JSX.Element {
     action: 'generate' | 'regenerate' | 'incremental'
   ): Promise<void> => {
     if (!activeProjectId || !activeProject?.workingFolder) return
+    if (runningAction !== null) {
+      if (runningAction !== action) {
+        toast.info('Wiki 正在执行其他生成任务，请先取消当前任务')
+      }
+      return
+    }
     setRunningAction(action)
     setGenerationProgress({
       stage: 'preparing',
@@ -387,7 +393,7 @@ export function ProjectWikiPage(): React.JSX.Element {
                 variant="outline"
                 className="h-7 flex-1 text-[11px]"
                 onClick={() => void handleIncrementalGenerate()}
-                disabled={runningAction !== null}
+                disabled={runningAction === 'incremental'}
               >
                 <RefreshCw className="size-3.5" />
                 {runningAction === 'incremental' ? '增量中' : '增量生成'}
@@ -397,7 +403,7 @@ export function ProjectWikiPage(): React.JSX.Element {
                 variant="outline"
                 className="h-7 flex-1 text-[11px]"
                 onClick={() => void handleGenerate()}
-                disabled={runningAction !== null}
+                disabled={runningAction === 'generate'}
               >
                 <RotateCcw className="size-3.5" />
                 {runningAction === 'generate' ? '生成中' : '全量生成'}
@@ -407,7 +413,7 @@ export function ProjectWikiPage(): React.JSX.Element {
                 variant="outline"
                 className="h-7 flex-1 text-[11px]"
                 onClick={() => void handleRegenerate()}
-                disabled={runningAction !== null}
+                disabled={runningAction === 'regenerate'}
               >
                 <RotateCcw className="size-3.5" />
                 {runningAction === 'regenerate' ? '重建中' : '重新生成'}

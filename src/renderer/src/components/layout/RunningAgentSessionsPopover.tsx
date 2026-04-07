@@ -7,7 +7,7 @@ import { useChatStore } from '@renderer/stores/chat-store'
 import { useTeamStore } from '@renderer/stores/team-store'
 import { useUIStore } from '@renderer/stores/ui-store'
 import { useTranslation } from 'react-i18next'
-import { useEffect, useMemo } from 'react'
+import { useMemo, useState } from 'react'
 
 interface ProjectGroup {
   projectId: string
@@ -129,6 +129,7 @@ function formatTime(ts: number): string {
 
 export function RunningAgentSessionsPopover(): React.JSX.Element | null {
   const { t } = useTranslation('layout')
+  const [open, setOpen] = useState(false)
   const sessions = useChatStore((s) => s.sessions)
   const projects = useChatStore((s) => s.projects)
   const activeSessionId = useChatStore((s) => s.activeSessionId)
@@ -137,40 +138,63 @@ export function RunningAgentSessionsPopover(): React.JSX.Element | null {
   const backgroundProcesses = useAgentStore((s) => s.backgroundProcesses)
   const activeTeamSessionId = useTeamStore((s) => s.activeTeam?.sessionId)
 
-  const groups = useMemo<ProjectGroup[]>(() => {
-    const projectMap = new Map(projects.map((project) => [project.id, project]))
-    const runningSessionIds = new Set<string>()
+  const runningSessionIds = useMemo(() => {
+    const ids = new Set<string>()
 
     for (const [sessionId, status] of Object.entries(runningSessions)) {
-      if (status === 'running') runningSessionIds.add(sessionId)
+      if (status === 'running') ids.add(sessionId)
     }
 
     for (const sessionId of runningSubAgentSessionIdsSig ? runningSubAgentSessionIdsSig.split('\u0000') : []) {
-      if (sessionId) runningSessionIds.add(sessionId)
+      if (sessionId) ids.add(sessionId)
     }
 
     for (const process of Object.values(backgroundProcesses)) {
       if (process.status === 'running' && process.sessionId) {
-        runningSessionIds.add(process.sessionId)
+        ids.add(process.sessionId)
       }
     }
 
     if (activeTeamSessionId) {
-      runningSessionIds.add(activeTeamSessionId)
+      ids.add(activeTeamSessionId)
     }
 
+    return ids
+  }, [activeTeamSessionId, backgroundProcesses, runningSessions, runningSubAgentSessionIdsSig])
+
+  const totalSessions = useMemo(() => {
+    let count = 0
+    for (const session of sessions) {
+      if (session.projectId && runningSessionIds.has(session.id)) count += 1
+    }
+    return count
+  }, [runningSessionIds, sessions])
+
+  const groups = useMemo<ProjectGroup[]>(() => {
+    if (!open) return []
+
+    const projectMap = new Map(projects.map((project) => [project.id, project]))
     const grouped = new Map<string, ProjectGroup>()
+    const agentStore = useAgentStore.getState()
+
     for (const session of sessions) {
       if (!runningSessionIds.has(session.id) || !session.projectId) continue
       const project = projectMap.get(session.projectId)
       const existing = grouped.get(session.projectId)
+      const fallbackPreview = (() => {
+        const subAgentSummary = agentStore.getSessionSubAgentSummaries(session.id)[0]
+        if (subAgentSummary?.report?.trim()) return subAgentSummary.report.trim()
+        if (subAgentSummary?.streamingText?.trim()) return subAgentSummary.streamingText.trim()
+        const backgroundProcess = agentStore.getSessionBackgroundProcessSummaries(session.id)[0]
+        return backgroundProcess?.description?.trim() || backgroundProcess?.command?.trim() || ''
+      })()
       const sessionEntry = {
         sessionId: session.id,
         title: session.title,
         updatedAt: session.updatedAt,
         mode: session.mode,
         modelLabel: session.modelId,
-        lastMessagePreview: getSessionPreview(session.messages)
+        lastMessagePreview: getSessionPreview(session.messages) || fallbackPreview
       }
       if (existing) {
         existing.sessions.push(sessionEntry)
@@ -191,20 +215,10 @@ export function RunningAgentSessionsPopover(): React.JSX.Element | null {
         sessions: group.sessions.sort((a, b) => b.updatedAt - a.updatedAt)
       }))
       .sort((a, b) => b.updatedAt - a.updatedAt)
-  }, [activeTeamSessionId, backgroundProcesses, projects, runningSessions, runningSubAgentSessionIdsSig, sessions, t])
-
-  const totalSessions = groups.reduce((sum, group) => sum + group.sessions.length, 0)
-
-  useEffect(() => {
-    const chatState = useChatStore.getState()
-    const runningIds = groups.flatMap((group) => group.sessions.map((session) => session.sessionId))
-    for (const sessionId of runningIds) {
-      void chatState.loadRecentSessionMessages(sessionId, false, 12)
-    }
-  }, [groups])
+  }, [open, projects, runningSessionIds, sessions, t])
 
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={setOpen}>
       <Tooltip>
         <TooltipTrigger asChild>
           <span className="inline-flex">

@@ -304,6 +304,7 @@ interface ChatStore {
   // Helpers
   getActiveSession: () => Session | undefined
   getSessionMessages: (sessionId: string) => UnifiedMessage[]
+  releaseDormantSessions: () => void
 }
 
 interface ProjectRow {
@@ -433,6 +434,62 @@ function trimSessionMessageWindow(session: Session): void {
   if (trimCount <= 0) return
   session.messages.splice(0, trimCount)
   session.loadedRangeStart = Math.min(session.messageCount, session.loadedRangeStart + trimCount)
+}
+
+function getResidentSessionIds(state: Pick<ChatStore, 'activeSessionId' | 'streamingMessages'>): Set<string> {
+  const residentSessionIds = new Set<string>()
+  if (state.activeSessionId) {
+    residentSessionIds.add(state.activeSessionId)
+  }
+
+  const uiState = useUIStore.getState()
+  if (uiState.miniSessionWindowOpen && uiState.miniSessionWindowSessionId) {
+    residentSessionIds.add(uiState.miniSessionWindowSessionId)
+  }
+
+  for (const sessionId of Object.keys(state.streamingMessages)) {
+    residentSessionIds.add(sessionId)
+  }
+
+  return residentSessionIds
+}
+
+function releaseDormantSessionMemory(
+  state: Pick<ChatStore, 'sessions' | 'activeSessionId' | 'streamingMessages' | 'generatingImageMessages'>
+): void {
+  const residentSessionIds = getResidentSessionIds(state)
+  const releasedMessageIds = new Set<string>()
+  useAgentStore.getState().releaseDormantSessionData([...residentSessionIds])
+  usePlanStore.getState().releaseDormantPlans(state.activeSessionId)
+  useTaskStore.getState().releaseDormantSessionTasks([...residentSessionIds])
+  useUIStore.getState().releaseDormantSessionUiState(state.activeSessionId)
+
+  for (const session of state.sessions) {
+    if (residentSessionIds.has(session.id)) continue
+
+    delete session.promptSnapshot
+
+    if (state.streamingMessages[session.id]) continue
+    if (!session.messagesLoaded && session.messages.length === 0) continue
+
+    for (const message of session.messages) {
+      releasedMessageIds.add(message.id)
+    }
+
+    session.lastKnownMessageCount = session.messageCount
+    session.messagesLoaded = false
+    session.messages = []
+    session.loadedRangeStart = session.messageCount
+    session.loadedRangeEnd = session.messageCount
+  }
+
+  if (releasedMessageIds.size === 0) return
+
+  for (const messageId of Object.keys(state.generatingImageMessages)) {
+    if (releasedMessageIds.has(messageId)) {
+      delete state.generatingImageMessages[messageId]
+    }
+  }
 }
 
 function sanitizeToolBlocksForResend(messages: UnifiedMessage[]): {
@@ -641,10 +698,24 @@ export const useChatStore = create<ChatStore>()(
         nextSessionId = sessionsInProject[0]?.id ?? null
         state.activeSessionId = nextSessionId
       })
-      if (nextSessionId) {
-        void get().loadRecentSessionMessages(nextSessionId)
-      }
       useUIStore.getState().syncSessionScopedState(nextSessionId)
+      get().releaseDormantSessions()
+      if (nextSessionId) {
+        void get()
+          .loadRecentSessionMessages(nextSessionId)
+          .finally(() => get().releaseDormantSessions())
+        void usePlanStore
+          .getState()
+          .loadPlanForSession(nextSessionId)
+          .then((plan) => {
+            const planStore = usePlanStore.getState()
+            if (useChatStore.getState().activeSessionId === nextSessionId) {
+              planStore.setActivePlan(plan?.id ?? null)
+            }
+          })
+      } else {
+        usePlanStore.getState().setActivePlan(null)
+      }
     },
 
     createProject: async (input) => {
@@ -1121,13 +1192,15 @@ export const useChatStore = create<ChatStore>()(
           }
           await get().loadRecentSessionMessages(nextActiveSessionId)
           await useTaskStore.getState().loadTasksForSession(nextActiveSessionId)
-          const activePlan = usePlanStore.getState().getPlanBySession(nextActiveSessionId)
-          usePlanStore.getState().setActivePlan(activePlan?.id ?? null)
+          const planStore = usePlanStore.getState()
+          const activePlan = await planStore.loadPlanForSession(nextActiveSessionId)
+          planStore.setActivePlan(activePlan?.id ?? null)
         } else {
           useTaskStore.getState().clearTasks()
           usePlanStore.getState().setActivePlan(null)
         }
         useUIStore.getState().syncSessionScopedState(nextActiveSessionId)
+        get().releaseDormantSessions()
       } catch (err) {
         console.error('[ChatStore] Failed to load from DB:', err)
         set({ _loaded: true })
@@ -1216,6 +1289,7 @@ export const useChatStore = create<ChatStore>()(
       useTaskStore.getState().clearTasks()
       usePlanStore.getState().setActivePlan(null)
       useUIStore.getState().syncSessionScopedState(id)
+      get().releaseDormantSessions()
       return id
     },
 
@@ -1269,15 +1343,21 @@ export const useChatStore = create<ChatStore>()(
       }
 
       if (nextActiveId) {
-        void get().loadRecentSessionMessages(nextActiveId)
+        void get()
+          .loadRecentSessionMessages(nextActiveId)
+          .finally(() => get().releaseDormantSessions())
         void useTaskStore.getState().loadTasksForSession(nextActiveId)
-        const activePlan = usePlanStore.getState().getPlanBySession(nextActiveId)
-        usePlanStore.getState().setActivePlan(activePlan?.id ?? null)
+        const planStore = usePlanStore.getState()
+        void planStore.loadPlanForSession(nextActiveId).then((loadedPlan) => {
+          if (useChatStore.getState().activeSessionId !== nextActiveId) return
+          usePlanStore.getState().setActivePlan(loadedPlan?.id ?? null)
+        })
       } else {
         useTaskStore.getState().clearTasks()
         usePlanStore.getState().setActivePlan(null)
       }
       useUIStore.getState().syncSessionScopedState(nextActiveId)
+      get().releaseDormantSessions()
     },
 
     setActiveSession: (id) => {
@@ -1289,24 +1369,9 @@ export const useChatStore = create<ChatStore>()(
           state.activeProjectId = activeSession.projectId
         }
         state.streamingMessageId = id ? (state.streamingMessages[id] ?? null) : null
-
-        // Release memory for the previous session: drop cached prompt snapshot
-        // and offload messages (they'll be reloaded from DB on next activation).
-        if (prevId && prevId !== id) {
-          const prevSession = state.sessions.find((session) => session.id === prevId)
-          if (prevSession) {
-            delete prevSession.promptSnapshot
-            prevSession.lastKnownMessageCount = prevSession.messageCount
-            if (!state.streamingMessages[prevId] && prevSession.messages.length > 0) {
-              prevSession.messagesLoaded = false
-              prevSession.messages = []
-              prevSession.loadedRangeStart = prevSession.messageCount
-              prevSession.loadedRangeEnd = prevSession.messageCount
-            }
-          }
-        }
       })
       useUIStore.getState().syncSessionScopedState(id)
+      get().releaseDormantSessions()
       // Switch per-session tool calls in agent-store
       useAgentStore.getState().switchToolCallSession(prevId, id)
       // Restore per-session model selection to global provider store
@@ -1325,12 +1390,20 @@ export const useChatStore = create<ChatStore>()(
       // Load tasks for the new session
       if (id) {
         void useTaskStore.getState().loadTasksForSession(id)
-        void get().loadRecentSessionMessages(id)
-        const activePlan = usePlanStore.getState().getPlanBySession(id)
-        usePlanStore.getState().setActivePlan(activePlan?.id ?? null)
+        void get()
+          .loadRecentSessionMessages(id)
+          .finally(() => get().releaseDormantSessions())
+        const planStore = usePlanStore.getState()
+        const activePlan = planStore.getPlanBySession(id)
+        planStore.setActivePlan(activePlan?.id ?? null)
+        void planStore.loadPlanForSession(id).then((loadedPlan) => {
+          if (useChatStore.getState().activeSessionId !== id) return
+          usePlanStore.getState().setActivePlan(loadedPlan?.id ?? activePlan?.id ?? null)
+        })
       } else {
         useTaskStore.getState().clearTasks()
         usePlanStore.getState().setActivePlan(null)
+        usePlanStore.getState().releaseDormantPlans(null)
       }
     },
 
@@ -1903,6 +1976,7 @@ export const useChatStore = create<ChatStore>()(
         session.lastKnownMessageCount = session.messageCount
         trimSessionMessageWindow(session)
         session.updatedAt = Date.now()
+        releaseDormantSessionMemory(state)
       })
       if (!shouldPersist) return
       dbAddMessage(sessionId, msg, sortOrder)
@@ -2144,6 +2218,7 @@ export const useChatStore = create<ChatStore>()(
         } else {
           delete state.streamingMessages[sessionId]
         }
+        releaseDormantSessionMemory(state)
         // Sync convenience field when updating the active session
         if (sessionId === state.activeSessionId) {
           state.streamingMessageId = id
@@ -2167,6 +2242,15 @@ export const useChatStore = create<ChatStore>()(
     getSessionMessages: (sessionId) => {
       const session = get().sessions.find((s) => s.id === sessionId)
       return session?.messages ?? []
+    },
+
+    releaseDormantSessions: () => {
+      set((state) => {
+        releaseDormantSessionMemory(state)
+        state.streamingMessageId = state.activeSessionId
+          ? (state.streamingMessages[state.activeSessionId] ?? null)
+          : null
+      })
     }
   }))
 )

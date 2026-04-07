@@ -244,8 +244,17 @@ function App(): React.JSX.Element {
 
    // Load sessions and plans from SQLite on startup
    useEffect(() => {
-      useChatStore.getState().loadFromDb()
-      usePlanStore.getState().loadPlansFromDb()
+      void useChatStore
+         .getState()
+         .loadFromDb()
+         .then(async () => {
+            await usePlanStore.getState().loadPlansFromDb()
+            const activeSessionId = useChatStore.getState().activeSessionId
+            const activePlan = activeSessionId
+               ? await usePlanStore.getState().loadPlanForSession(activeSessionId)
+               : undefined
+            usePlanStore.getState().setActivePlan(activePlan?.id ?? null)
+         })
       window.electron.ipcRenderer
          .invoke('settings:get', 'apiKey')
          .then((key) => {

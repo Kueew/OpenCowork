@@ -1,5 +1,5 @@
 import { ClipboardList, FileText, Loader2, PenLine, CheckCircle } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
@@ -14,6 +14,7 @@ import {
 } from '@renderer/components/ui/dialog'
 import { Textarea } from '@renderer/components/ui/textarea'
 import { usePlanStore, type Plan, type PlanStatus } from '@renderer/stores/plan-store'
+import { useShallow } from 'zustand/react/shallow'
 import { useUIStore } from '@renderer/stores/ui-store'
 import { useChatStore } from '@renderer/stores/chat-store'
 import { useAgentStore } from '@renderer/stores/agent-store'
@@ -207,16 +208,50 @@ function PlanContent({ plan }: { plan: Plan }): React.JSX.Element {
 export function PlanPanel(): React.JSX.Element {
   const { t } = useTranslation('cowork')
   const activeSessionId = useChatStore((s) => s.activeSessionId)
-  const plan = usePlanStore((s) => {
-    if (!activeSessionId) return undefined
-    return Object.values(s.plans).find((p) => p.sessionId === activeSessionId)
-  })
+  const planSummary = usePlanStore(
+    useShallow((s) => {
+      if (!activeSessionId) return undefined
+      return s.getPlanBySession(activeSessionId)
+    })
+  )
   const planMode = useUIStore((s) => s.planMode)
   const enterPlanMode = useUIStore((s) => s.enterPlanMode)
   const hasStreamingMessage = useChatStore((s) =>
     activeSessionId ? Boolean(s.streamingMessages[activeSessionId]) : false
   )
   const isRunning = useAgentStore((s) => s.isSessionActive(activeSessionId)) || hasStreamingMessage
+
+  const [plan, setPlan] = useState<Plan | undefined>(planSummary)
+
+  useEffect(() => {
+    setPlan(planSummary)
+  }, [planSummary])
+
+  useEffect(() => {
+    if (!activeSessionId || !planSummary?.id) {
+      setPlan(planSummary)
+      return
+    }
+
+    if (planSummary.content || planSummary.specJson) {
+      setPlan(planSummary)
+      return
+    }
+
+    let cancelled = false
+    void usePlanStore
+      .getState()
+      .loadPlanForSession(activeSessionId)
+      .then((loadedPlan) => {
+        if (!cancelled) {
+          setPlan(loadedPlan ?? planSummary)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeSessionId, planSummary])
 
   if (!plan) {
     return (

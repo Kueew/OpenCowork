@@ -138,6 +138,7 @@ interface TaskStore {
   getProgress: () => { total: number; completed: number; percentage: number }
   /** Clear all tasks in memory (does not touch DB) */
   clearTasks: () => void
+  releaseDormantSessionTasks: (residentSessionIds: string[]) => void
   /** Delete all tasks for a session from DB and memory */
   deleteSessionTasks: (sessionId: string) => void
 
@@ -347,6 +348,22 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
   },
 
   clearTasks: () => set({ tasks: [], todos: [], currentSessionId: null }),
+
+  releaseDormantSessionTasks: (residentSessionIds) => {
+    const residentSet = new Set(residentSessionIds)
+    set((state) => {
+      for (const sessionId of Object.keys(state.tasksBySession)) {
+        if (!residentSet.has(sessionId)) {
+          delete state.tasksBySession[sessionId]
+        }
+      }
+
+      if (state.currentSessionId && !residentSet.has(state.currentSessionId)) {
+        return { tasks: [], todos: [], currentSessionId: null }
+      }
+      return {}
+    })
+  },
 
   deleteSessionTasks: (sessionId) => {
     set((state) => {

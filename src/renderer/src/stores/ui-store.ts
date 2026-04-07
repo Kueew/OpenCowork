@@ -157,6 +157,21 @@ function resolveScopedSessionId(
   return explicitSessionId ?? currentSessionId
 }
 
+function getResidentSessionIds(
+  activeSessionId: string | null,
+  miniSessionWindowOpen: boolean,
+  miniSessionWindowSessionId: string | null
+): Set<string> {
+  const residentSessionIds = new Set<string>()
+  if (activeSessionId) {
+    residentSessionIds.add(activeSessionId)
+  }
+  if (miniSessionWindowOpen && miniSessionWindowSessionId) {
+    residentSessionIds.add(miniSessionWindowSessionId)
+  }
+  return residentSessionIds
+}
+
 interface UIStore {
   mode: AppMode
   miniSessionWindowSessionId: string | null
@@ -284,6 +299,7 @@ interface UIStore {
   messageListViewStatesBySession: Record<string, MessageListViewState | undefined>
   setMessageListViewState: (sessionId: string, state: MessageListViewState | null) => void
   getMessageListViewState: (sessionId?: string | null) => MessageListViewState | null
+  releaseDormantSessionUiState: (sessionId?: string | null) => void
   autoModelSelectionsBySession: Record<string, AutoModelSelectionStatus | null>
   autoModelHighConfidenceSelectionsBySession: Record<string, AutoModelSelectionStatus | null>
   autoModelRoutingStatesBySession: Record<string, AutoModelRoutingState>
@@ -550,12 +566,55 @@ export const useUIStore = create<UIStore>((set, get) => ({
       const scopedPreviewState = sessionId
         ? (state.previewPanelsBySession[sessionId] ?? null)
         : null
-      return {
+      const nextState = {
         activeScopedSessionId: sessionId,
         planMode: sessionId ? !!state.planModesBySession[sessionId] : false,
         previewPanelOpen: !!scopedPreviewState,
         previewPanelState: scopedPreviewState
       }
+      const residentSessionIds = getResidentSessionIds(
+        sessionId,
+        state.miniSessionWindowOpen,
+        state.miniSessionWindowSessionId
+      )
+
+      for (const targetSessionId of Object.keys(state.previewPanelsBySession)) {
+        if (!residentSessionIds.has(targetSessionId)) {
+          delete state.previewPanelsBySession[targetSessionId]
+        }
+      }
+
+      for (const targetSessionId of Object.keys(state.messageListViewStatesBySession)) {
+        if (!residentSessionIds.has(targetSessionId)) {
+          delete state.messageListViewStatesBySession[targetSessionId]
+        }
+      }
+
+      for (const targetSessionId of Object.keys(state.autoModelSelectionsBySession)) {
+        if (!residentSessionIds.has(targetSessionId)) {
+          delete state.autoModelSelectionsBySession[targetSessionId]
+        }
+      }
+
+      for (const targetSessionId of Object.keys(state.autoModelHighConfidenceSelectionsBySession)) {
+        if (!residentSessionIds.has(targetSessionId)) {
+          delete state.autoModelHighConfidenceSelectionsBySession[targetSessionId]
+        }
+      }
+
+      for (const targetSessionId of Object.keys(state.autoModelRoutingStatesBySession)) {
+        if (!residentSessionIds.has(targetSessionId)) {
+          delete state.autoModelRoutingStatesBySession[targetSessionId]
+        }
+      }
+
+      for (const targetSessionId of Object.keys(state.planModesBySession)) {
+        if (!residentSessionIds.has(targetSessionId)) {
+          delete state.planModesBySession[targetSessionId]
+        }
+      }
+
+      return nextState
     }),
   setMessageListViewState: (sessionId, state) =>
     set((currentState) => {
@@ -573,6 +632,76 @@ export const useUIStore = create<UIStore>((set, get) => ({
     if (!targetSessionId) return null
     return get().messageListViewStatesBySession[targetSessionId] ?? null
   },
+  releaseDormantSessionUiState: (sessionId) =>
+    set((state) => {
+      const residentSessionIds = getResidentSessionIds(
+        sessionId ?? state.activeScopedSessionId,
+        state.miniSessionWindowOpen,
+        state.miniSessionWindowSessionId
+      )
+
+      const nextPreviewPanelsBySession = { ...state.previewPanelsBySession }
+      for (const targetSessionId of Object.keys(nextPreviewPanelsBySession)) {
+        if (!residentSessionIds.has(targetSessionId)) {
+          delete nextPreviewPanelsBySession[targetSessionId]
+        }
+      }
+
+      const nextMessageListViewStatesBySession = { ...state.messageListViewStatesBySession }
+      for (const targetSessionId of Object.keys(nextMessageListViewStatesBySession)) {
+        if (!residentSessionIds.has(targetSessionId)) {
+          delete nextMessageListViewStatesBySession[targetSessionId]
+        }
+      }
+
+      const nextAutoModelSelectionsBySession = { ...state.autoModelSelectionsBySession }
+      for (const targetSessionId of Object.keys(nextAutoModelSelectionsBySession)) {
+        if (!residentSessionIds.has(targetSessionId)) {
+          delete nextAutoModelSelectionsBySession[targetSessionId]
+        }
+      }
+
+      const nextAutoModelHighConfidenceSelectionsBySession = {
+        ...state.autoModelHighConfidenceSelectionsBySession
+      }
+      for (const targetSessionId of Object.keys(nextAutoModelHighConfidenceSelectionsBySession)) {
+        if (!residentSessionIds.has(targetSessionId)) {
+          delete nextAutoModelHighConfidenceSelectionsBySession[targetSessionId]
+        }
+      }
+
+      const nextAutoModelRoutingStatesBySession = { ...state.autoModelRoutingStatesBySession }
+      for (const targetSessionId of Object.keys(nextAutoModelRoutingStatesBySession)) {
+        if (!residentSessionIds.has(targetSessionId)) {
+          delete nextAutoModelRoutingStatesBySession[targetSessionId]
+        }
+      }
+
+      const nextPlanModesBySession = { ...state.planModesBySession }
+      for (const targetSessionId of Object.keys(nextPlanModesBySession)) {
+        if (!residentSessionIds.has(targetSessionId)) {
+          delete nextPlanModesBySession[targetSessionId]
+        }
+      }
+
+      const scopedPreviewState = state.activeScopedSessionId
+        ? (nextPreviewPanelsBySession[state.activeScopedSessionId] ?? null)
+        : null
+
+      return {
+        previewPanelsBySession: nextPreviewPanelsBySession,
+        messageListViewStatesBySession: nextMessageListViewStatesBySession,
+        autoModelSelectionsBySession: nextAutoModelSelectionsBySession,
+        autoModelHighConfidenceSelectionsBySession: nextAutoModelHighConfidenceSelectionsBySession,
+        autoModelRoutingStatesBySession: nextAutoModelRoutingStatesBySession,
+        planModesBySession: nextPlanModesBySession,
+        previewPanelOpen: !!scopedPreviewState,
+        previewPanelState: scopedPreviewState,
+        planMode: state.activeScopedSessionId
+          ? !!nextPlanModesBySession[state.activeScopedSessionId]
+          : false
+      }
+    }),
   setAutoModelSelection: (sessionId, status) =>
     set((state) => ({
       autoModelSelectionsBySession: {

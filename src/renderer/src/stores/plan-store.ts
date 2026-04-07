@@ -3,6 +3,7 @@ import { immer } from 'zustand/middleware/immer'
 import { nanoid } from 'nanoid'
 import { ipcClient } from '../lib/ipc/ipc-client'
 import { useChatStore } from './chat-store'
+import { useUIStore } from './ui-store'
 
 // --- Types ---
 
@@ -74,15 +75,55 @@ function rowToPlan(row: PlanRow): Plan {
   }
 }
 
+function stripPlanPayload(plan: Plan): Plan {
+  return {
+    ...plan,
+    content: undefined,
+    specJson: undefined
+  }
+}
+
+function releaseDormantPlanMemory(
+  state: Pick<PlanStore, 'plans' | 'plansBySession' | 'activePlanId'>,
+  sessionId?: string | null
+): void {
+  const residentSessionIds = new Set<string>()
+  const activeChatSessionId = useChatStore.getState().activeSessionId
+  if (activeChatSessionId) {
+    residentSessionIds.add(activeChatSessionId)
+  }
+  if (sessionId) {
+    residentSessionIds.add(sessionId)
+  }
+
+  const uiState = useUIStore.getState()
+  if (uiState.miniSessionWindowOpen && uiState.miniSessionWindowSessionId) {
+    residentSessionIds.add(uiState.miniSessionWindowSessionId)
+  }
+
+  const activePlanSessionId = state.activePlanId ? state.plans[state.activePlanId]?.sessionId : undefined
+  if (activePlanSessionId) {
+    residentSessionIds.add(activePlanSessionId)
+  }
+
+  for (const [planId, plan] of Object.entries(state.plans)) {
+    if (residentSessionIds.has(plan.sessionId)) continue
+    state.plans[planId] = stripPlanPayload(plan)
+  }
+}
+
 // --- Store ---
 
 interface PlanStore {
   plans: Record<string, Plan>
+  plansBySession: Record<string, Plan>
   activePlanId: string | null
   _loaded: boolean
 
   // Initialization
   loadPlansFromDb: () => Promise<void>
+  loadPlanForSession: (sessionId: string, force?: boolean) => Promise<Plan | undefined>
+  releaseDormantPlans: (sessionId?: string | null) => void
 
   // CRUD
   createPlan: (
@@ -108,24 +149,89 @@ interface PlanStore {
 export const usePlanStore = create<PlanStore>()(
   immer((set, get) => ({
     plans: {},
+    plansBySession: {},
     activePlanId: null,
     _loaded: false,
 
     loadPlansFromDb: async () => {
       try {
         const rows = (await ipcClient.invoke('db:plans:list')) as PlanRow[]
+        const plansBySession: Record<string, Plan> = {}
         const plans: Record<string, Plan> = {}
+
         for (const row of rows) {
-          plans[row.id] = rowToPlan(row)
+          const plan = rowToPlan(row)
+          plansBySession[plan.sessionId] = stripPlanPayload(plan)
         }
+
+        const activeSessionId = useChatStore.getState().activeSessionId
+        for (const planSummary of Object.values(plansBySession)) {
+          plans[planSummary.id] = planSummary
+        }
+        if (activeSessionId) {
+          const activePlanSummary = plansBySession[activeSessionId]
+          if (activePlanSummary) {
+            const activeRow = rows.find((row) => row.id === activePlanSummary.id)
+            if (activeRow) {
+              plans[activePlanSummary.id] = rowToPlan(activeRow)
+            }
+          }
+        }
+
         set((state) => {
           state.plans = plans
+          state.plansBySession = plansBySession
           state._loaded = true
+          releaseDormantPlanMemory(state)
         })
       } catch (err) {
         console.error('[PlanStore] Failed to load from DB:', err)
         set({ _loaded: true })
       }
+    },
+
+    loadPlanForSession: async (sessionId, force = false) => {
+      const cached = get().plansBySession[sessionId]
+      const activeCached = cached ? get().plans[cached.id] : undefined
+      const hasPayload = !!(activeCached?.content || activeCached?.specJson)
+      if (cached && !force && hasPayload) {
+        return activeCached
+      }
+
+      try {
+        const row = (await ipcClient.invoke('db:plans:get-by-session', sessionId)) as PlanRow | null
+        if (!row) {
+          set((state) => {
+            const existing = state.plansBySession[sessionId]
+            if (existing) {
+              delete state.plansBySession[sessionId]
+              delete state.plans[existing.id]
+              if (state.activePlanId === existing.id) {
+                state.activePlanId = null
+              }
+            }
+            releaseDormantPlanMemory(state, sessionId)
+          })
+          return undefined
+        }
+
+        const plan = rowToPlan(row)
+        set((state) => {
+          state.plansBySession[sessionId] = stripPlanPayload(plan)
+          state.plans[plan.id] = plan
+          releaseDormantPlanMemory(state, sessionId)
+        })
+        return plan
+      } catch (err) {
+        console.error('[PlanStore] Failed to load plan for session:', err)
+        return cached
+      }
+    },
+
+    releaseDormantPlans: (sessionId) => {
+      set((state) => {
+        releaseDormantPlanMemory(state, sessionId)
+      })
     },
 
     createPlan: (sessionId, title, options = {}) => {
@@ -144,7 +250,9 @@ export const usePlanStore = create<PlanStore>()(
       }
       set((state) => {
         state.plans[id] = plan
+        state.plansBySession[sessionId] = stripPlanPayload(plan)
         state.activePlanId = id
+        releaseDormantPlanMemory(state, sessionId)
       })
       dbCreatePlan(plan)
       useChatStore.getState().clearSessionPromptSnapshot(sessionId)
@@ -157,6 +265,8 @@ export const usePlanStore = create<PlanStore>()(
         const plan = state.plans[planId]
         if (plan) {
           Object.assign(plan, patch, { updatedAt: now })
+          state.plansBySession[plan.sessionId] = stripPlanPayload(plan)
+          releaseDormantPlanMemory(state, plan.sessionId)
         }
       })
       const dbPatch: Record<string, unknown> = { updatedAt: now }
@@ -179,6 +289,8 @@ export const usePlanStore = create<PlanStore>()(
         if (plan) {
           plan.status = 'approved'
           plan.updatedAt = now
+          state.plansBySession[plan.sessionId] = stripPlanPayload(plan)
+          releaseDormantPlanMemory(state, plan.sessionId)
         }
       })
       dbUpdatePlan(planId, { status: 'approved', updatedAt: now })
@@ -195,6 +307,8 @@ export const usePlanStore = create<PlanStore>()(
         if (plan) {
           plan.status = 'rejected'
           plan.updatedAt = now
+          state.plansBySession[plan.sessionId] = stripPlanPayload(plan)
+          releaseDormantPlanMemory(state, plan.sessionId)
         }
       })
       dbUpdatePlan(planId, { status: 'rejected', updatedAt: now })
@@ -211,6 +325,8 @@ export const usePlanStore = create<PlanStore>()(
         if (plan) {
           plan.status = 'implementing'
           plan.updatedAt = now
+          state.plansBySession[plan.sessionId] = stripPlanPayload(plan)
+          releaseDormantPlanMemory(state, plan.sessionId)
         }
       })
       dbUpdatePlan(planId, { status: 'implementing', updatedAt: now })
@@ -227,6 +343,8 @@ export const usePlanStore = create<PlanStore>()(
         if (plan) {
           plan.status = 'completed'
           plan.updatedAt = now
+          state.plansBySession[plan.sessionId] = stripPlanPayload(plan)
+          releaseDormantPlanMemory(state, plan.sessionId)
         }
       })
       dbUpdatePlan(planId, { status: 'completed', updatedAt: now })
@@ -240,9 +358,13 @@ export const usePlanStore = create<PlanStore>()(
       const existingPlan = get().plans[planId]
       set((state) => {
         delete state.plans[planId]
+        if (existingPlan?.sessionId) {
+          delete state.plansBySession[existingPlan.sessionId]
+        }
         if (state.activePlanId === planId) {
           state.activePlanId = null
         }
+        releaseDormantPlanMemory(state)
       })
       dbDeletePlan(planId)
       if (existingPlan?.sessionId) {
@@ -251,7 +373,9 @@ export const usePlanStore = create<PlanStore>()(
     },
 
     getPlanBySession: (sessionId) => {
-      return Object.values(get().plans).find((p) => p.sessionId === sessionId)
+      const cached = get().plansBySession[sessionId]
+      if (!cached) return undefined
+      return get().plans[cached.id] ?? cached
     },
 
     getActivePlan: () => {
@@ -259,6 +383,11 @@ export const usePlanStore = create<PlanStore>()(
       return activePlanId ? plans[activePlanId] : undefined
     },
 
-    setActivePlan: (planId) => set({ activePlanId: planId })
+    setActivePlan: (planId) =>
+      set((state) => {
+        state.activePlanId = planId
+        const sessionId = planId ? state.plans[planId]?.sessionId : undefined
+        releaseDormantPlanMemory(state, sessionId)
+      })
   }))
 )
