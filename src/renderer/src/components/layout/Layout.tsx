@@ -10,7 +10,8 @@ import {
   Loader2,
   PanelLeftOpen,
   ExternalLink,
-  Minimize2
+  Minimize2,
+  X
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useTheme } from 'next-themes'
@@ -1183,33 +1184,44 @@ export function Layout({ updateInfo, onOpenUpdateDialog }: LayoutProps): React.J
         }}
       >
         <DialogContent
-          className="h-[calc(100vh-5rem)] w-[min(48rem,calc(100vw-2rem))] max-w-[min(48rem,calc(100vw-2rem))] overflow-hidden p-0"
+          showCloseButton={false}
+          className="flex h-[calc(100vh-5rem)] w-[70vw] max-w-[70vw] flex-col overflow-hidden p-0 sm:max-w-[70vw]"
         >
-          <DialogHeader className="border-b px-4 py-3">
+          <DialogHeader className="shrink-0 border-b px-4 py-3">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <DialogTitle className="truncate text-sm">
                   {miniWindowSession?.title ?? t('topbar.openSession')}
                 </DialogTitle>
-                <div className="mt-1 truncate text-xs text-muted-foreground">
+                <div className="mt-1 max-w-full truncate text-xs text-muted-foreground">
                   {miniWindowSession?.workingFolder || miniWindowSession?.mode || ''}
                 </div>
               </div>
-              {miniSessionWindowSessionId && (
+              <div className="flex shrink-0 items-center gap-2">
+                {miniSessionWindowSessionId && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 gap-1.5"
+                    onClick={() => {
+                      useChatStore.getState().setActiveSession(miniSessionWindowSessionId)
+                      useUIStore.getState().navigateToSession()
+                      closeMiniSessionWindow()
+                    }}
+                  >
+                    <Minimize2 className="size-3.5" />
+                    {t('topbar.openSession')}
+                  </Button>
+                )}
                 <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-8 gap-1.5"
-                  onClick={() => {
-                    useChatStore.getState().setActiveSession(miniSessionWindowSessionId)
-                    useUIStore.getState().navigateToSession()
-                    closeMiniSessionWindow()
-                  }}
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={() => closeMiniSessionWindow()}
                 >
-                  <Minimize2 className="size-3.5" />
-                  {t('topbar.openSession')}
+                  <X className="size-4" />
                 </Button>
-              )}
+              </div>
             </div>
           </DialogHeader>
           {miniSessionWindowSessionId && (

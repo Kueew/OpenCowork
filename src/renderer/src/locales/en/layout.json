@@ -170,11 +170,11 @@
     "clickToRename": "Click to rename",
     "renameSession": "Rename session:",
     "modelLabel": "Model: {{model}}",
-    "runningSessionsCount": "{{count}} sessions / {{tasks}} agents",
-    "runningSessionsTooltip": "View running agent sessions across projects",
-    "runningSessionsTitle": "Running agent sessions ({{count}} sessions / {{tasks}} agents)",
-    "sessionTaskCount": "{{count}} agents",
-    "openMiniWindow": "Mini window"
+    "runningSessionsCount": "{{count}} running",
+    "runningSessionsTooltip": "View running sessions across projects",
+    "runningSessionsTitle": "Running sessions ({{count}})",
+    "openMiniWindow": "Mini window",
+    "currentSession": "Current session"
   },
   "commandPalette": {
     "placeholder": "Type a command or search sessions...",

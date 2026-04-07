@@ -4,6 +4,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@renderer/components/ui
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { useAgentStore } from '@renderer/stores/agent-store'
 import { useChatStore } from '@renderer/stores/chat-store'
+import { useTeamStore } from '@renderer/stores/team-store'
 import { useUIStore } from '@renderer/stores/ui-store'
 import { useTranslation } from 'react-i18next'
 import { useMemo } from 'react'
@@ -14,12 +15,28 @@ interface ProjectGroup {
   sessions: Array<{
     sessionId: string
     title: string
-    taskCount: number
     updatedAt: number
     mode: string
     modelLabel?: string
+    lastMessagePreview: string
   }>
   updatedAt: number
+}
+
+function extractLastMessagePreview(content: unknown): string {
+  if (typeof content === 'string') return content.trim()
+  if (!Array.isArray(content)) return ''
+
+  const parts: string[] = []
+  for (const block of content) {
+    if (!block || typeof block !== 'object' || !("type" in block)) continue
+    const typedBlock = block as { type?: string; text?: string; thinking?: string; message?: string }
+    if (typedBlock.type === 'text' && typedBlock.text) parts.push(typedBlock.text)
+    else if (typedBlock.type === 'thinking' && typedBlock.thinking) parts.push(typedBlock.thinking)
+    else if (typedBlock.type === 'image_error' && typedBlock.message) parts.push(typedBlock.message)
+  }
+
+  return parts.join(' ').replace(/\s+/g, ' ').trim()
 }
 
 function formatTime(ts: number): string {
@@ -39,53 +56,57 @@ export function RunningAgentSessionsPopover(): React.JSX.Element | null {
   const { t } = useTranslation('layout')
   const sessions = useChatStore((s) => s.sessions)
   const projects = useChatStore((s) => s.projects)
-  const activeSubAgents = useAgentStore((s) => s.activeSubAgents)
+  const activeSessionId = useChatStore((s) => s.activeSessionId)
+  const runningSessions = useAgentStore((s) => s.runningSessions)
+  const runningSubAgentSessionIdsSig = useAgentStore((s) => s.runningSubAgentSessionIdsSig)
+  const backgroundProcesses = useAgentStore((s) => s.backgroundProcesses)
+  const activeTeamSessionId = useTeamStore((s) => s.activeTeam?.sessionId)
 
   const groups = useMemo<ProjectGroup[]>(() => {
     const projectMap = new Map(projects.map((project) => [project.id, project]))
-    const sessionMap = new Map(sessions.map((session) => [session.id, session]))
-    const sessionAgg = new Map<
-      string,
-      { sessionId: string; taskCount: number; updatedAt: number; title: string; mode: string; modelLabel?: string; projectId: string }
-    >()
+    const runningSessionIds = new Set<string>()
 
-    for (const subAgent of Object.values(activeSubAgents)) {
-      if (!subAgent.isRunning || !subAgent.sessionId) continue
-      const session = sessionMap.get(subAgent.sessionId)
-      if (!session?.projectId) continue
-      const current = sessionAgg.get(session.id)
-      sessionAgg.set(session.id, {
-        sessionId: session.id,
-        taskCount: (current?.taskCount ?? 0) + 1,
-        updatedAt: Math.max(current?.updatedAt ?? 0, session.updatedAt ?? 0, subAgent.startedAt ?? 0),
-        title: session.title,
-        mode: session.mode,
-        modelLabel: session.modelId,
-        projectId: session.projectId
-      })
+    for (const [sessionId, status] of Object.entries(runningSessions)) {
+      if (status === 'running') runningSessionIds.add(sessionId)
+    }
+
+    for (const sessionId of runningSubAgentSessionIdsSig ? runningSubAgentSessionIdsSig.split('\u0000') : []) {
+      if (sessionId) runningSessionIds.add(sessionId)
+    }
+
+    for (const process of Object.values(backgroundProcesses)) {
+      if (process.status === 'running' && process.sessionId) {
+        runningSessionIds.add(process.sessionId)
+      }
+    }
+
+    if (activeTeamSessionId) {
+      runningSessionIds.add(activeTeamSessionId)
     }
 
     const grouped = new Map<string, ProjectGroup>()
-    for (const item of sessionAgg.values()) {
-      const project = projectMap.get(item.projectId)
-      const existing = grouped.get(item.projectId)
+    for (const session of sessions) {
+      if (!runningSessionIds.has(session.id) || !session.projectId) continue
+      const project = projectMap.get(session.projectId)
+      const existing = grouped.get(session.projectId)
+      const lastMessage = session.messages[session.messages.length - 1]
       const sessionEntry = {
-        sessionId: item.sessionId,
-        title: item.title,
-        taskCount: item.taskCount,
-        updatedAt: item.updatedAt,
-        mode: item.mode,
-        modelLabel: item.modelLabel
+        sessionId: session.id,
+        title: session.title,
+        updatedAt: session.updatedAt,
+        mode: session.mode,
+        modelLabel: session.modelId,
+        lastMessagePreview: extractLastMessagePreview(lastMessage?.content)
       }
       if (existing) {
         existing.sessions.push(sessionEntry)
-        existing.updatedAt = Math.max(existing.updatedAt, item.updatedAt)
+        existing.updatedAt = Math.max(existing.updatedAt, session.updatedAt)
       } else {
-        grouped.set(item.projectId, {
-          projectId: item.projectId,
+        grouped.set(session.projectId, {
+          projectId: session.projectId,
           projectName: project?.name ?? t('sidebar.unknownProject'),
           sessions: [sessionEntry],
-          updatedAt: item.updatedAt
+          updatedAt: session.updatedAt
         })
       }
     }
@@ -96,13 +117,9 @@ export function RunningAgentSessionsPopover(): React.JSX.Element | null {
         sessions: group.sessions.sort((a, b) => b.updatedAt - a.updatedAt)
       }))
       .sort((a, b) => b.updatedAt - a.updatedAt)
-  }, [activeSubAgents, projects, sessions, t])
+  }, [activeTeamSessionId, backgroundProcesses, projects, runningSessions, runningSubAgentSessionIdsSig, sessions, t])
 
   const totalSessions = groups.reduce((sum, group) => sum + group.sessions.length, 0)
-  const totalTasks = groups.reduce(
-    (sum, group) => sum + group.sessions.reduce((inner, session) => inner + session.taskCount, 0),
-    0
-  )
 
   return (
     <Popover>
@@ -112,7 +129,7 @@ export function RunningAgentSessionsPopover(): React.JSX.Element | null {
             <PopoverTrigger asChild>
               <Button variant="ghost" size="sm" className="titlebar-no-drag h-7 gap-1.5 px-2 text-[10px]">
                 <Brain className="size-3.5 text-violet-500" />
-                {t('topbar.runningSessionsCount', { count: totalSessions, tasks: totalTasks })}
+                {t('topbar.runningSessionsCount', { count: totalSessions })}
               </Button>
             </PopoverTrigger>
           </span>
@@ -121,7 +138,7 @@ export function RunningAgentSessionsPopover(): React.JSX.Element | null {
       </Tooltip>
       <PopoverContent align="end" className="w-[28rem] p-2">
         <div className="mb-2 text-xs font-medium text-foreground/85">
-          {t('topbar.runningSessionsTitle', { count: totalSessions, tasks: totalTasks })}
+          {t('topbar.runningSessionsTitle', { count: totalSessions })}
         </div>
         <div className="max-h-[26rem] space-y-2 overflow-y-auto">
           {groups.map((group) => (
@@ -131,58 +148,73 @@ export function RunningAgentSessionsPopover(): React.JSX.Element | null {
                 <span className="truncate">{group.projectName}</span>
               </div>
               <div className="space-y-1">
-                {group.sessions.map((session) => (
-                  <div key={session.sessionId} className="rounded-md border bg-background px-2 py-1.5">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="truncate text-[11px] font-medium text-foreground">
-                          {session.title}
-                        </div>
-                        <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[10px] text-muted-foreground">
-                          <span>{session.mode}</span>
-                          <span>·</span>
-                          <span>{t('topbar.sessionTaskCount', { count: session.taskCount })}</span>
-                          <span>·</span>
-                          <span>{formatTime(session.updatedAt)}</span>
-                          {session.modelLabel && (
-                            <>
-                              <span>·</span>
-                              <span className="truncate">{session.modelLabel}</span>
-                            </>
+                {group.sessions.map((session) => {
+                  const isCurrentSession = session.sessionId === activeSessionId
+
+                  return (
+                    <div key={session.sessionId} className="rounded-md border bg-background px-2 py-1.5">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="truncate text-[11px] font-medium text-foreground">
+                            {session.title}
+                          </div>
+                          <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[10px] text-muted-foreground">
+                            <span>{session.mode}</span>
+                            <span>·</span>
+                            <span>{formatTime(session.updatedAt)}</span>
+                            {session.modelLabel && (
+                              <>
+                                <span>·</span>
+                                <span className="truncate">{session.modelLabel}</span>
+                              </>
+                            )}
+                            {isCurrentSession && (
+                              <>
+                                <span>·</span>
+                                <span>{t('topbar.currentSession')}</span>
+                              </>
+                            )}
+                          </div>
+                          {session.lastMessagePreview && (
+                            <div className="mt-1 line-clamp-2 text-[10px] text-muted-foreground/85">
+                              {session.lastMessagePreview}
+                            </div>
                           )}
                         </div>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-1">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 px-2 text-[10px]"
-                          onClick={() => {
-                            const chatState = useChatStore.getState()
-                            const targetSession = chatState.sessions.find((item) => item.id === session.sessionId)
-                            if (targetSession?.projectId) {
-                              chatState.setActiveProject(targetSession.projectId)
-                            }
-                            chatState.setActiveSession(session.sessionId)
-                            useUIStore.getState().navigateToSession()
-                          }}
-                        >
-                          <ExternalLink className="mr-1 size-3" />
-                          {t('topbar.openSession')}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 px-2 text-[10px]"
-                          onClick={() => useUIStore.getState().openMiniSessionWindow(session.sessionId)}
-                        >
-                          <MessageSquareText className="mr-1 size-3" />
-                          {t('topbar.openMiniWindow')}
-                        </Button>
+                        <div className="flex shrink-0 items-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2 text-[10px]"
+                            disabled={isCurrentSession}
+                            onClick={() => {
+                              const chatState = useChatStore.getState()
+                              const targetSession = chatState.sessions.find((item) => item.id === session.sessionId)
+                              if (targetSession?.projectId) {
+                                chatState.setActiveProject(targetSession.projectId)
+                              }
+                              chatState.setActiveSession(session.sessionId)
+                              useUIStore.getState().navigateToSession()
+                            }}
+                          >
+                            <ExternalLink className="mr-1 size-3" />
+                            {t('topbar.openSession')}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2 text-[10px]"
+                            disabled={isCurrentSession}
+                            onClick={() => useUIStore.getState().openMiniSessionWindow(session.sessionId)}
+                          >
+                            <MessageSquareText className="mr-1 size-3" />
+                            {t('topbar.openMiniWindow')}
+                          </Button>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             </div>
           ))}
