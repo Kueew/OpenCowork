@@ -723,6 +723,17 @@ export function InputArea({
     }
   }, [])
 
+  const getPastedImageFiles = React.useCallback(
+    (clipboardData: DataTransfer | null | undefined): File[] => {
+      if (!supportsVision || !clipboardData) return []
+      return Array.from(clipboardData.items)
+        .filter((item) => item.kind === 'file' && ACCEPTED_IMAGE_TYPES.includes(item.type))
+        .map((item) => item.getAsFile())
+        .filter(Boolean) as File[]
+    },
+    [supportsVision]
+  )
+
   const removeQueuedImage = React.useCallback((id: string) => {
     setEditingQueueImages((prev) => prev.filter((img) => img.id !== id))
   }, [])
@@ -1454,13 +1465,7 @@ export function InputArea({
 
   const handlePaste = React.useCallback(
     (e: React.ClipboardEvent<HTMLDivElement>): void => {
-      const items = Array.from(e.clipboardData.items)
-      const imageFiles = supportsVision
-        ? (items
-            .filter((item) => item.kind === 'file' && ACCEPTED_IMAGE_TYPES.includes(item.type))
-            .map((item) => item.getAsFile())
-            .filter(Boolean) as File[])
-        : []
+      const imageFiles = getPastedImageFiles(e.clipboardData)
 
       if (imageFiles.length > 0) {
         e.preventDefault()
@@ -1475,7 +1480,17 @@ export function InputArea({
       const selection = editorRef.current?.getSelectionOffsets() ?? editorSelection
       replaceSelectionWithText(plainText, selection)
     },
-    [addImages, editorSelection, replaceSelectionWithText, supportsVision]
+    [addImages, editorSelection, getPastedImageFiles, replaceSelectionWithText]
+  )
+
+  const handleQueueEditPaste = React.useCallback(
+    (e: React.ClipboardEvent<HTMLTextAreaElement>): void => {
+      const imageFiles = getPastedImageFiles(e.clipboardData)
+      if (imageFiles.length === 0) return
+      e.preventDefault()
+      void addQueuedImages(imageFiles)
+    },
+    [addQueuedImages, getPastedImageFiles]
   )
 
   const getDraggedFilePaths = React.useCallback((dataTransfer: DataTransfer | null): string[] => {
@@ -1857,6 +1872,7 @@ export function InputArea({
                                 <Textarea
                                   value={editingQueueText}
                                   onChange={(e) => setEditingQueueText(e.target.value)}
+                                  onPaste={handleQueueEditPaste}
                                   className="min-h-[56px] max-h-36 resize-none border-border/70 bg-background text-xs"
                                   rows={2}
                                 />

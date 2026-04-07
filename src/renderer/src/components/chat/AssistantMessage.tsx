@@ -127,6 +127,17 @@ function stripThinkTagMarkers(text: string): string {
   return text.replace(/<\s*\/?\s*think\s*>/gi, '')
 }
 
+function toFiniteNumber(value: unknown): number | null {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
 function formatMs(ms: number): string {
   if (ms >= 1000) {
     const seconds = ms / 1000
@@ -1303,14 +1314,20 @@ export function AssistantMessage({
     let lastDetail: string | null = null
     if (lastTiming) {
       const parts: string[] = []
-      parts.push(
-        `${t('assistantMessage.req', { count: perRequest.length })} ${formatMs(lastTiming.totalMs)}`
-      )
-      if (lastTiming.ttftMs !== undefined)
-        parts.push(`${t('assistantMessage.ttft')} ${formatMs(lastTiming.ttftMs)}`)
-      if (lastTiming.tps !== undefined)
-        parts.push(`${t('assistantMessage.tps')} ${lastTiming.tps.toFixed(1)}`)
-      lastDetail = parts.join(' · ')
+      const totalMs = toFiniteNumber(lastTiming.totalMs)
+      const ttftMs = toFiniteNumber(lastTiming.ttftMs)
+      const tps = toFiniteNumber(lastTiming.tps)
+
+      if (totalMs !== null) {
+        parts.push(`${t('assistantMessage.req', { count: perRequest.length })} ${formatMs(totalMs)}`)
+      }
+      if (ttftMs !== null) {
+        parts.push(`${t('assistantMessage.ttft')} ${formatMs(ttftMs)}`)
+      }
+      if (tps !== null) {
+        parts.push(`${t('assistantMessage.tps')} ${tps.toFixed(1)}`)
+      }
+      lastDetail = parts.length > 0 ? parts.join(' · ') : null
     }
 
     return {
