@@ -9,6 +9,7 @@ import { FileTreePanel } from '@renderer/components/cowork/FileTreePanel'
 import { SshFileExplorer } from '@renderer/components/ssh/SshFileExplorer'
 import { TeamPanel } from '@renderer/components/cowork/TeamPanel'
 import { PlanPanel } from '@renderer/components/cowork/PlanPanel'
+import { AcpPanel } from '@renderer/components/cowork/AcpPanel'
 import { usePlanStore } from '@renderer/stores/plan-store'
 import { useChatStore } from '@renderer/stores/chat-store'
 import { useAgentStore } from '@renderer/stores/agent-store'
@@ -353,6 +354,12 @@ export function RightPanel({ compact = false }: { compact?: boolean }): React.JS
                     {resolvedTab === 'plan' && (
                       <FadeIn key="plan" className="h-full">
                         <PlanPanel />
+                      </FadeIn>
+                    )}
+
+                    {resolvedTab === 'acp' && (
+                      <FadeIn key="acp" className="h-full">
+                        <AcpPanel />
                       </FadeIn>
                     )}
                   </AnimatePresence>

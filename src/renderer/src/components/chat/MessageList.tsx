@@ -156,6 +156,8 @@ const INITIAL_SCROLL_SETTLE_FRAMES = 6
 const USER_SEND_SCROLL_SETTLE_FRAMES = 4
 const FOLLOW_BOTTOM_SETTLE_FRAMES = 1
 const BOTTOM_SCROLL_CORRECTION_EPSILON = 2
+const TOP_AUTO_LOAD_THRESHOLD = 24
+const INITIAL_MESSAGE_ESTIMATED_HEIGHT = 120
 
 function isToolResultOnlyUserMessage(message: UnifiedMessage): boolean {
   return (
@@ -278,6 +280,7 @@ export function MessageList({
     activeSessionLoaded,
     activeSessionMessageCount,
     activeWorkingFolder,
+    loadedRangeStart,
     messages
   } = useChatStore(
     useShallow((s) => {
@@ -288,6 +291,7 @@ export function MessageList({
         activeSessionLoaded: activeSession?.messagesLoaded ?? true,
         activeSessionMessageCount: activeSession?.messageCount ?? 0,
         activeWorkingFolder: activeSession?.workingFolder,
+        loadedRangeStart: activeSession?.loadedRangeStart ?? 0,
         messages: activeSession?.messages ?? EMPTY_MESSAGES
       }
     })
@@ -299,18 +303,15 @@ export function MessageList({
   const isSessionRunning =
     useAgentStore((s) => s.isSessionActive(activeSessionId)) || hasStreamingMessage
   const listRef = React.useRef<VListHandle | null>(null)
+  const containerRef = React.useRef<HTMLDivElement | null>(null)
   const [isAtBottom, setIsAtBottom] = React.useState(true)
   const pendingInitialScrollSessionIdRef = React.useRef<string | null>(null)
   const shouldStickToBottomRef = React.useRef(true)
   const latestRealUserCreatedAtRef = React.useRef(0)
   const preserveScrollOnPrependRef = React.useRef<{ offset: number; size: number } | null>(null)
   const scheduledScrollFrameRef = React.useRef<number | null>(null)
+  const isAutoLoadingOlderRef = React.useRef(false)
   const messageCount = messages.length
-
-  React.useEffect(() => {
-    if (!activeSessionId) return
-    void useChatStore.getState().loadRecentSessionMessages(activeSessionId)
-  }, [activeSessionId])
 
   const renderableMeta = React.useMemo(
     () => buildRenderableMessageMeta(messages, streamingMessageId),
@@ -331,8 +332,39 @@ export function MessageList({
     }))
   }, [continueAssistantMessageId, renderableMeta.items])
 
-  const olderUnloadedMessageCount = Math.max(0, activeSessionMessageCount - messages.length)
+  const olderUnloadedMessageCount = Math.max(0, loadedRangeStart)
   const hasLoadMoreRow = olderUnloadedMessageCount > 0
+
+  const loadOlderMessages = React.useCallback(async (): Promise<number> => {
+    if (!activeSessionId || olderUnloadedMessageCount === 0 || isAutoLoadingOlderRef.current) return 0
+    const ref = listRef.current
+    preserveScrollOnPrependRef.current = ref ? { offset: ref.scrollOffset, size: ref.scrollSize } : null
+    isAutoLoadingOlderRef.current = true
+    try {
+      const loaded = await useChatStore
+        .getState()
+        .loadOlderSessionMessages(activeSessionId, LOAD_MORE_MESSAGE_STEP)
+      if (loaded <= 0) {
+        preserveScrollOnPrependRef.current = null
+      }
+      return loaded
+    } catch {
+      preserveScrollOnPrependRef.current = null
+      return 0
+    } finally {
+      isAutoLoadingOlderRef.current = false
+    }
+  }, [activeSessionId, olderUnloadedMessageCount])
+
+  React.useEffect(() => {
+    if (!activeSessionId) return
+    const viewportHeight = containerRef.current?.clientHeight ?? window.innerHeight ?? 0
+    const estimatedLimit = Math.max(
+      5,
+      Math.ceil(viewportHeight / INITIAL_MESSAGE_ESTIMATED_HEIGHT) + 2
+    )
+    void useChatStore.getState().loadRecentSessionMessages(activeSessionId, false, estimatedLimit)
+  }, [activeSessionId])
 
   const virtualRows = React.useMemo<VirtualRow[]>(() => {
     const rows: VirtualRow[] = renderableMessages.map((message) => ({
@@ -403,7 +435,15 @@ export function MessageList({
     const nextAtBottom = getDistanceToBottom(ref) <= threshold
     shouldStickToBottomRef.current = nextAtBottom
     setIsAtBottom((prev) => (prev === nextAtBottom ? prev : nextAtBottom))
-  }, [streamingMessageId])
+
+    if (
+      ref.scrollOffset <= TOP_AUTO_LOAD_THRESHOLD &&
+      olderUnloadedMessageCount > 0 &&
+      !isAutoLoadingOlderRef.current
+    ) {
+      void loadOlderMessages()
+    }
+  }, [loadOlderMessages, olderUnloadedMessageCount, streamingMessageId])
 
   const requestScrollToBottom = React.useCallback(
     ({
@@ -678,7 +718,7 @@ export function MessageList({
   }
 
   return (
-    <div className="relative flex-1" data-message-list>
+    <div ref={containerRef} className="relative flex-1" data-message-list>
       <div className="absolute inset-0" data-message-content>
         <VList
           bufferSize={typeof window !== 'undefined' ? window.innerHeight : 0}
@@ -697,25 +737,11 @@ export function MessageList({
                     <button
                       className="rounded-md border px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
                       onClick={() => {
-                        const ref = listRef.current
-                        preserveScrollOnPrependRef.current = ref
-                          ? { offset: ref.scrollOffset, size: ref.scrollSize }
-                          : null
-
                         if (!activeSessionId || olderUnloadedMessageCount === 0) {
                           preserveScrollOnPrependRef.current = null
                           return
                         }
-                        void useChatStore
-                          .getState()
-                          .loadOlderSessionMessages(activeSessionId, LOAD_MORE_MESSAGE_STEP)
-                          .then((loaded) => {
-                            if (loaded > 0) return
-                            preserveScrollOnPrependRef.current = null
-                          })
-                          .catch(() => {
-                            preserveScrollOnPrependRef.current = null
-                          })
+                        void loadOlderMessages()
                       }}
                     >
                       {t('messageList.loadMoreMessages', { defaultValue: '加载更早消息' })} (

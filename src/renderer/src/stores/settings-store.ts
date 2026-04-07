@@ -19,7 +19,7 @@ export interface SessionDefaultModelBinding extends ModelBinding {
 export type PromptRecommendationModelBinding = ModelBinding | 'disabled' | null
 
 export type PromptRecommendationModelBindings = Record<
-  'chat' | 'clarify' | 'cowork' | 'code',
+  'chat' | 'clarify' | 'cowork' | 'code' | 'acp',
   PromptRecommendationModelBinding
 >
 
@@ -266,7 +266,8 @@ export const useSettingsStore = create<SettingsStore>()(
         chat: null,
         clarify: null,
         cowork: null,
-        code: null
+        code: null,
+        acp: null
       },
       newSessionDefaultModel: null,
       mainModelSelectionMode: 'auto',
@@ -320,8 +321,11 @@ export const useSettingsStore = create<SettingsStore>()(
             chat: null,
             clarify: null,
             cowork: null,
-            code: null
+            code: null,
+            acp: null
           }
+        } else if ((state.promptRecommendationModels as Record<string, unknown>).acp === undefined) {
+          ;(state.promptRecommendationModels as Record<string, PromptRecommendationModelBinding>).acp = null
         }
         if (state.newSessionDefaultModel === undefined) {
           state.newSessionDefaultModel = null

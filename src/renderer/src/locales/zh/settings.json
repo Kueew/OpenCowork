@@ -210,13 +210,15 @@
       "chat": "Chat 模式",
       "clarify": "Clarify 模式",
       "cowork": "Cowork 模式",
-      "code": "Code 模式"
+      "code": "Code 模式",
+      "acp": "ACP 模式"
     },
     "promptRecommendationModesDesc": {
       "chat": "用于通用对话与下一问推荐",
       "clarify": "用于需求澄清与追问建议",
       "cowork": "用于协作执行与任务拆解建议",
-      "code": "用于实现、修改与排查类提问建议"
+      "code": "用于实现、修改与排查类提问建议",
+      "acp": "用于 ACP 主控场景下的目标澄清、架构设计与任务分派建议"
     },
     "selectRecommendationModel": "选择推荐模型",
     "useFastModelRecommendation": "使用快速模型（默认）",

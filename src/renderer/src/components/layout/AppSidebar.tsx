@@ -692,7 +692,7 @@ export function AppSidebar(): React.JSX.Element {
                                 {t('sidebar.switchMode')}
                               </ContextMenuSubTrigger>
                               <ContextMenuSubContent>
-                                {(['chat', 'clarify', 'cowork', 'code'] as const).map((m) => (
+                                {(['chat', 'clarify', 'cowork', 'code', 'acp'] as const).map((m) => (
                                   <ContextMenuItem
                                     key={m}
                                     disabled={session.mode === m}

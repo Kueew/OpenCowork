@@ -336,6 +336,37 @@ public static class AgentLoop
                         Input = tc.Input,
                         ExtraContent = tc.ExtraContent
                     };
+                    continue;
+                }
+
+                if (tc.Input.Count == 0)
+                {
+                    var fallbackCandidates = activeToolArgs
+                        .Where(entry => entry.Value.Length > 0)
+                        .Select(entry => new
+                        {
+                            entry.Key,
+                            Buffer = entry.Value,
+                            Tool = toolCalls.FirstOrDefault(other => other.Id == entry.Key)
+                        })
+                        .Where(entry => entry.Tool is not null
+                            && string.Equals(entry.Tool.Name, tc.Name, StringComparison.Ordinal))
+                        .ToList();
+
+                    if (fallbackCandidates.Count == 1)
+                    {
+                        tc.Input = ProviderMessageFormatter.ParseToolInputObject(fallbackCandidates[0].Buffer.ToString());
+                        if (tc.Input.Count > 0)
+                        {
+                            yield return new ToolUseGeneratedEvent
+                            {
+                                Id = tc.Id,
+                                Name = tc.Name,
+                                Input = tc.Input,
+                                ExtraContent = tc.ExtraContent
+                            };
+                        }
+                    }
                 }
             }
 

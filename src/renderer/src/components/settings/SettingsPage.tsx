@@ -1982,6 +1982,11 @@ function ModelPanel(): React.JSX.Element {
       mode: 'code',
       labelKey: 'model.promptRecommendationModes.code',
       descKey: 'model.promptRecommendationModesDesc.code'
+    },
+    {
+      mode: 'acp',
+      labelKey: 'model.promptRecommendationModes.acp',
+      descKey: 'model.promptRecommendationModesDesc.acp'
     }
   ]
   const updatePromptRecommendationModel = (

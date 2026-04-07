@@ -119,6 +119,10 @@
         "title": "This is Code mode",
         "description": "Use it for direct implementation tasks such as editing files, writing code, running checks, and handling engineering details."
       },
+      "modeAcp": {
+        "title": "This is ACP mode",
+        "description": "Use it as the control tower for complex work: clarify boundaries and acceptance first, then design the architecture, break down tasks, and delegate execution while the main agent stays out of direct coding."
+      },
       "leftSidebar": {
         "title": "This is the project and session area",
         "description": "Your work is organized here as projects and sessions. Use it to switch projects, revisit old sessions, and search earlier context."

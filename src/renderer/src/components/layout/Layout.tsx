@@ -334,11 +334,11 @@ export function Layout({ updateInfo, onOpenUpdateDialog }: LayoutProps): React.J
         useUIStore.getState().navigateToHome()
         return
       }
-      // Ctrl+1/2/3: Switch mode
-      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && ['1', '2', '3'].includes(e.key)) {
+      // Ctrl+1/2/3/4: Switch mode
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && ['1', '2', '3', '4'].includes(e.key)) {
         e.preventDefault()
-        const modeMap = { '1': 'clarify', '2': 'cowork', '3': 'code' } as const
-        handleModeChange(modeMap[e.key as '1' | '2' | '3'])
+        const modeMap = { '1': 'clarify', '2': 'cowork', '3': 'code', '4': 'acp' } as const
+        handleModeChange(modeMap[e.key as '1' | '2' | '3' | '4'])
       }
       // Ctrl+N: New chat — navigate to home
       if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
@@ -479,9 +479,13 @@ export function Layout({ updateInfo, onOpenUpdateDialog }: LayoutProps): React.J
           ui.setRightPanelOpen(true)
           return
         }
-        const tabs = RIGHT_PANEL_TAB_ORDER.filter((tab) => tab !== 'acp')
+        const activeSession = useChatStore.getState().sessions.find((s) => s.id === activeSessionId)
+        const visibleTabs = RIGHT_PANEL_TAB_ORDER.filter(
+          (tab) => (activeSession?.mode ?? ui.mode) === 'acp' || tab !== 'acp'
+        )
+        const tabs = visibleTabs.filter((tab) => tab !== 'acp')
         const idx = tabs.indexOf(ui.rightPanelTab === 'acp' ? 'steps' : ui.rightPanelTab)
-        ui.setRightPanelTab(tabs[(idx + 1) % tabs.length])
+        ui.setRightPanelTab(tabs[((idx >= 0 ? idx : 0) + 1) % tabs.length])
         return
       }
       // Ctrl+Shift+D: Toggle dark/light theme

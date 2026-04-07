@@ -31,6 +31,7 @@ import { registerPluginTools, isPluginToolsRegistered } from '@renderer/lib/chan
 import { DEFAULT_PLUGIN_PERMISSIONS } from '@renderer/lib/channel/types'
 import { loadLayeredMemorySnapshot } from '@renderer/lib/agent/memory-files'
 import type { UnifiedMessage, ProviderConfig, ContentBlock } from '@renderer/lib/api/types'
+import type { Session } from '@renderer/stores/chat-store'
 import type { AgentLoopConfig } from '@renderer/lib/agent/types'
 import type { ToolContext } from '@renderer/lib/tools/tool-types'
 import { hasPendingSessionMessagesForSession } from '@renderer/hooks/use-chat-actions'
@@ -319,15 +320,17 @@ async function _runPluginAgent(task: PluginAutoReplyTask): Promise<void> {
       } | null
       const dbSession = row?.session
       if (dbSession) {
-        const newSession = {
+        const newSession: Session = {
           id: sessionId,
           title: shouldReplaceSessionTitle(dbSession.title, resolvedTitle)
             ? resolvedTitle
             : dbSession.title || resolvedTitle,
-          mode: (dbSession.mode as 'chat' | 'clarify' | 'cowork' | 'code') || 'cowork',
+          mode: (dbSession.mode as 'chat' | 'clarify' | 'cowork' | 'code' | 'acp') || 'cowork',
           messages: [],
           messageCount: 0,
           messagesLoaded: true,
+          loadedRangeStart: 0,
+          loadedRangeEnd: 0,
           createdAt: dbSession.created_at ?? Date.now(),
           updatedAt: dbSession.updated_at ?? Date.now(),
           projectId: dbSession.project_id ?? channelProjectId,
@@ -349,13 +352,15 @@ async function _runPluginAgent(task: PluginAutoReplyTask): Promise<void> {
   }
 
   if (!session) {
-    const newSession = {
+    const newSession: Session = {
       id: sessionId,
       title: resolvedTitle,
       mode: 'cowork' as const,
       messages: [],
       messageCount: 0,
       messagesLoaded: true,
+      loadedRangeStart: 0,
+      loadedRangeEnd: 0,
       createdAt: Date.now(),
       updatedAt: Date.now(),
       projectId: channelProjectId,
@@ -372,33 +377,33 @@ async function _runPluginAgent(task: PluginAutoReplyTask): Promise<void> {
     session = newSession
   }
 
-  if (session) {
-    useChatStore.setState((state) => {
-      const s = state.sessions.find((sess) => sess.id === sessionId)
-      if (s) {
-        s.pluginChatType = task.chatType
-        s.pluginSenderId = task.senderId
-        s.pluginSenderName = task.senderName
-        if (channelProjectId) {
-          s.projectId = channelProjectId
-        }
-        if (channelWorkDir) {
-          s.workingFolder = channelWorkDir
-        }
-        if (channelSshConnectionId !== undefined) {
-          s.sshConnectionId = channelSshConnectionId
-        }
+  if (!session) return
+
+  useChatStore.setState((state) => {
+    const s = state.sessions.find((sess) => sess.id === sessionId)
+    if (s) {
+      s.pluginChatType = task.chatType
+      s.pluginSenderId = task.senderId
+      s.pluginSenderName = task.senderName
+      if (channelProjectId) {
+        s.projectId = channelProjectId
       }
-    })
-    session = {
-      ...session,
-      pluginChatType: task.chatType,
-      pluginSenderId: task.senderId,
-      pluginSenderName: task.senderName,
-      projectId: channelProjectId ?? session.projectId,
-      workingFolder: channelWorkDir || session.workingFolder,
-      sshConnectionId: channelSshConnectionId ?? session.sshConnectionId
+      if (channelWorkDir) {
+        s.workingFolder = channelWorkDir
+      }
+      if (channelSshConnectionId !== undefined) {
+        s.sshConnectionId = channelSshConnectionId
+      }
     }
+  })
+  session = {
+    ...session,
+    pluginChatType: task.chatType,
+    pluginSenderId: task.senderId,
+    pluginSenderName: task.senderName,
+    projectId: channelProjectId ?? session.projectId,
+    workingFolder: channelWorkDir || session.workingFolder,
+    sshConnectionId: channelSshConnectionId ?? session.sshConnectionId
   }
 
   // Update session title in store if we have a better name now
@@ -571,13 +576,13 @@ async function _runPluginAgent(task: PluginAutoReplyTask): Promise<void> {
   }
 
   // ── Run Agent Loop ──
-  const messages = useChatStore.getState().getSessionMessages(sessionId)
+  const messages = await useChatStore.getState().getSessionMessagesForRequest(sessionId, {
+    includeTrailingAssistantPlaceholder: false
+  })
 
   // Filter out empty assistant messages (can occur if a previous run was interrupted
   // or duplicate triggers left orphaned placeholders) — API rejects empty assistant turns
-  const historyMessages = messages
-    .slice(0, -1) // Exclude current assistant placeholder
-    .filter((m) => {
+  const historyMessages = messages.filter((m) => {
       if (m.role !== 'assistant') return true
       if (typeof m.content === 'string') return m.content.trim().length > 0
       if (Array.isArray(m.content)) return m.content.length > 0

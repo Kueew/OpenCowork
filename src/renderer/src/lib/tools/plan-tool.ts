@@ -224,3 +224,21 @@ export const PLAN_MODE_ALLOWED_TOOLS = new Set([
   // Preview (read-only)
   'OpenPreview'
 ])
+
+/** Tool names allowed in ACP mode for the lead agent */
+export const ACP_MODE_ALLOWED_TOOLS = new Set([
+  'Read',
+  'LS',
+  'Glob',
+  'Grep',
+  'EnterPlanMode',
+  'SavePlan',
+  'ExitPlanMode',
+  'AskUserQuestion',
+  'TaskCreate',
+  'TaskGet',
+  'TaskUpdate',
+  'TaskList',
+  'Task',
+  'OpenPreview'
+])

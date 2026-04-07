@@ -4,6 +4,7 @@ import {
   CircleHelp,
   Briefcase,
   Code2,
+  ShieldCheck,
   Plus,
   Settings,
   Keyboard,
@@ -254,6 +255,11 @@ export function CommandPalette(): React.JSX.Element {
                 value: 'code' as AppMode,
                 label: t('commandPalette.switchToCode'),
                 icon: <Code2 className="size-4" />
+              },
+              {
+                value: 'acp' as AppMode,
+                label: t('commandPalette.switchToAcp'),
+                icon: <ShieldCheck className="size-4" />
               }
             ] as const
           )
@@ -388,6 +394,8 @@ export function CommandPalette(): React.JSX.Element {
                   <CircleHelp className="size-4" />
                 ) : s.mode === 'cowork' ? (
                   <Briefcase className="size-4" />
+                ) : s.mode === 'acp' ? (
+                  <ShieldCheck className="size-4" />
                 ) : (
                   <Code2 className="size-4" />
                 )}

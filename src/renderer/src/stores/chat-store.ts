@@ -51,6 +51,9 @@ export interface Session {
   messages: UnifiedMessage[]
   messageCount: number
   messagesLoaded: boolean
+  loadedRangeStart: number
+  loadedRangeEnd: number
+  lastKnownMessageCount?: number
   createdAt: number
   updatedAt: number
   projectId?: string
@@ -210,9 +213,14 @@ interface ChatStore {
 
   // Initialization
   loadFromDb: () => Promise<void>
-  loadRecentSessionMessages: (sessionId: string, force?: boolean) => Promise<void>
+  loadRecentSessionMessages: (sessionId: string, force?: boolean, limit?: number) => Promise<void>
   loadOlderSessionMessages: (sessionId: string, limit?: number) => Promise<number>
   loadSessionMessages: (sessionId: string, force?: boolean) => Promise<void>
+  loadWindowSessionMessages: (sessionId: string, offset: number, limit: number) => Promise<void>
+  getSessionMessagesForRequest: (
+    sessionId: string,
+    options?: { includeTrailingAssistantPlaceholder?: boolean }
+  ) => Promise<UnifiedMessage[]>
   ensureDefaultProject: () => Promise<Project | null>
 
   // Project CRUD
@@ -339,6 +347,9 @@ interface MessageRow {
 }
 
 const RECENT_SESSION_MESSAGE_PAGE_SIZE = 160
+const MIN_INITIAL_SESSION_MESSAGE_PAGE_SIZE = 5
+const MESSAGE_WINDOW_MAX_SIZE = 240
+const MESSAGE_WINDOW_TAIL_PRESERVE = 80
 
 function rowToProject(row: ProjectRow): Project {
   return {
@@ -355,6 +366,8 @@ function rowToProject(row: ProjectRow): Project {
 
 function rowToSession(row: SessionRow, messages: UnifiedMessage[] = []): Session {
   const messageCount = row.message_count ?? messages.length
+  const loadedRangeEnd = messages.length > 0 ? messageCount : 0
+  const loadedRangeStart = Math.max(0, loadedRangeEnd - messages.length)
   return {
     id: row.id,
     title: row.title,
@@ -363,6 +376,9 @@ function rowToSession(row: SessionRow, messages: UnifiedMessage[] = []): Session
     messages,
     messageCount,
     messagesLoaded: messages.length > 0 || messageCount === 0,
+    loadedRangeStart,
+    loadedRangeEnd,
+    lastKnownMessageCount: messageCount,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     projectId: row.project_id ?? undefined,
@@ -407,6 +423,16 @@ function cloneImportedMessages(messages: UnifiedMessage[] | undefined): UnifiedM
     ...message,
     id: nanoid()
   }))
+}
+
+function trimSessionMessageWindow(session: Session): void {
+  if (session.messages.length <= MESSAGE_WINDOW_MAX_SIZE) return
+  const removableCount = session.messages.length - MESSAGE_WINDOW_MAX_SIZE
+  const maxRemovable = Math.max(0, session.messages.length - MESSAGE_WINDOW_TAIL_PRESERVE)
+  const trimCount = Math.min(removableCount, maxRemovable)
+  if (trimCount <= 0) return
+  session.messages.splice(0, trimCount)
+  session.loadedRangeStart = Math.min(session.messageCount, session.loadedRangeStart + trimCount)
 }
 
 function sanitizeToolBlocksForResend(messages: UnifiedMessage[]): {
@@ -837,11 +863,18 @@ export const useChatStore = create<ChatStore>()(
       }
     },
 
-    loadRecentSessionMessages: async (sessionId, force = false) => {
+    loadRecentSessionMessages: async (sessionId, force = false, limit) => {
       const session = get().sessions.find((s) => s.id === sessionId)
       if (!session) return
       const knownCount = session.messageCount ?? session.messages.length
-      if (!force && session.messagesLoaded && session.messages.length > 0) return
+      const requestedLimit = Math.max(
+        MIN_INITIAL_SESSION_MESSAGE_PAGE_SIZE,
+        Math.min(limit ?? MIN_INITIAL_SESSION_MESSAGE_PAGE_SIZE, knownCount || MIN_INITIAL_SESSION_MESSAGE_PAGE_SIZE)
+      )
+      if (!force && session.messagesLoaded && session.messages.length > 0) {
+        const loadedAtTail = session.loadedRangeEnd === knownCount
+        if (loadedAtTail && session.messages.length >= requestedLimit) return
+      }
       if (knownCount === 0) {
         set((state) => {
           const target = state.sessions.find((s) => s.id === sessionId)
@@ -849,15 +882,21 @@ export const useChatStore = create<ChatStore>()(
           target.messages = []
           target.messagesLoaded = true
           target.messageCount = 0
+          target.loadedRangeStart = 0
+          target.loadedRangeEnd = 0
+          target.lastKnownMessageCount = 0
         })
         return
       }
       try {
-        const limit = Math.min(RECENT_SESSION_MESSAGE_PAGE_SIZE, knownCount)
-        const offset = Math.max(0, knownCount - limit)
+        const nextLimit = Math.max(
+          MIN_INITIAL_SESSION_MESSAGE_PAGE_SIZE,
+          Math.min(limit ?? RECENT_SESSION_MESSAGE_PAGE_SIZE, knownCount)
+        )
+        const offset = Math.max(0, knownCount - nextLimit)
         const msgRows = (await ipcClient.invoke('db:messages:list-page', {
           sessionId,
-          limit,
+          limit: nextLimit,
           offset
         })) as MessageRow[]
         const messages = msgRows.map(rowToMessage)
@@ -867,6 +906,9 @@ export const useChatStore = create<ChatStore>()(
           target.messages = messages
           target.messagesLoaded = true
           target.messageCount = knownCount
+          target.loadedRangeStart = offset
+          target.loadedRangeEnd = offset + messages.length
+          target.lastKnownMessageCount = knownCount
         })
       } catch (err) {
         console.error('[ChatStore] Failed to load recent session messages:', err)
@@ -881,7 +923,7 @@ export const useChatStore = create<ChatStore>()(
       }
       const latest = get().sessions.find((s) => s.id === sessionId)
       if (!latest) return 0
-      const olderCount = Math.max(0, latest.messageCount - latest.messages.length)
+      const olderCount = Math.max(0, latest.loadedRangeStart)
       if (olderCount === 0) return 0
       const nextCount = Math.min(limit, olderCount)
       const offset = olderCount - nextCount
@@ -901,6 +943,9 @@ export const useChatStore = create<ChatStore>()(
           if (merged.length === 0) return
           target.messages = [...merged, ...target.messages]
           target.messagesLoaded = true
+          target.loadedRangeStart = offset
+          target.loadedRangeEnd = Math.max(target.loadedRangeEnd, offset + target.messages.length)
+          target.lastKnownMessageCount = target.messageCount
         })
         return olderMessages.length
       } catch (err) {
@@ -913,7 +958,8 @@ export const useChatStore = create<ChatStore>()(
       const session = get().sessions.find((s) => s.id === sessionId)
       if (!session) return
       const knownCount = session.messageCount ?? session.messages.length
-      const shouldSkip = !force && session.messagesLoaded && knownCount <= session.messages.length
+      const shouldSkip =
+        !force && session.messagesLoaded && session.loadedRangeStart === 0 && knownCount <= session.messages.length
       if (shouldSkip) return
       try {
         const msgRows = (await ipcClient.invoke('db:messages:list', sessionId)) as MessageRow[]
@@ -924,10 +970,63 @@ export const useChatStore = create<ChatStore>()(
           target.messages = messages
           target.messagesLoaded = true
           target.messageCount = messages.length
+          target.loadedRangeStart = 0
+          target.loadedRangeEnd = messages.length
+          target.lastKnownMessageCount = messages.length
         })
       } catch (err) {
         console.error('[ChatStore] Failed to load session messages:', err)
       }
+    },
+
+    loadWindowSessionMessages: async (sessionId, offset, limit) => {
+      const session = get().sessions.find((s) => s.id === sessionId)
+      if (!session) return
+      const safeOffset = Math.max(0, offset)
+      const safeLimit = Math.max(MIN_INITIAL_SESSION_MESSAGE_PAGE_SIZE, limit)
+      try {
+        const msgRows = (await ipcClient.invoke('db:messages:list-page', {
+          sessionId,
+          limit: safeLimit,
+          offset: safeOffset
+        })) as MessageRow[]
+        const messages = msgRows.map(rowToMessage)
+        set((state) => {
+          const target = state.sessions.find((s) => s.id === sessionId)
+          if (!target) return
+          target.messages = messages
+          target.messagesLoaded = true
+          target.loadedRangeStart = safeOffset
+          target.loadedRangeEnd = safeOffset + messages.length
+          target.lastKnownMessageCount = target.messageCount
+        })
+      } catch (err) {
+        console.error('[ChatStore] Failed to load window session messages:', err)
+      }
+    },
+
+    getSessionMessagesForRequest: async (sessionId, options) => {
+      const session = get().sessions.find((s) => s.id === sessionId)
+      if (!session) return []
+      const includeTrailingAssistantPlaceholder = options?.includeTrailingAssistantPlaceholder ?? true
+      const hasFullHistory =
+        session.messagesLoaded &&
+        session.loadedRangeStart === 0 &&
+        session.loadedRangeEnd >= session.messageCount
+
+      let messages = hasFullHistory
+        ? session.messages
+        : ((await ipcClient.invoke('db:messages:list', sessionId)) as MessageRow[]).map(rowToMessage)
+
+      if (!includeTrailingAssistantPlaceholder) {
+        messages = messages.filter((message, index) => {
+          if (index !== messages.length - 1 || message.role !== 'assistant') return true
+          if (typeof message.content === 'string') return message.content.trim().length > 0
+          return Array.isArray(message.content) ? message.content.length > 0 : true
+        })
+      }
+
+      return messages
     },
 
     loadFromDb: async () => {
@@ -958,6 +1057,9 @@ export const useChatStore = create<ChatStore>()(
           }
           if (session.messageCount === 0) {
             session.messagesLoaded = true
+            session.loadedRangeStart = 0
+            session.loadedRangeEnd = 0
+            session.lastKnownMessageCount = 0
           }
           return session
         })
@@ -1049,6 +1151,9 @@ export const useChatStore = create<ChatStore>()(
         messages: [],
         messageCount: 0,
         messagesLoaded: true,
+        loadedRangeStart: 0,
+        loadedRangeEnd: 0,
+        lastKnownMessageCount: 0,
         createdAt: now,
         updatedAt: now,
         projectId: targetProjectId ?? undefined,
@@ -1169,8 +1274,12 @@ export const useChatStore = create<ChatStore>()(
           const prevSession = state.sessions.find((session) => session.id === prevId)
           if (prevSession) {
             delete prevSession.promptSnapshot
+            prevSession.lastKnownMessageCount = prevSession.messageCount
             if (!state.streamingMessages[prevId] && prevSession.messages.length > 0) {
               prevSession.messagesLoaded = false
+              prevSession.messages = []
+              prevSession.loadedRangeStart = prevSession.messageCount
+              prevSession.loadedRangeEnd = prevSession.messageCount
             }
           }
         }
@@ -1232,7 +1341,10 @@ export const useChatStore = create<ChatStore>()(
       set((state) => {
         const session = state.sessions.find((s) => s.id === id)
         if (session) {
-          const shouldClearPromptSnapshot = (session.mode === 'chat') !== (mode === 'chat')
+          const shouldClearPromptSnapshot =
+            session.mode !== mode ||
+            (session.mode === 'chat') !== (mode === 'chat') ||
+            (session.mode === 'acp') !== (mode === 'acp')
           session.mode = mode
           if (shouldClearPromptSnapshot) {
             delete session.promptSnapshot
@@ -1332,7 +1444,10 @@ export const useChatStore = create<ChatStore>()(
           mode: snapshot.mode,
           planMode: snapshot.planMode,
           systemPrompt: snapshot.systemPrompt,
-          toolDefs: snapshot.toolDefs.slice()
+          toolDefs: snapshot.toolDefs.slice(),
+          projectId: snapshot.projectId,
+          workingFolder: snapshot.workingFolder,
+          sshConnectionId: snapshot.sshConnectionId
         }
       })
     },
@@ -1377,7 +1492,10 @@ export const useChatStore = create<ChatStore>()(
         workingFolder: session.workingFolder ?? project?.workingFolder,
         sshConnectionId: session.sshConnectionId ?? project?.sshConnectionId,
         messageCount: session.messageCount ?? session.messages.length,
-        messagesLoaded: session.messagesLoaded ?? true
+        messagesLoaded: session.messagesLoaded ?? true,
+        loadedRangeStart: session.loadedRangeStart ?? 0,
+        loadedRangeEnd: session.loadedRangeEnd ?? session.messages.length,
+        lastKnownMessageCount: session.lastKnownMessageCount ?? session.messageCount ?? session.messages.length
       }
       set((state) => {
         state.sessions.push(normalizedSession)
@@ -1435,6 +1553,9 @@ export const useChatStore = create<ChatStore>()(
         messages: importedMessages,
         messageCount: importedMessages.length,
         messagesLoaded: true,
+        loadedRangeStart: 0,
+        loadedRangeEnd: importedMessages.length,
+        lastKnownMessageCount: importedMessages.length,
         promptSnapshot: undefined,
         projectId: targetProjectId ?? undefined,
         workingFolder: project?.workingFolder ?? session.workingFolder,
@@ -1540,6 +1661,9 @@ export const useChatStore = create<ChatStore>()(
           session.messages = []
           session.messageCount = 0
           session.messagesLoaded = true
+          session.loadedRangeStart = 0
+          session.loadedRangeEnd = 0
+          session.lastKnownMessageCount = 0
           delete session.promptSnapshot
           session.updatedAt = now
         }
@@ -1570,6 +1694,9 @@ export const useChatStore = create<ChatStore>()(
         messages: clonedMessages,
         messageCount: clonedMessages.length,
         messagesLoaded: true,
+        loadedRangeStart: 0,
+        loadedRangeEnd: clonedMessages.length,
+        lastKnownMessageCount: clonedMessages.length,
         createdAt: now,
         updatedAt: now,
         projectId: source.projectId,
@@ -1621,6 +1748,9 @@ export const useChatStore = create<ChatStore>()(
         if (s) {
           s.messages.splice(assistantIdx)
           s.messageCount = s.messages.length
+          s.loadedRangeStart = 0
+          s.loadedRangeEnd = s.messages.length
+          s.lastKnownMessageCount = s.messages.length
         }
       })
       const newLen = get().sessions.find((s) => s.id === sessionId)?.messages.length ?? 0
@@ -1638,6 +1768,9 @@ export const useChatStore = create<ChatStore>()(
         if (s && s.messages.length > 0 && s.messages[s.messages.length - 1].role === 'user') {
           s.messages.pop()
           s.messageCount = s.messages.length
+          s.loadedRangeStart = 0
+          s.loadedRangeEnd = s.messages.length
+          s.lastKnownMessageCount = s.messages.length
         }
       })
       const newLen = get().sessions.find((s) => s.id === sessionId)?.messages.length ?? 0
@@ -1650,6 +1783,9 @@ export const useChatStore = create<ChatStore>()(
         if (session && fromIndex >= 0 && fromIndex < session.messages.length) {
           session.messages.splice(fromIndex)
           session.messageCount = session.messages.length
+          session.loadedRangeStart = 0
+          session.loadedRangeEnd = session.messages.length
+          session.lastKnownMessageCount = session.messages.length
           session.updatedAt = Date.now()
         }
       })
@@ -1665,6 +1801,9 @@ export const useChatStore = create<ChatStore>()(
           session.messages = messages
           session.messageCount = messages.length
           session.messagesLoaded = true
+          session.loadedRangeStart = 0
+          session.loadedRangeEnd = messages.length
+          session.lastKnownMessageCount = messages.length
           session.updatedAt = now
         }
       })
@@ -1733,9 +1872,14 @@ export const useChatStore = create<ChatStore>()(
         if (!session.messagesLoaded) {
           session.messagesLoaded = true
           session.messages = []
+          session.loadedRangeStart = session.messageCount
+          session.loadedRangeEnd = session.messageCount
         }
         session.messages.push(msg)
         session.messageCount += 1
+        session.loadedRangeEnd = session.messageCount
+        session.lastKnownMessageCount = session.messageCount
+        trimSessionMessageWindow(session)
         session.updatedAt = Date.now()
       })
       if (!shouldPersist) return

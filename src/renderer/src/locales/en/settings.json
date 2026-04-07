@@ -210,13 +210,15 @@
       "chat": "Chat Mode",
       "clarify": "Clarify Mode",
       "cowork": "Cowork Mode",
-      "code": "Code Mode"
+      "code": "Code Mode",
+      "acp": "ACP Mode"
     },
     "promptRecommendationModesDesc": {
       "chat": "For general conversation and next-question suggestions",
       "clarify": "For requirement clarification and follow-up suggestions",
       "cowork": "For collaborative execution and task breakdown suggestions",
-      "code": "For implementation, modification, and debugging suggestions"
+      "code": "For implementation, modification, and debugging suggestions",
+      "acp": "For goal clarification, architecture design, and delegation suggestions in ACP control flows"
     },
     "selectRecommendationModel": "Select recommendation model",
     "useFastModelRecommendation": "Use fast model (default)",

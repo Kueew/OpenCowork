@@ -61,6 +61,13 @@ export interface PreviewPanelState {
   markdownTitle?: string
 }
 
+export interface MessageListViewState {
+  scrollOffset: number
+  messageCount: number
+  loadedRangeStart: number
+  loadedRangeEnd: number
+}
+
 export type SettingsTab =
   | 'general'
   | 'memory'
@@ -242,6 +249,9 @@ interface UIStore {
   /** Session-scoped UI state */
   activeScopedSessionId: string | null
   syncSessionScopedState: (sessionId: string | null) => void
+  messageListViewStatesBySession: Record<string, MessageListViewState | undefined>
+  setMessageListViewState: (sessionId: string, state: MessageListViewState | null) => void
+  getMessageListViewState: (sessionId?: string | null) => MessageListViewState | null
   autoModelSelectionsBySession: Record<string, AutoModelSelectionStatus | null>
   autoModelRoutingStatesBySession: Record<string, AutoModelRoutingState>
   setAutoModelSelection: (sessionId: string, status: AutoModelSelectionStatus | null) => void
@@ -282,8 +292,15 @@ export const useUIStore = create<UIStore>((set, get) => ({
   setMode: (mode) =>
     set((state) => ({
       mode,
-      rightPanelOpen: mode === 'cowork',
-      leftSidebarOpen: mode === 'cowork' ? false : state.leftSidebarOpen
+      rightPanelOpen: mode === 'cowork' || mode === 'acp',
+      rightPanelTab:
+        mode === 'acp'
+          ? 'acp'
+          : state.rightPanelTab === 'acp'
+            ? 'steps'
+            : state.rightPanelTab,
+      rightPanelSection: mode === 'acp' ? 'monitoring' : state.rightPanelSection,
+      leftSidebarOpen: mode === 'cowork' || mode === 'acp' ? false : state.leftSidebarOpen
     })),
 
   activeNavItem: 'chat',
@@ -482,6 +499,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   previewPanelState: null,
   previewPanelsBySession: {},
   activeScopedSessionId: null,
+  messageListViewStatesBySession: {},
   autoModelSelectionsBySession: {},
   autoModelRoutingStatesBySession: {},
   syncSessionScopedState: (sessionId) =>
@@ -496,6 +514,22 @@ export const useUIStore = create<UIStore>((set, get) => ({
         previewPanelState: scopedPreviewState
       }
     }),
+  setMessageListViewState: (sessionId, state) =>
+    set((currentState) => {
+      const nextMessageListViewStatesBySession = { ...currentState.messageListViewStatesBySession }
+      if (state) {
+        nextMessageListViewStatesBySession[sessionId] = state
+      } else {
+        delete nextMessageListViewStatesBySession[sessionId]
+      }
+
+      return { messageListViewStatesBySession: nextMessageListViewStatesBySession }
+    }),
+  getMessageListViewState: (sessionId) => {
+    const targetSessionId = resolveScopedSessionId(sessionId, get().activeScopedSessionId)
+    if (!targetSessionId) return null
+    return get().messageListViewStatesBySession[targetSessionId] ?? null
+  },
   setAutoModelSelection: (sessionId, status) =>
     set((state) => ({
       autoModelSelectionsBySession: {

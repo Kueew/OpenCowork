@@ -89,6 +89,39 @@ public sealed class OpenAiChatProvider : ILlmProvider
         var syntheticToolKeyCounter = 0;
         string? lastGoogleThinkingSignature = null;
 
+        string? TryGetUnclaimedIndexedKey(OpenAiToolCallDelta toolCall)
+        {
+            var mappedKeys = toolKeysById.Values.ToHashSet(StringComparer.Ordinal);
+            var candidates = toolKeysByIndex.Values
+                .Distinct(StringComparer.Ordinal)
+                .Where(key => !mappedKeys.Contains(key))
+                .ToList();
+
+            if (candidates.Count == 0)
+                return null;
+
+            var toolName = toolCall.Function?.Name;
+            if (!string.IsNullOrWhiteSpace(toolName))
+            {
+                var nameMatched = candidates
+                    .Where(key =>
+                    {
+                        var existingName = toolNames.GetValueOrDefault(key);
+                        return string.IsNullOrWhiteSpace(existingName)
+                            || string.Equals(existingName, toolName, StringComparison.Ordinal);
+                    })
+                    .ToList();
+
+                if (nameMatched.Count == 1)
+                    return nameMatched[0];
+
+                if (nameMatched.Count > 1)
+                    return null;
+            }
+
+            return candidates.Count == 1 ? candidates[0] : null;
+        }
+
         string GetToolKey(OpenAiToolCallDelta toolCall)
         {
             if (!string.IsNullOrWhiteSpace(toolCall.Id))
@@ -109,6 +142,17 @@ public sealed class OpenAiChatProvider : ILlmProvider
                     toolKeysById[toolCall.Id] = existingByIndex;
                     toolKeysWithoutIndex.Remove(existingByIndex);
                     return existingByIndex;
+                }
+
+                if (!toolCall.Index.HasValue)
+                {
+                    var inferredIndexedKey = TryGetUnclaimedIndexedKey(toolCall);
+                    if (inferredIndexedKey is not null)
+                    {
+                        toolKeysById[toolCall.Id] = inferredIndexedKey;
+                        toolKeysWithoutIndex.Remove(inferredIndexedKey);
+                        return inferredIndexedKey;
+                    }
                 }
 
                 if (!toolCall.Index.HasValue && toolKeysWithoutIndex.Count == 1)
@@ -246,6 +290,7 @@ public sealed class OpenAiChatProvider : ILlmProvider
                 var choice = chunk.Choices[0];
                 var delta = choice.Delta;
                 var toolCallsFromMessage = choice.Message?.ToolCalls;
+                var effectiveToolCalls = delta?.ToolCalls ?? toolCallsFromMessage;
 
                 if (delta is not null)
                 {
@@ -272,79 +317,78 @@ public sealed class OpenAiChatProvider : ILlmProvider
                             ThinkingEncryptedProvider = "google"
                         };
                     }
+                }
 
-                    var effectiveToolCalls = delta.ToolCalls ?? toolCallsFromMessage;
-                    if (effectiveToolCalls is not null)
+                if (effectiveToolCalls is not null)
+                {
+                    foreach (var tc in effectiveToolCalls)
                     {
-                        foreach (var tc in effectiveToolCalls)
-                        {
-                            firstTokenAt ??= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                            var toolKey = GetToolKey(tc);
+                        firstTokenAt ??= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                        var toolKey = GetToolKey(tc);
 
-                            if (!toolArgs.ContainsKey(toolKey))
-                                toolArgs[toolKey] = new StringBuilder();
-                            if (!toolNames.ContainsKey(toolKey))
-                                toolNames[toolKey] = string.Empty;
+                        if (!toolArgs.ContainsKey(toolKey))
+                            toolArgs[toolKey] = new StringBuilder();
+                        if (!toolNames.ContainsKey(toolKey))
+                            toolNames[toolKey] = string.Empty;
 
-                            var extraContent = tc.ExtraContent ?? (tc.ExtraContent is null && !string.IsNullOrWhiteSpace(lastGoogleThinkingSignature)
-                                ? new ToolCallExtraContent
-                                {
-                                    Google = new GoogleToolCallExtraContent
-                                    {
-                                        ThoughtSignature = lastGoogleThinkingSignature
-                                    }
-                                }
-                                : null);
-
-                            if (extraContent is not null)
+                        var extraContent = tc.ExtraContent ?? (tc.ExtraContent is null && !string.IsNullOrWhiteSpace(lastGoogleThinkingSignature)
+                            ? new ToolCallExtraContent
                             {
-                                toolExtraContents[toolKey] = extraContent;
-                                if (extraContent.Google?.ThoughtSignature is { Length: > 0 } thoughtSignature
-                                    && thoughtSignature != lastGoogleThinkingSignature)
+                                Google = new GoogleToolCallExtraContent
                                 {
-                                    lastGoogleThinkingSignature = thoughtSignature;
-                                    yield return new StreamEvent
-                                    {
-                                        Type = "thinking_encrypted",
-                                        ThinkingEncryptedContent = thoughtSignature,
-                                        ThinkingEncryptedProvider = "google"
-                                    };
+                                    ThoughtSignature = lastGoogleThinkingSignature
                                 }
                             }
+                            : null);
 
-                            if (!string.IsNullOrWhiteSpace(tc.Function?.Name))
-                                toolNames[toolKey] = tc.Function.Name;
-
-                            if (!string.IsNullOrWhiteSpace(tc.Id))
-                                toolIds[toolKey] = tc.Id;
-
-                            if (toolIds.TryGetValue(toolKey, out var toolId)
-                                && !startedToolKeys.Contains(toolKey))
+                        if (extraContent is not null)
+                        {
+                            toolExtraContents[toolKey] = extraContent;
+                            if (extraContent.Google?.ThoughtSignature is { Length: > 0 } thoughtSignature
+                                && thoughtSignature != lastGoogleThinkingSignature)
                             {
-                                startedToolKeys.Add(toolKey);
+                                lastGoogleThinkingSignature = thoughtSignature;
                                 yield return new StreamEvent
                                 {
-                                    Type = "tool_call_start",
-                                    ToolCallId = toolId,
-                                    ToolName = toolNames.GetValueOrDefault(toolKey),
-                                    ToolCallExtraContent = toolExtraContents.GetValueOrDefault(toolKey)
+                                    Type = "thinking_encrypted",
+                                    ThinkingEncryptedContent = thoughtSignature,
+                                    ThinkingEncryptedProvider = "google"
                                 };
                             }
+                        }
 
-                            var argumentsChunk = tc.Function?.GetArgumentsChunk();
-                            if (!string.IsNullOrWhiteSpace(argumentsChunk))
+                        if (!string.IsNullOrWhiteSpace(tc.Function?.Name))
+                            toolNames[toolKey] = tc.Function.Name;
+
+                        if (!string.IsNullOrWhiteSpace(tc.Id))
+                            toolIds[toolKey] = tc.Id;
+
+                        if (toolIds.TryGetValue(toolKey, out var toolId)
+                            && !startedToolKeys.Contains(toolKey))
+                        {
+                            startedToolKeys.Add(toolKey);
+                            yield return new StreamEvent
                             {
-                                toolArgs[toolKey].Append(argumentsChunk);
+                                Type = "tool_call_start",
+                                ToolCallId = toolId,
+                                ToolName = toolNames.GetValueOrDefault(toolKey),
+                                ToolCallExtraContent = toolExtraContents.GetValueOrDefault(toolKey)
+                            };
+                        }
 
-                                if (toolIds.TryGetValue(toolKey, out toolId))
+                        var argumentsChunk = tc.Function?.GetArgumentsChunk();
+                        if (!string.IsNullOrWhiteSpace(argumentsChunk))
+                        {
+                            toolArgs[toolKey].Append(argumentsChunk);
+
+                            if (toolIds.TryGetValue(toolKey, out toolId))
+                            {
+                                yield return new StreamEvent
                                 {
-                                    yield return new StreamEvent
-                                    {
-                                        Type = "tool_call_delta",
-                                        ToolCallId = toolId,
-                                        ArgumentsDelta = argumentsChunk
-                                    };
-                                }
+                                    Type = "tool_call_delta",
+                                    ToolCallId = toolId,
+                                    ArgumentsDelta = argumentsChunk
+                                };
                             }
                         }
                     }

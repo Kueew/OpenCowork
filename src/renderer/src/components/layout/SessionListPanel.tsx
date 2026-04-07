@@ -1017,7 +1017,7 @@ export function SessionListPanel(): React.JSX.Element {
             {t('sidebar.switchMode')}
           </ContextMenuSubTrigger>
           <ContextMenuSubContent>
-            {(['chat', 'clarify', 'cowork', 'code'] as const).map((m) => (
+            {(['chat', 'clarify', 'cowork', 'code', 'acp'] as const).map((m) => (
               <ContextMenuItem
                 key={m}
                 disabled={session.mode === m}
@@ -1027,7 +1027,7 @@ export function SessionListPanel(): React.JSX.Element {
                 }}
               >
                 {modeIcons[m]}
-                <span className="capitalize">{m}</span>
+                <span className="capitalize">{t(`sidebar.mode.${m}`)}</span>
               </ContextMenuItem>
             ))}
           </ContextMenuSubContent>

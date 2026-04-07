@@ -32,7 +32,7 @@ import { IPC } from '@renderer/lib/ipc/channels'
 import { clearPendingQuestions } from '@renderer/lib/tools/ask-user-tool'
 import type { ToolContext } from '@renderer/lib/tools/tool-types'
 
-import { PLAN_MODE_ALLOWED_TOOLS } from '@renderer/lib/tools/plan-tool'
+import { ACP_MODE_ALLOWED_TOOLS, PLAN_MODE_ALLOWED_TOOLS } from '@renderer/lib/tools/plan-tool'
 import { usePlanStore } from '@renderer/stores/plan-store'
 import { useTaskStore } from '@renderer/stores/task-store'
 import { generateSessionTitle } from '@renderer/lib/api/generate-title'
@@ -1681,13 +1681,12 @@ export function useChatActions(): {
       }
       await chatStore.loadRecentSessionMessages(sessionId)
 
+      const inMemoryMessages = chatStore.getSessionMessages(sessionId)
       const existingAssistantMessage =
         source === 'continue' && reuseAssistantMessageId
-          ? chatStore
-              .getSessionMessages(sessionId)
-              .find(
-                (message) => message.id === reuseAssistantMessageId && message.role === 'assistant'
-              )
+          ? inMemoryMessages.find(
+              (message) => message.id === reuseAssistantMessageId && message.role === 'assistant'
+            )
           : undefined
 
       const resolvedCommand = await resolveUserCommand(text, commandOverride)
@@ -1786,7 +1785,7 @@ export function useChatActions(): {
         settings.mainModelSelectionMode === 'auto'
       const latestUserInput =
         source === 'continue'
-          ? extractLatestUserInput(useChatStore.getState().getSessionMessages(sessionId))
+          ? extractLatestUserInput(inMemoryMessages)
           : resolvedCommand.userText || text
       if (shouldShowAutoRouting) {
         useUIStore.getState().setAutoModelRoutingState(sessionId, 'routing')
@@ -2050,7 +2049,13 @@ export function useChatActions(): {
           finalEffectiveToolDefs = finalEffectiveToolDefs.filter((t) =>
             PLAN_MODE_ALLOWED_TOOLS.has(t.name)
           )
+        } else if (mode === 'acp') {
+          finalEffectiveToolDefs = finalEffectiveToolDefs.filter((t) =>
+            ACP_MODE_ALLOWED_TOOLS.has(t.name)
+          )
         }
+
+        // ACP lead agent: keep orchestration only, no direct implementation tools.
 
         // Image models: disable all tools (image generation doesn't use tools)
         // Exception: allow tools when continuing an existing agent run
@@ -2181,8 +2186,11 @@ export function useChatActions(): {
         const cachedPromptSnapshot = session?.promptSnapshot
         const canReusePromptSnapshot =
           !!cachedPromptSnapshot &&
-          cachedPromptSnapshot.mode !== 'chat' &&
-          cachedPromptSnapshot.planMode === isPlanMode
+          cachedPromptSnapshot.mode === mode &&
+          cachedPromptSnapshot.planMode === isPlanMode &&
+          (cachedPromptSnapshot.projectId ?? null) === (session?.projectId ?? null) &&
+          (cachedPromptSnapshot.workingFolder ?? null) === (session?.workingFolder ?? null) &&
+          (cachedPromptSnapshot.sshConnectionId ?? null) === (session?.sshConnectionId ?? null)
 
         let effectiveToolDefs = finalEffectiveToolDefs
         let agentSystemPrompt = cachedPromptSnapshot?.systemPrompt ?? ''
@@ -2221,7 +2229,10 @@ export function useChatActions(): {
             mode,
             planMode: isPlanMode,
             systemPrompt: agentSystemPrompt,
-            toolDefs: finalEffectiveToolDefs
+            toolDefs: finalEffectiveToolDefs,
+            projectId: session?.projectId,
+            workingFolder: session?.workingFolder,
+            sshConnectionId: session?.sshConnectionId ?? null
           })
         }
 
@@ -2319,8 +2330,9 @@ export function useChatActions(): {
         }
 
         try {
-          const messages = useChatStore.getState().getSessionMessages(sessionId)
-          let messagesToSend = existingAssistantMessage ? messages : messages.slice(0, -1) // Exclude the empty assistant placeholder
+          let messagesToSend = await useChatStore.getState().getSessionMessagesForRequest(sessionId, {
+            includeTrailingAssistantPlaceholder: !!existingAssistantMessage
+          })
 
           // Build and inject a runtime reminder into the last user message
           const sessionSnapshot = useChatStore.getState().sessions.find((s) => s.id === sessionId)
@@ -3603,6 +3615,9 @@ export function sendImplementPlan(planId: string): void {
   const chatStore = useChatStore.getState()
   const uiStore = useUIStore.getState()
   const session = chatStore.sessions.find((item) => item.id === plan.sessionId)
+  const isAcpSession =
+    session?.mode === 'acp' ||
+    (chatStore.activeSessionId === plan.sessionId && uiStore.mode === 'acp')
   const shouldSwitchToCodeMode =
     session?.mode === 'clarify' ||
     (chatStore.activeSessionId === plan.sessionId && uiStore.mode === 'clarify')
@@ -3618,13 +3633,22 @@ export function sendImplementPlan(planId: string): void {
   }
 
   uiStore.exitPlanMode(plan.sessionId)
-  uiStore.setRightPanelTab('steps')
+  uiStore.setRightPanelTab(isAcpSession ? 'acp' : 'steps')
 
   if (chatStore.activeSessionId === plan.sessionId) {
     uiStore.setRightPanelOpen(true)
   }
 
-  _sendMessageFn(`Execute the plan`)
+  _sendMessageFn(
+    isAcpSession
+      ? [
+          'Execute the approved plan in ACP mode.',
+          'Stay in ACP mode. Do not directly edit files or run implementation commands yourself.',
+          'Break the plan into concrete tasks, keep task tracking up to date, and delegate implementation through Task / sub-agents / teammates.',
+          'Review sub-agent outputs, continue delegation until the approved plan is completed, and report progress plus remaining risks after each wave.'
+        ].join('\n')
+      : 'Execute the plan'
+  )
 }
 
 export function sendImplementPlanInNewSession(planId: string): void {
