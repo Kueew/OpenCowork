@@ -5,7 +5,10 @@
       "mcp__ide__getDiagnostics",
       "Bash(dotnet build:*)",
       "Bash(grep -E \"\\\\.\\(ts|js\\)$\")",
-      "Bash(xargs grep:*)"
+      "Bash(xargs grep:*)",
+      "Bash(pnpm exec:*)",
+      "Bash(npm run:*)",
+      "Bash(node:*)"
     ]
   }
 }

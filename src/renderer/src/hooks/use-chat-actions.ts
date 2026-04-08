@@ -32,7 +32,11 @@ import { IPC } from '@renderer/lib/ipc/channels'
 import { clearPendingQuestions } from '@renderer/lib/tools/ask-user-tool'
 import type { ToolContext } from '@renderer/lib/tools/tool-types'
 
-import { ACP_MODE_ALLOWED_TOOLS, PLAN_MODE_ALLOWED_TOOLS } from '@renderer/lib/tools/plan-tool'
+import {
+  ACP_MODE_ALLOWED_TOOLS,
+  PLAN_MODE_ALLOWED_TOOLS,
+  createPlanModeInlineToolHandlers
+} from '@renderer/lib/tools/plan-tool'
 import { usePlanStore } from '@renderer/stores/plan-store'
 import { useTaskStore } from '@renderer/stores/task-store'
 import { generateSessionTitle } from '@renderer/lib/api/generate-title'
@@ -1385,6 +1389,7 @@ function createNodeAgentLoop(args: {
   }
   forceApproval: boolean
   compression?: CompressionConfig | null
+  inlineToolHandlers?: ToolContext['inlineToolHandlers']
 }): AsyncIterable<AgentEvent> {
   const pluginChatId = extractPluginChatId(args.session?.externalChatId)
   const loopConfig = {
@@ -1419,6 +1424,7 @@ function createNodeAgentLoop(args: {
     signal: args.signal,
     ipc: ipcClient,
     agentRunId: args.assistantMessageId,
+    ...(args.inlineToolHandlers ? { inlineToolHandlers: args.inlineToolHandlers } : {}),
     ...(args.session?.pluginId ? { pluginId: args.session.pluginId } : {}),
     ...(pluginChatId ? { pluginChatId } : {}),
     ...(args.session?.pluginChatType ? { pluginChatType: args.session.pluginChatType } : {}),
@@ -2258,6 +2264,7 @@ export function useChatActions(): {
           computerUseEnabled: desktopControlMode === 'computer-use',
           systemPrompt: agentSystemPrompt
         }
+        const planModeInlineToolHandlers = isPlanMode ? createPlanModeInlineToolHandlers() : undefined
         setRequestTraceInfo(assistantMsgId, {
           providerId: agentProviderConfig.providerId,
           providerBuiltinId: agentProviderConfig.providerBuiltinId,
@@ -2411,21 +2418,22 @@ export function useChatActions(): {
             compression: compressionConfig
           })
 
-          const useSidecar = await canUseSidecarForAgentRun({
-            messages: messagesToSend,
-            provider: agentProviderConfig,
-            tools: effectiveToolDefs,
-            sessionId,
-            workingFolder: session?.workingFolder,
-            maxIterations: DEFAULT_AGENT_MAX_ITERATIONS,
-            forceApproval: false,
-            compression: compressionConfig,
-            isPlanMode,
-            sessionMode: mode,
-            desktopControlMode,
-            hasChannels: scopedActiveChannels.length > 0,
-            hasMcps: activeMcps.length > 0
-          })
+          const useSidecar = !isPlanMode &&
+            (await canUseSidecarForAgentRun({
+              messages: messagesToSend,
+              provider: agentProviderConfig,
+              tools: effectiveToolDefs,
+              sessionId,
+              workingFolder: session?.workingFolder,
+              maxIterations: DEFAULT_AGENT_MAX_ITERATIONS,
+              forceApproval: false,
+              compression: compressionConfig,
+              isPlanMode,
+              sessionMode: mode,
+              desktopControlMode,
+              hasChannels: scopedActiveChannels.length > 0,
+              hasMcps: activeMcps.length > 0
+            }))
 
           console.log('[ChatActions] Agent execution path', {
             sessionId,
@@ -2552,7 +2560,8 @@ export function useChatActions(): {
               assistantMessageId: assistantMsgId,
               session,
               forceApproval: false,
-              compression: compressionConfig
+              compression: compressionConfig,
+              inlineToolHandlers: planModeInlineToolHandlers
             })
           }
 
@@ -3681,15 +3690,19 @@ export function sendImplementPlan(planId: string): void {
     uiStore.setRightPanelOpen(true)
   }
 
+  const basePrompt = plan.filePath
+    ? `Execute the approved plan from this file:\n${plan.filePath}`
+    : 'Execute the approved plan'
+
   _sendMessageFn(
     isAcpSession
       ? [
-          'Execute the approved plan in ACP mode.',
+          basePrompt,
           'Stay in ACP mode. Do not directly edit files or run implementation commands yourself.',
           'Break the plan into concrete tasks, keep task tracking up to date, and delegate implementation through Task / sub-agents / teammates.',
           'Review sub-agent outputs, continue delegation until the approved plan is completed, and report progress plus remaining risks after each wave.'
         ].join('\n')
-      : 'Execute the plan'
+      : basePrompt
   )
 }
 
@@ -3697,7 +3710,7 @@ export function sendImplementPlanInNewSession(planId: string): void {
   if (!_sendMessageFn) return
 
   const plan = usePlanStore.getState().plans[planId]
-  if (!plan?.content?.trim()) return
+  if (!plan?.filePath) return
 
   const chatStore = useChatStore.getState()
   const uiStore = useUIStore.getState()
@@ -3729,7 +3742,17 @@ export function sendImplementPlanInNewSession(planId: string): void {
   uiStore.setRightPanelTab('steps')
   uiStore.setRightPanelOpen(true)
 
-  void _sendMessageFn(plan.content, undefined, undefined, newSessionId)
+  void ipcClient
+    .invoke(IPC.FS_READ_FILE, { path: plan.filePath })
+    .then((result) => {
+      if (typeof result !== 'string' || !result.trim()) return
+      void _sendMessageFn?.(result, undefined, undefined, newSessionId)
+    })
+    .catch(() => {
+      toast.error('Failed to read plan file', {
+        description: plan.filePath
+      })
+    })
 }
 
 /**
@@ -3755,14 +3778,15 @@ export function sendPlanRevision(planId: string, feedback: string): void {
   // 3. Build revision prompt and send directly
   const prompt = [
     `The plan **${plan.title}** was rejected.`,
+    plan.filePath ? `Plan file: ${plan.filePath}` : '',
     feedback ? `Feedback:\n${feedback}` : '',
     '',
-    'Please revise the plan accordingly. Provide the updated plan in chat, then call SavePlan with the full content and summary, and ExitPlanMode.'
+    'Please revise the current plan file accordingly with Write/Edit, then call ExitPlanMode.'
   ]
     .filter(Boolean)
     .join('\n')
 
-  _sendMessageFn(prompt)
+  void _sendMessageFn(prompt)
 }
 
 /**

@@ -18,6 +18,8 @@ import { useShallow } from 'zustand/react/shallow'
 import { useUIStore } from '@renderer/stores/ui-store'
 import { useChatStore } from '@renderer/stores/chat-store'
 import { useAgentStore } from '@renderer/stores/agent-store'
+import { ipcClient } from '@renderer/lib/ipc/ipc-client'
+import { IPC } from '@renderer/lib/ipc/channels'
 import {
   sendImplementPlan,
   sendImplementPlanInNewSession,
@@ -47,7 +49,16 @@ function StatusBadge({ status }: { status: PlanStatus }): React.JSX.Element {
   )
 }
 
-function PlanContent({ plan }: { plan: Plan }): React.JSX.Element {
+async function readPlanContent(filePath?: string): Promise<string> {
+  if (!filePath) return ''
+  const result = await ipcClient.invoke(IPC.FS_READ_FILE, { path: filePath })
+  if (result && typeof result === 'object' && 'error' in result) {
+    return ''
+  }
+  return typeof result === 'string' ? result : ''
+}
+
+function PlanContent({ plan, content }: { plan: Plan; content: string }): React.JSX.Element {
   const { t } = useTranslation(['cowork', 'common'])
   const planMode = useUIStore((s) => s.planMode)
   const enterPlanMode = useUIStore((s) => s.enterPlanMode)
@@ -59,8 +70,7 @@ function PlanContent({ plan }: { plan: Plan }): React.JSX.Element {
   const [rejectOpen, setRejectOpen] = useState(false)
   const [rejectFeedback, setRejectFeedback] = useState('')
 
-  const canApprove =
-    !!plan.content && (plan.status === 'drafting' || plan.status === 'rejected') && !isRunning
+  const canApprove = !!content.trim() && (plan.status === 'drafting' || plan.status === 'rejected') && !isRunning
   const canReject = canApprove
 
   const handleConfirmExecute = (): void => {
@@ -74,7 +84,7 @@ function PlanContent({ plan }: { plan: Plan }): React.JSX.Element {
   const handleEditPlan = (): void => {
     usePlanStore.getState().setActivePlan(plan.id)
     usePlanStore.getState().updatePlan(plan.id, { status: 'drafting' })
-    enterPlanMode()
+    enterPlanMode(plan.sessionId)
   }
 
   const handleRejectConfirm = (): void => {
@@ -87,27 +97,26 @@ function PlanContent({ plan }: { plan: Plan }): React.JSX.Element {
 
   return (
     <div className="space-y-3">
-      {/* Header */}
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <FileText className="size-4 shrink-0 text-violet-500" />
             <h3 className="text-sm font-medium truncate">{plan.title}</h3>
           </div>
+          {plan.filePath && <p className="mt-1 text-[10px] text-muted-foreground truncate">{plan.filePath}</p>}
         </div>
         <StatusBadge status={plan.status} />
       </div>
 
       <Separator />
 
-      {/* Plan Content */}
       <div className="space-y-2">
         <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
           {t('plan.content', { defaultValue: 'Plan Content' })}
         </p>
-        {plan.content ? (
+        {content.trim() ? (
           <div className="text-xs text-foreground/90 whitespace-pre-wrap leading-relaxed max-h-[400px] overflow-y-auto rounded-md border border-border/50 bg-muted/30 p-3">
-            {plan.content}
+            {content}
           </div>
         ) : (
           <p className="text-xs text-muted-foreground/70">
@@ -121,7 +130,6 @@ function PlanContent({ plan }: { plan: Plan }): React.JSX.Element {
         )}
       </div>
 
-      {/* Actions */}
       <div className="flex items-center gap-2 pt-1">
         {canApprove && (
           <>
@@ -163,7 +171,6 @@ function PlanContent({ plan }: { plan: Plan }): React.JSX.Element {
           )}
       </div>
 
-      {/* Drafting indicator */}
       {(plan.status === 'drafting' || plan.status === 'rejected') && planMode && (
         <div className="flex items-center gap-2 text-xs text-amber-600 dark:text-amber-400 bg-amber-500/5 rounded-md px-3 py-2">
           <Loader2 className="size-3.5 animate-spin" />
@@ -222,36 +229,61 @@ export function PlanPanel(): React.JSX.Element {
   const isRunning = useAgentStore((s) => s.isSessionActive(activeSessionId)) || hasStreamingMessage
 
   const [plan, setPlan] = useState<Plan | undefined>(planSummary)
+  const [content, setContent] = useState('')
 
   useEffect(() => {
     setPlan(planSummary)
   }, [planSummary])
 
   useEffect(() => {
-    if (!activeSessionId || !planSummary?.id) {
-      setPlan(planSummary)
-      return
-    }
-
-    if (planSummary.content || planSummary.specJson) {
-      setPlan(planSummary)
-      return
-    }
-
     let cancelled = false
-    void usePlanStore
-      .getState()
-      .loadPlanForSession(activeSessionId)
-      .then((loadedPlan) => {
-        if (!cancelled) {
-          setPlan(loadedPlan ?? planSummary)
-        }
-      })
+    let unsubscribe: (() => void) | undefined
+
+    const load = async (): Promise<void> => {
+      if (!activeSessionId || !planSummary?.id) {
+        setPlan(planSummary)
+        setContent('')
+        return
+      }
+
+      const loadedPlan = await usePlanStore.getState().loadPlanForSession(activeSessionId)
+      if (cancelled) return
+      const nextPlan = loadedPlan ?? planSummary
+      setPlan(nextPlan)
+
+      const nextContent = await readPlanContent(nextPlan?.filePath)
+      if (!cancelled) {
+        setContent(nextContent)
+      }
+
+      const watchedFilePath = nextPlan?.filePath
+      if (watchedFilePath) {
+        await ipcClient.invoke(IPC.FS_WATCH_FILE, { path: watchedFilePath })
+        unsubscribe = ipcClient.on(IPC.FS_FILE_CHANGED, (payload) => {
+          const changedPath =
+            payload && typeof payload === 'object' && 'path' in (payload as Record<string, unknown>)
+              ? String((payload as { path?: unknown }).path ?? '')
+              : ''
+          if (changedPath !== watchedFilePath) return
+          void readPlanContent(watchedFilePath).then((updated) => {
+            if (!cancelled) {
+              setContent(updated)
+            }
+          })
+        })
+      }
+    }
+
+    void load()
 
     return () => {
       cancelled = true
+      if (planSummary?.filePath) {
+        void ipcClient.invoke(IPC.FS_UNWATCH_FILE, { path: planSummary.filePath })
+      }
+      unsubscribe?.()
     }
-  }, [activeSessionId, planSummary])
+  }, [activeSessionId, planSummary?.id, planSummary?.filePath])
 
   if (!plan) {
     return (
@@ -270,7 +302,7 @@ export function PlanPanel(): React.JSX.Element {
             variant="outline"
             size="sm"
             className="mt-4 h-7 gap-1.5 text-xs"
-            onClick={() => enterPlanMode()}
+            onClick={() => enterPlanMode(activeSessionId)}
           >
             <ClipboardList className="size-3" />
             {t('plan.enterPlanMode', { defaultValue: 'Enter Plan Mode' })}
@@ -280,5 +312,5 @@ export function PlanPanel(): React.JSX.Element {
     )
   }
 
-  return <PlanContent plan={plan} />
+  return <PlanContent plan={plan} content={content} />
 }

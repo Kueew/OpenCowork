@@ -193,9 +193,8 @@ export const usePlanStore = create<PlanStore>()(
     loadPlanForSession: async (sessionId, force = false) => {
       const cached = get().plansBySession[sessionId]
       const activeCached = cached ? get().plans[cached.id] : undefined
-      const hasPayload = !!(activeCached?.content || activeCached?.specJson)
-      if (cached && !force && hasPayload) {
-        return activeCached
+      if (cached && !force) {
+        return activeCached ?? cached
       }
 
       try {
@@ -243,7 +242,7 @@ export const usePlanStore = create<PlanStore>()(
         title,
         status: options.status ?? 'drafting',
         filePath: options.filePath,
-        content: options.content,
+        content: undefined,
         specJson: options.specJson,
         createdAt: now,
         updatedAt: now
@@ -273,7 +272,6 @@ export const usePlanStore = create<PlanStore>()(
       if (patch.title !== undefined) dbPatch.title = patch.title
       if (patch.status !== undefined) dbPatch.status = patch.status
       if (patch.filePath !== undefined) dbPatch.filePath = patch.filePath
-      if (patch.content !== undefined) dbPatch.content = patch.content
       if (patch.specJson !== undefined) dbPatch.specJson = patch.specJson
       dbUpdatePlan(planId, dbPatch)
       const plan = get().plans[planId]

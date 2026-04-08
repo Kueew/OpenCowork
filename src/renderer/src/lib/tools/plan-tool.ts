@@ -1,12 +1,15 @@
 import { toolRegistry } from '../agent/tool-registry'
+import { joinFsPath } from '../agent/memory-files'
+import { IPC } from '../ipc/channels'
 import { usePlanStore } from '../../stores/plan-store'
 import { useUIStore } from '../../stores/ui-store'
 import { useChatStore } from '../../stores/chat-store'
 import { useSettingsStore } from '../../stores/settings-store'
 import { encodeStructuredToolResult, encodeToolError } from './tool-result-format'
+import { resolveToolPath } from './fs-tool'
 import type { ToolHandler, ToolContext } from './tool-types'
 
-// ── Helpers ──
+const PLAN_DIRECTORY_NAME = '.plan'
 
 function getSessionId(ctx: ToolContext): string | null {
   return ctx.sessionId ?? useChatStore.getState().activeSessionId ?? null
@@ -25,23 +28,112 @@ function inferTitleFromContent(content: string): string {
   return first.slice(0, 80) || 'Plan'
 }
 
-// ── EnterPlanMode ──
+function normalizeComparablePath(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '')
+  return /^[a-zA-Z]:/.test(normalized) ? normalized.toLowerCase() : normalized
+}
+
+function isFsErrorResult(value: unknown): value is { error: string } {
+  if (!value || typeof value !== 'object') return false
+  const error = (value as { error?: unknown }).error
+  return typeof error === 'string' && error.length > 0
+}
+
+async function ensurePlanFile(
+  ipc: ToolContext['ipc'],
+  workingFolder: string,
+  planFilePath: string
+): Promise<void> {
+  const planDirectory = joinFsPath(workingFolder, PLAN_DIRECTORY_NAME)
+  const mkdirResult = await ipc.invoke(IPC.FS_MKDIR, { path: planDirectory })
+  if (isFsErrorResult(mkdirResult)) {
+    throw new Error(`Failed to create plan directory: ${mkdirResult.error}`)
+  }
+
+  const readResult = await ipc.invoke(IPC.FS_READ_FILE, { path: planFilePath })
+  if (!isFsErrorResult(readResult)) return
+
+  if (!/ENOENT|No such file/i.test(readResult.error)) {
+    throw new Error(`Failed to access plan file: ${readResult.error}`)
+  }
+
+  const writeResult = await ipc.invoke(IPC.FS_WRITE_FILE, {
+    path: planFilePath,
+    content: ''
+  })
+  if (isFsErrorResult(writeResult)) {
+    throw new Error(`Failed to initialize plan file: ${writeResult.error}`)
+  }
+}
+
+async function readPlanFile(ipc: ToolContext['ipc'], planFilePath: string): Promise<string> {
+  const result = await ipc.invoke(IPC.FS_READ_FILE, { path: planFilePath })
+  if (isFsErrorResult(result)) {
+    throw new Error(result.error)
+  }
+  return String(result)
+}
+
+function getCurrentPlanFilePath(ctx: ToolContext): string | null {
+  const sessionId = getSessionId(ctx)
+  if (!sessionId) return null
+  return usePlanStore.getState().getPlanBySession(sessionId)?.filePath ?? null
+}
+
+export function getPlanFilePath(workingFolder: string, planId: string): string {
+  return joinFsPath(workingFolder, PLAN_DIRECTORY_NAME, `${planId}.md`)
+}
+
+function createGuardedPlanFileHandler(toolName: 'Write' | 'Edit'): ToolHandler | null {
+  const baseHandler = toolRegistry.get(toolName)
+  if (!baseHandler) return null
+
+  return {
+    definition: baseHandler.definition,
+    execute: async (input, ctx) => {
+      const currentPlanFilePath = getCurrentPlanFilePath(ctx)
+      if (!currentPlanFilePath) {
+        return encodeToolError('No active plan file for this session. Call EnterPlanMode first.')
+      }
+
+      const resolvedPath = resolveToolPath(input.file_path, ctx.workingFolder)
+      if (normalizeComparablePath(resolvedPath) !== normalizeComparablePath(currentPlanFilePath)) {
+        return encodeToolError(
+          `In plan mode, ${toolName} is restricted to the current plan file: ${currentPlanFilePath}`
+        )
+      }
+
+      return baseHandler.execute(input, ctx)
+    },
+    requiresApproval: () => false
+  }
+}
+
+export function createPlanModeInlineToolHandlers(): Record<string, ToolHandler> {
+  const handlers: Record<string, ToolHandler> = {}
+  const guardedWriteHandler = createGuardedPlanFileHandler('Write')
+  const guardedEditHandler = createGuardedPlanFileHandler('Edit')
+
+  if (guardedWriteHandler) handlers.Write = guardedWriteHandler
+  if (guardedEditHandler) handlers.Edit = guardedEditHandler
+
+  return handlers
+}
 
 const enterPlanModeHandler: ToolHandler = {
   definition: {
     name: 'EnterPlanMode',
     description:
-      'Enter Plan Mode to explore the codebase and create a detailed implementation plan before writing any code. ' +
-      'Use this proactively when starting non-trivial tasks that require architectural decisions, multi-file changes, ' +
-      'or when multiple valid approaches exist. In plan mode, only read/search and plan tools are allowed — ' +
-      'no Edit/Shell commands.',
+      'Enter Plan Mode to explore the codebase and create a detailed implementation plan before writing code. ' +
+      'In plan mode, use read/search tools for investigation and Write/Edit only for the current plan file returned by this tool. ' +
+      'Do not make other file changes or run implementation commands.',
     inputSchema: {
       type: 'object',
       properties: {
         reason: {
           type: 'string',
           description:
-            'Brief reason in English for entering plan mode. This becomes the plan title if no plan exists (e.g. "add-user-authentication").'
+            'Brief reason in English for entering plan mode. This becomes the initial plan title if no plan exists (e.g. "add-user-authentication").'
         }
       }
     }
@@ -54,26 +146,54 @@ const enterPlanModeHandler: ToolHandler = {
       : undefined
     if (!session) return encodeToolError('No active session.')
 
-    // Check if session already has a plan
-    const existingPlan = usePlanStore.getState().getPlanBySession(session.id)
+    const workingFolder = ctx.workingFolder?.trim() || session.workingFolder?.trim()
+    if (!workingFolder) {
+      return encodeToolError('Plan mode requires an active working folder.')
+    }
+
+    const planStore = usePlanStore.getState()
+    const existingPlan = planStore.getPlanBySession(session.id)
+
+    if (existingPlan && !existingPlan.filePath) {
+      return encodeToolError(
+        'Legacy plans without plan files are not supported. Create a new plan in a session with a working folder.'
+      )
+    }
+
     if (
-      existingPlan &&
+      existingPlan?.filePath &&
       (existingPlan.status === 'drafting' || existingPlan.status === 'rejected')
     ) {
+      try {
+        await ensurePlanFile(ctx.ipc, workingFolder, existingPlan.filePath)
+      } catch (error) {
+        return encodeToolError(error instanceof Error ? error.message : String(error))
+      }
+
       if (!uiStore.isPlanModeEnabled(session.id)) uiStore.enterPlanMode(session.id)
       if (useChatStore.getState().activeSessionId === session.id) {
-        usePlanStore.getState().setActivePlan(existingPlan.id)
+        planStore.setActivePlan(existingPlan.id)
       }
       return encodeStructuredToolResult({
         status: 'resumed',
         plan_id: existingPlan.id,
-        message: 'Resumed existing plan draft. Draft the plan in chat, then call SavePlan.'
+        plan_file_path: existingPlan.filePath,
+        message:
+          'Resumed existing plan draft. Update the current plan file with Write/Edit, then call ExitPlanMode.'
       })
     }
 
-    // Create new plan record
     const reason = input.reason ? String(input.reason) : 'Implementation planning'
-    const plan = usePlanStore.getState().createPlan(session.id, reason)
+    const plan = planStore.createPlan(session.id, reason)
+    const planFilePath = getPlanFilePath(workingFolder, plan.id)
+    planStore.updatePlan(plan.id, { filePath: planFilePath })
+
+    try {
+      await ensurePlanFile(ctx.ipc, workingFolder, planFilePath)
+    } catch (error) {
+      planStore.deletePlan(plan.id)
+      return encodeToolError(error instanceof Error ? error.message : String(error))
+    }
 
     if (!uiStore.isPlanModeEnabled(session.id)) uiStore.enterPlanMode(session.id)
     const autoSwitchTarget = useSettingsStore.getState().clarifyPlanModeAutoSwitchTarget
@@ -84,27 +204,25 @@ const enterPlanModeHandler: ToolHandler = {
     if (useChatStore.getState().activeSessionId === session.id) {
       uiStore.setRightPanelTab('plan')
       uiStore.setRightPanelOpen(true)
+      planStore.setActivePlan(plan.id)
     }
 
     return encodeStructuredToolResult({
       status: 'entered',
       plan_id: plan.id,
+      plan_file_path: planFilePath,
       message:
-        'Plan mode activated. Draft the plan in chat, then call SavePlan. Call ExitPlanMode when complete.'
+        'Plan mode activated. Write the plan into the current plan file with Write/Edit, then call ExitPlanMode.'
     })
   },
   requiresApproval: () => false
 }
 
-// ── ExitPlanMode ──
-
 const exitPlanModeHandler: ToolHandler = {
   definition: {
     name: 'ExitPlanMode',
     description:
-      'Exit Plan Mode after completing the plan. This signals that the plan is finalized and ready for user review. ' +
-      'The user can then click "Implement" in the Plan panel or reply to start implementation. ' +
-      'IMPORTANT: Ensure you have called SavePlan before calling this tool. ' +
+      'Exit Plan Mode after writing the plan file. This signals that the plan is finalized and ready for user review. ' +
       'After calling this tool, you MUST STOP and wait for the user to review the plan — do NOT continue with any further actions.',
     inputSchema: {
       type: 'object',
@@ -122,11 +240,43 @@ const exitPlanModeHandler: ToolHandler = {
       })
     }
 
-    // Exit plan mode UI
+    if (!sessionId) {
+      return encodeToolError('No active session.')
+    }
+
+    const planStore = usePlanStore.getState()
+    const plan = planStore.getPlanBySession(sessionId)
+    if (!plan?.filePath) {
+      return encodeToolError('No active plan file for this session.')
+    }
+
+    let content = ''
+    try {
+      content = await readPlanFile(ctx.ipc, plan.filePath)
+    } catch (error) {
+      return encodeToolError(
+        `Failed to read the current plan file before exiting plan mode: ${error instanceof Error ? error.message : String(error)}`
+      )
+    }
+
+    if (!content.trim()) {
+      return encodeToolError('Plan file is empty. Write the plan file before exiting plan mode.')
+    }
+
+    const title = inferTitleFromContent(content)
+    planStore.updatePlan(plan.id, {
+      title,
+      status: 'drafting',
+      filePath: plan.filePath
+    })
+
     uiStore.exitPlanMode(sessionId)
 
     return encodeStructuredToolResult({
       status: 'exited',
+      plan_id: plan.id,
+      plan_file_path: plan.filePath,
+      title,
       message:
         'Plan mode exited. STOP HERE — wait for the user to review and approve the plan in the panel.'
     })
@@ -134,105 +284,35 @@ const exitPlanModeHandler: ToolHandler = {
   requiresApproval: () => false
 }
 
-// ── SavePlan ──
-
-const savePlanHandler: ToolHandler = {
-  definition: {
-    name: 'SavePlan',
-    description:
-      'Save the current plan content for the Plan panel. ' +
-      'Use this after writing the plan in chat. The full plan content will be displayed to the user.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        title: {
-          type: 'string',
-          description:
-            'Optional plan title. If omitted, the title is inferred from the plan content.'
-        },
-        content: {
-          type: 'string',
-          description:
-            'Full plan content as written in the chat response. This will be displayed in the Plan panel.'
-        }
-      },
-      required: ['content']
-    }
-  },
-  execute: async (input, ctx) => {
-    const sessionId = getSessionId(ctx)
-    if (!sessionId) {
-      return encodeToolError('No active session.')
-    }
-
-    const content = input.content ? String(input.content) : ''
-    if (!content.trim()) {
-      return encodeToolError('Plan content is empty.')
-    }
-
-    const title = input.title ? String(input.title) : inferTitleFromContent(content)
-
-    const planStore = usePlanStore.getState()
-    let plan = planStore.getPlanBySession(sessionId)
-    if (!plan) {
-      plan = planStore.createPlan(sessionId, title, { content, status: 'drafting' })
-    } else {
-      planStore.updatePlan(plan.id, { title, content, status: 'drafting' })
-    }
-    if (useChatStore.getState().activeSessionId === sessionId) {
-      planStore.setActivePlan(plan.id)
-    }
-
-    return encodeStructuredToolResult({
-      status: 'saved',
-      plan_id: plan.id,
-      title
-    })
-  },
-  requiresApproval: () => false
-}
-
-// ── Registration ──
-
 export function registerPlanTools(): void {
   toolRegistry.register(enterPlanModeHandler)
-  toolRegistry.register(savePlanHandler)
   toolRegistry.register(exitPlanModeHandler)
 }
 
-// ── Plan Mode Tool Filter ──
-
-/** Tool names allowed in plan mode (read-only + planning tools) */
 export const PLAN_MODE_ALLOWED_TOOLS = new Set([
-  // Read-only filesystem
   'Read',
   'LS',
   'Glob',
   'Grep',
-  // Planning tools
+  'Write',
+  'Edit',
   'EnterPlanMode',
-  'SavePlan',
   'ExitPlanMode',
   'AskUserQuestion',
-  // Task tracking
   'TaskCreate',
   'TaskGet',
   'TaskUpdate',
   'TaskList',
-  // SubAgent (read-only explorers)
   'Task',
-  // Preview (read-only)
   'OpenPreview'
 ])
 
-/** Tool names allowed in ACP mode for the lead agent */
 export const ACP_MODE_ALLOWED_TOOLS = new Set([
   'Read',
   'LS',
   'Glob',
   'Grep',
   'EnterPlanMode',
-  'SavePlan',
   'ExitPlanMode',
   'AskUserQuestion',
   'TaskCreate',
