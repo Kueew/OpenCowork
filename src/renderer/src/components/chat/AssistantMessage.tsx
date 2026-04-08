@@ -114,7 +114,6 @@ const SPECIAL_TOOLS = new Set([
   'TaskUpdate',
   'Write',
   'Edit',
-  'PatchEdit',
   'Delete',
   'AskUserQuestion',
   IMAGE_GENERATE_TOOL_NAME,
@@ -978,7 +977,7 @@ export function AssistantMessage({
           </ScaleIn>
         )
       }
-      if (['Write', 'Edit', 'PatchEdit', 'Delete'].includes(block.name)) {
+      if (['Write', 'Edit', 'Delete'].includes(block.name)) {
         const result = toolResults?.get(block.id)
         const liveTc = effectiveLiveToolCallMap?.get(block.id)
         return (

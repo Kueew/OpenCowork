@@ -44,7 +44,6 @@ const FALLBACK_CRON_AGENT = {
     'Read',
     'Write',
     'Edit',
-    'PatchEdit',
     'Glob',
     'Grep',
     'Shell',

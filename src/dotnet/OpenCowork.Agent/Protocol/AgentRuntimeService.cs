@@ -26,13 +26,13 @@ public sealed class AgentRuntimeService
         "tool.Read",
         "tool.Write",
         "tool.Edit",
-        "tool.PatchEdit",
         "tool.Bash",
         "tool.Delete",
         "tool.Move",
         "tool.LS",
         "tool.Glob",
         "tool.Grep",
+        "fs.grep",
         "tool.DesktopScreenshot",
         "tool.DesktopClick",
         "tool.DesktopType",
@@ -194,8 +194,6 @@ public sealed class AgentRuntimeService
                 """));
 
         RegisterRendererBridgedTool("Edit", "Perform exact string replacements in files", ParseSchema("""{"type":"object","properties":{"file_path":{"type":"string","description":"Absolute path or relative to the working folder"},"old_string":{"type":"string","description":"The text to replace"},"new_string":{"type":"string","description":"The text to replace it with"},"replace_all":{"type":"boolean","description":"Replace all occurrences of old_string"}},"required":["file_path","old_string","new_string"]}"""));
-
-        RegisterRendererBridgedTool("PatchEdit", "Apply a unified diff patch to an existing file", ParseSchema("""{"type":"object","properties":{"file_path":{"type":"string","description":"Absolute path or relative to the working folder"},"patch":{"type":"string","description":"Unified diff patch content for a single file"}},"required":["file_path","patch"]}"""));
 
         _toolRegistry.Register(new ToolHandler
         {
@@ -765,58 +763,7 @@ public sealed class AgentRuntimeService
 
     private static string BuildEditNotFoundMessage(string content, string oldString)
     {
-        var normalizedContent = FsOperations.NormalizeToLf(content);
-        var normalizedOld = FsOperations.NormalizeToLf(oldString);
-
-        if (normalizedContent.Contains(normalizedOld, StringComparison.Ordinal))
-        {
-            return "old_string not found in file (line endings differ; try using the exact text from Read output)";
-        }
-
-        var trailingWhitespaceMatches = FsOperations.FindNormalizedLineBlockMatches(content, oldString, indentationMode: false);
-        if (trailingWhitespaceMatches.Count == 1)
-        {
-            return $"old_string not found in file (trailing whitespace differs near line {trailingWhitespaceMatches[0].StartLine + 1}; try using the exact text from Read output)";
-        }
-        if (trailingWhitespaceMatches.Count > 1)
-        {
-            return $"old_string not found in file (multiple matches found after trailing whitespace normalization: {trailingWhitespaceMatches.Count}; provide more surrounding context)";
-        }
-
-        var indentationMatches = FsOperations.FindNormalizedLineBlockMatches(content, oldString, indentationMode: true);
-        if (indentationMatches.Count == 1)
-        {
-            return $"old_string not found in file (indentation differs near line {indentationMatches[0].StartLine + 1}; try using the exact text from Read output)";
-        }
-        if (indentationMatches.Count > 1)
-        {
-            return $"old_string not found in file (multiple matches found after indentation normalization: {indentationMatches.Count}; provide more surrounding context)";
-        }
-
-        var lineIndex = FindBestMatchingLineIndex(normalizedContent, normalizedOld);
-        if (lineIndex >= 0)
-        {
-            return $"old_string not found in file (closest match near line {lineIndex + 1}; ensure indentation and surrounding context match Read output exactly)";
-        }
-
         return "old_string not found in file";
-    }
-
-    private static int FindBestMatchingLineIndex(string content, string oldString)
-    {
-        var probeLine = oldString.Split('\n').Select(static line => line.Trim())
-            .FirstOrDefault(static line => line.Length > 0);
-        if (string.IsNullOrWhiteSpace(probeLine))
-            return -1;
-
-        var lines = content.Split('\n');
-        for (var i = 0; i < lines.Length; i++)
-        {
-            if (lines[i].Contains(probeLine, StringComparison.Ordinal))
-                return i;
-        }
-
-        return -1;
     }
 
     private static async Task<(int ExitCode, string Stdout, string Stderr)> ExecuteShellCommandAsync(

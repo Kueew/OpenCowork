@@ -79,7 +79,7 @@ const cronAddHandler: ToolHandler = {
             '- Build check: "Run `npm run build`. Report success or failure with error details and suggested fixes."\n' +
             '- Monitoring: "Check /var/log/app.log for ERROR entries in the last hour. Summarize findings."\n' +
             '- Code quality: "Run `npm run lint`. Report violation count, top issues, and suggestions."\n\n' +
-            'The agent has access to: Read, Write, Edit, PatchEdit, Bash, Glob, Grep, Notify, and plugin messaging tools.'
+            'The agent has access to: Read, Write, Edit, Bash, Glob, Grep, Notify, and plugin messaging tools.'
         },
         agentId: {
           type: 'string',

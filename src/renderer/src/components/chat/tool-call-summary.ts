@@ -9,7 +9,7 @@ export function inputSummary(name: string, input: Record<string, unknown>): stri
     const p = String(input.file_path ?? input.path ?? '')
     return p.split(/[\\/]/).slice(-2).join('/')
   }
-  if (name === 'Edit' || name === 'PatchEdit') {
+  if (name === 'Edit') {
     const p = String(input.file_path ?? input.path ?? '')
       .split(/[\\/]/)
       .slice(-2)

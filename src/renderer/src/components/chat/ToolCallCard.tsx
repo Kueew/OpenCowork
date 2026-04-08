@@ -1093,23 +1093,17 @@ function StructuredInput({
     )
   }
 
-  // Edit / PatchEdit: show file path + counts during streaming, full payload when available
-  if (name === 'Edit' || name === 'PatchEdit') {
+  // Edit: show file path + counts during streaming, full payload when available
+  if (name === 'Edit') {
     const filePath = String(input.file_path ?? input.path ?? '')
     const explanation = input.explanation ? String(input.explanation) : null
     const oldStr = typeof input.old_string === 'string' ? input.old_string : ''
     const newStr = typeof input.new_string === 'string' ? input.new_string : ''
     const oldPreview = typeof input.old_string_preview === 'string' ? input.old_string_preview : ''
     const newPreview = typeof input.new_string_preview === 'string' ? input.new_string_preview : ''
-    const patch = typeof input.patch === 'string' ? input.patch : ''
-    const patchPreview = typeof input.patch_preview === 'string' ? input.patch_preview : ''
     const replaceAll = input.replace_all === true
-    const matchMode = typeof input.match_mode === 'string' ? input.match_mode : null
     const visibleOld = oldStr || oldPreview
     const visibleNew = newStr || newPreview
-    const visiblePatch = patch || patchPreview
-    const hasCounts =
-      visiblePatch.length > 0 || visibleOld.length > 0 || visibleNew.length > 0 || name === 'PatchEdit'
 
     return (
       <div className="space-y-1">
@@ -1124,27 +1118,17 @@ function StructuredInput({
                 replace_all
               </span>
             )}
-            {matchMode && (
-              <span className="rounded bg-blue-500/10 px-1 py-0.5 text-[9px] text-blue-400/80">
-                {matchMode}
-              </span>
-            )}
           </div>
         )}
         {explanation && (
           <p className="pl-[18px] text-[11px] text-muted-foreground/60">{explanation}</p>
         )}
-        {hasCounts && name === 'Edit' && (
+        {(visibleOld || visibleNew) && (
           <div className="pl-[18px] text-[10px] text-muted-foreground/40">
             -{lineCount(visibleOld)} / +{lineCount(visibleNew)} lines
           </div>
         )}
-        {name === 'PatchEdit' && visiblePatch && (
-          <div className="space-y-2 pl-[18px]">
-            <EditPayloadPane label="patch" value={visiblePatch} tone="default" />
-          </div>
-        )}
-        {name === 'Edit' && (visibleOld || visibleNew) && (
+        {(visibleOld || visibleNew) && (
           <div className="space-y-2 pl-[18px]">
             {visibleOld && <EditPayloadPane label="old_string" value={visibleOld} tone="old" />}
             {visibleNew && <EditPayloadPane label="new_string" value={visibleNew} tone="new" />}
@@ -1473,7 +1457,6 @@ function StructuredInput({
 // Tools that auto-expand when they have output (mutation/action tools)
 const EXPAND_TOOLS = new Set([
   'Edit',
-  'PatchEdit',
   'Write',
   'Delete',
   'Bash',
@@ -1558,8 +1541,6 @@ export function ToolCallCard({
     status !== 'running' &&
     !!input.old_string &&
     !!input.new_string
-  const showSettledPatch =
-    name === 'PatchEdit' && status !== 'streaming' && status !== 'running' && !!input.patch
   const showSettledWriteContent =
     name === 'Write' && status !== 'streaming' && status !== 'running' && !!input.content
   const elapsed =
@@ -1587,7 +1568,7 @@ export function ToolCallCard({
                   (typeof input.content_lines === 'number' && input.content_lines)) &&
                   ` (${typeof input.content_lines === 'number' ? input.content_lines : lineCount(String(input.content ?? ''))} lines)`}
               </span>
-            ) : (name === 'Edit' || name === 'PatchEdit') && (input.file_path || input.path) ? (
+            ) : name === 'Edit' && (input.file_path || input.path) ? (
               <span className="text-amber-400/70 text-[10px] animate-pulse">
                 编辑:{' '}
                 {String(input.file_path || input.path)
@@ -1629,7 +1610,6 @@ export function ToolCallCard({
               <InlineDiff oldStr={String(input.old_string)} newStr={String(input.new_string)} />
             </div>
           )}
-          {showSettledPatch && <StructuredInput name={name} input={input} />}
           {/* Write: show content with syntax highlighting */}
           {showSettledWriteContent && name === 'Write' && (
             <div>
@@ -1664,7 +1644,6 @@ export function ToolCallCard({
           {/* Structured Input — tool-specific rendering */}
           {!(
             showSettledEditDiff ||
-            showSettledPatch ||
             showSettledWriteContent ||
             (name === 'TaskCreate' && !!input.subject)
           ) && <StructuredInput name={name} input={input} />}
@@ -1701,26 +1680,17 @@ export function ToolCallCard({
             <TaskListOutputBlock output={outputAsString(output)!} />
           )}
           {output &&
-            ['Edit', 'PatchEdit', 'Write', 'Delete'].includes(name) &&
+            ['Edit', 'Write', 'Delete'].includes(name) &&
             (() => {
               const s = outputAsString(output) ?? ''
               const parsed = decodeStructuredToolResult(s)
               const success = !!(parsed && !Array.isArray(parsed) && parsed.success === true)
-              const matchMode =
-                parsed && !Array.isArray(parsed) && typeof parsed.matchMode === 'string'
-                  ? parsed.matchMode
-                  : null
               return (
                 <div className="flex items-center gap-1.5 text-xs">
                   {success ? (
                     <>
                       <CheckCircle2 className="size-3 text-green-500" />
                       <span className="text-green-500/70">{t('toolCall.appliedSuccessfully')}</span>
-                      {matchMode && (
-                        <span className="rounded bg-blue-500/10 px-1 py-0.5 text-[10px] text-blue-400/80">
-                          {matchMode}
-                        </span>
-                      )}
                     </>
                   ) : (
                     <>
@@ -1745,7 +1715,6 @@ export function ToolCallCard({
               'TaskGet',
               'TaskList',
               'Edit',
-              'PatchEdit',
               'Write',
               'Delete',
               'AskUserQuestion'
