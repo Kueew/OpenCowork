@@ -3,24 +3,24 @@ import {
   Settings,
   Sun,
   Moon,
-  Brain,
-  Users,
-  Terminal,
-  Square,
-  HelpCircle,
   Camera,
   Check,
   Pencil,
   Globe,
   Languages,
   Download,
-  Loader2
+  Loader2,
+  Brain,
+  Users,
+  Terminal,
+  Square,
+  HelpCircle
 } from 'lucide-react'
 import appIconUrl from '../../../../../resources/icon.png'
 import { Button } from '@renderer/components/ui/button'
-import { Popover, PopoverContent, PopoverTrigger } from '@renderer/components/ui/popover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { HoverCard, HoverCardTrigger, HoverCardContent } from '@renderer/components/ui/hover-card'
+import { Popover, PopoverContent, PopoverTrigger } from '@renderer/components/ui/popover'
 import { Input } from '@renderer/components/ui/input'
 import { confirm } from '@renderer/components/ui/confirm-dialog'
 import { useUIStore } from '@renderer/stores/ui-store'
@@ -35,7 +35,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useShallow } from 'zustand/react/shallow'
 import { WindowControls } from './WindowControls'
-import { RunningAgentSessionsPopover } from './RunningAgentSessionsPopover'
+import { PendingInboxPopover } from './PendingInboxPopover'
 
 interface TitleBarUpdateInfo {
   newVersion: string
@@ -77,7 +77,12 @@ export function TitleBar({ updateInfo, onOpenUpdateDialog }: TitleBarProps): Rea
       0
     )
   )
-  const runningSubAgentNamesSig = useAgentStore((s) => s.runningSubAgentNamesSig)
+  const runningSubAgentNamesSig = useAgentStore((s) =>
+    Object.values(s.activeSubAgents)
+      .filter((subAgent) => subAgent.isRunning)
+      .map((subAgent) => subAgent.name)
+      .join('\u0000')
+  )
   const runningBackgroundCommandIdsSig = useAgentStore((s) =>
     Object.values(s.backgroundProcesses)
       .filter(
@@ -98,7 +103,7 @@ export function TitleBar({ updateInfo, onOpenUpdateDialog }: TitleBarProps): Rea
   const activeTeamSummary = useTeamStore(
     useShallow((s) => {
       const team = s.activeTeam
-      if (!team) return null
+      if (!team || team.sessionId !== activeSessionId) return null
       return {
         name: team.name,
         total: team.tasks.length,
@@ -199,7 +204,9 @@ export function TitleBar({ updateInfo, onOpenUpdateDialog }: TitleBarProps): Rea
               <img
                 src={displayAvatar}
                 alt="avatar"
-                className={hasCustomAvatar ? 'size-full object-cover' : 'size-full object-contain p-0.5'}
+                className={
+                  hasCustomAvatar ? 'size-full object-cover' : 'size-full object-contain p-0.5'
+                }
               />
             </button>
           </HoverCardTrigger>
@@ -216,7 +223,9 @@ export function TitleBar({ updateInfo, onOpenUpdateDialog }: TitleBarProps): Rea
                 <img
                   src={displayAvatar}
                   alt="avatar"
-                  className={hasCustomAvatar ? 'size-full object-cover' : 'size-full object-contain p-1'}
+                  className={
+                    hasCustomAvatar ? 'size-full object-cover' : 'size-full object-contain p-1'
+                  }
                 />
                 <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100">
                   <Camera className="size-4 text-white" />
@@ -346,7 +355,6 @@ export function TitleBar({ updateInfo, onOpenUpdateDialog }: TitleBarProps): Rea
         />
       </div>
 
-
       {/* Right-side controls */}
       <div className="min-w-0 flex-1" />
       <div className="flex min-w-0 shrink items-center justify-end gap-1 overflow-hidden pr-1">
@@ -380,8 +388,6 @@ export function TitleBar({ updateInfo, onOpenUpdateDialog }: TitleBarProps): Rea
             <TooltipContent>{tCommon('app.update.buttonTooltip')}</TooltipContent>
           </Tooltip>
         )}
-
-        <RunningAgentSessionsPopover />
 
         {/* Auto-approve toggle */}
         <Tooltip>
@@ -517,6 +523,10 @@ export function TitleBar({ updateInfo, onOpenUpdateDialog }: TitleBarProps): Rea
           </Popover>
         )}
 
+        <PendingInboxPopover />
+
+        <PendingInboxPopover />
+
         {/* Help */}
         <Tooltip>
           <TooltipTrigger asChild>
@@ -537,7 +547,6 @@ export function TitleBar({ updateInfo, onOpenUpdateDialog }: TitleBarProps): Rea
         <div className="absolute right-0 top-0 z-10">
           <WindowControls />
         </div>
-
       )}
     </header>
   )

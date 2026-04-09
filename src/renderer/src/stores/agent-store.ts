@@ -447,6 +447,7 @@ function updateToolUseInputInSubAgent(
 
 function rebuildRunningSubAgentDerived(state: {
   activeSubAgents: Record<string, SubAgentState>
+  sessionSubAgentSummaries: Record<string, SubAgentState[]>
   runningSubAgentNamesSig: string
   runningSubAgentSessionIdsSig: string
 }): void {
@@ -459,12 +460,38 @@ function rebuildRunningSubAgentDerived(state: {
     if (subAgent.sessionId) runningSessionIds.add(subAgent.sessionId)
   }
 
+  for (const [sessionId, summaries] of Object.entries(state.sessionSubAgentSummaries)) {
+    if (summaries.some((subAgent) => subAgent.isRunning)) {
+      runningSessionIds.add(sessionId)
+    }
+  }
+
   state.runningSubAgentNamesSig = runningNames.join('\u0000')
   state.runningSubAgentSessionIdsSig = Array.from(runningSessionIds).sort().join('\u0000')
 }
 
 function buildSubAgentSummary(agent: SubAgentState): SubAgentState {
   return cloneSubAgentStateSnapshot(agent)
+}
+
+interface SessionToolCallCache {
+  pending: ToolCallState[]
+  executed: ToolCallState[]
+}
+
+interface SessionSubAgentLiveState {
+  active: Record<string, SubAgentState>
+  completed: Record<string, SubAgentState>
+}
+
+function cloneToolCallArray(toolCalls: ToolCallState[]): ToolCallState[] {
+  return toolCalls.map((toolCall) => ({ ...toolCall }))
+}
+
+function cloneSubAgentMap(source: Record<string, SubAgentState>): Record<string, SubAgentState> {
+  return Object.fromEntries(
+    Object.entries(source).map(([key, value]) => [key, cloneSubAgentStateSnapshot(value)])
+  )
 }
 
 export interface BackgroundProcessState {
@@ -643,9 +670,118 @@ function trimRunChangesMap(map: Record<string, AgentRunChangeSet>): void {
   }
 }
 
+function ensureSessionToolCallCache(
+  state: {
+    sessionToolCallsCache: Record<string, SessionToolCallCache>
+  },
+  sessionId: string
+): SessionToolCallCache {
+  const existing = state.sessionToolCallsCache[sessionId]
+  if (existing) return existing
+  const created: SessionToolCallCache = { pending: [], executed: [] }
+  state.sessionToolCallsCache[sessionId] = created
+  return created
+}
+
+function resolveSessionToolCallTarget(
+  state: {
+    liveSessionId: string | null
+    pendingToolCalls: ToolCallState[]
+    executedToolCalls: ToolCallState[]
+    sessionToolCallsCache: Record<string, SessionToolCallCache>
+  },
+  sessionId?: string | null
+): SessionToolCallCache {
+  if (!sessionId || sessionId === state.liveSessionId) {
+    return {
+      pending: state.pendingToolCalls,
+      executed: state.executedToolCalls
+    }
+  }
+  return ensureSessionToolCallCache(state, sessionId)
+}
+
+function applyToolCallToBuckets(
+  pending: ToolCallState[],
+  executed: ToolCallState[],
+  tc: ToolCallState
+): void {
+  const normalizedTc = normalizeToolCall(tc)
+  const execIdx = executed.findIndex((item) => item.id === normalizedTc.id)
+  if (execIdx !== -1) {
+    if (normalizedTc.status === 'pending_approval') {
+      const [moved] = executed.splice(execIdx, 1)
+      Object.assign(moved, normalizedTc)
+      pending.push(moved)
+    } else {
+      Object.assign(executed[execIdx], normalizedTc)
+    }
+    trimToolCallArray(executed)
+    trimToolCallArray(pending)
+    return
+  }
+
+  const pendingIdx = pending.findIndex((item) => item.id === normalizedTc.id)
+  if (pendingIdx !== -1) {
+    if (normalizedTc.status !== 'pending_approval') {
+      const [moved] = pending.splice(pendingIdx, 1)
+      Object.assign(moved, normalizedTc)
+      executed.push(moved)
+    } else {
+      Object.assign(pending[pendingIdx], normalizedTc)
+    }
+    trimToolCallArray(executed)
+    trimToolCallArray(pending)
+    return
+  }
+
+  if (normalizedTc.status === 'pending_approval') {
+    pending.push(normalizedTc)
+  } else {
+    executed.push(normalizedTc)
+  }
+  trimToolCallArray(executed)
+  trimToolCallArray(pending)
+}
+
+function applyToolCallPatchToBuckets(
+  pending: ToolCallState[],
+  executed: ToolCallState[],
+  id: string,
+  patch: Partial<ToolCallState>
+): boolean {
+  const normalizedPatch = normalizeToolCallPatch(patch)
+  const pendingToolCall = pending.find((item) => item.id === id)
+  if (pendingToolCall) {
+    if (!toolCallPatchHasChanges(pendingToolCall, normalizedPatch)) return false
+    Object.assign(pendingToolCall, normalizedPatch)
+    if (normalizedPatch.status && normalizedPatch.status !== 'pending_approval') {
+      const index = pending.findIndex((item) => item.id === id)
+      if (index !== -1) {
+        const [moved] = pending.splice(index, 1)
+        executed.push(moved)
+      }
+    }
+    trimToolCallArray(executed)
+    trimToolCallArray(pending)
+    return true
+  }
+
+  const executedToolCall = executed.find((item) => item.id === id)
+  if (executedToolCall) {
+    if (!toolCallPatchHasChanges(executedToolCall, normalizedPatch)) return false
+    Object.assign(executedToolCall, normalizedPatch)
+    trimToolCallArray(executed)
+    return true
+  }
+
+  return false
+}
+
 interface AgentStore {
   isRunning: boolean
   currentLoopId: string | null
+  liveSessionId: string | null
   pendingToolCalls: ToolCallState[]
   executedToolCalls: ToolCallState[]
   runChangesByRunId: Record<string, AgentRunChangeSet>
@@ -656,7 +792,8 @@ interface AgentStore {
   runningSessions: Record<string, 'running' | 'completed'>
 
   /** Per-session tool-call cache — stores tool calls when switching away from a session */
-  sessionToolCallsCache: Record<string, { pending: ToolCallState[]; executed: ToolCallState[] }>
+  sessionToolCallsCache: Record<string, SessionToolCallCache>
+  sessionSubAgentLiveCache: Record<string, SessionSubAgentLiveState>
 
   // SubAgent state keyed by toolUseId (supports multiple same-name SubAgent calls)
   activeSubAgents: Record<string, SubAgentState>
@@ -703,8 +840,9 @@ interface AgentStore {
   isSessionActive: (sessionId: string | null | undefined) => boolean
   /** Switch active tool-call context: save current tool calls for prevSession, restore for nextSession */
   switchToolCallSession: (prevSessionId: string | null, nextSessionId: string | null) => void
-  addToolCall: (tc: ToolCallState) => void
-  updateToolCall: (id: string, patch: Partial<ToolCallState>) => void
+  resetLiveSessionExecution: (sessionId: string) => void
+  addToolCall: (tc: ToolCallState, sessionId?: string | null) => void
+  updateToolCall: (id: string, patch: Partial<ToolCallState>, sessionId?: string | null) => void
   refreshRunChanges: (runId: string) => Promise<void>
   acceptRunChanges: (runId: string) => Promise<{ error?: string }>
   acceptFileChange: (runId: string, changeId: string) => Promise<{ error?: string }>
@@ -738,11 +876,13 @@ export const useAgentStore = create<AgentStore>()(
     immer((set, get) => ({
       isRunning: false,
       currentLoopId: null,
+      liveSessionId: null,
       pendingToolCalls: [],
       executedToolCalls: [],
       runChangesByRunId: {},
       runningSessions: {},
       sessionToolCallsCache: {},
+      sessionSubAgentLiveCache: {},
       activeSubAgents: {},
       completedSubAgents: {},
       subAgentHistory: [],
@@ -798,91 +938,81 @@ export const useAgentStore = create<AgentStore>()(
         set((state) => {
           if (prevSessionId) {
             state.sessionToolCallsCache[prevSessionId] = {
-              pending: [...state.pendingToolCalls],
-              executed: [...state.executedToolCalls]
+              pending: cloneToolCallArray(state.pendingToolCalls),
+              executed: cloneToolCallArray(state.executedToolCalls)
+            }
+            state.sessionSubAgentLiveCache[prevSessionId] = {
+              active: cloneSubAgentMap(state.activeSubAgents),
+              completed: cloneSubAgentMap(state.completedSubAgents)
             }
           }
-          const cached = nextSessionId ? state.sessionToolCallsCache[nextSessionId] : undefined
-          state.pendingToolCalls = cached?.pending ?? []
-          state.executedToolCalls = cached?.executed ?? []
 
-          // Evict oldest cached sessions to cap memory (keep at most 10)
+          const cached = nextSessionId ? state.sessionToolCallsCache[nextSessionId] : undefined
+          const subAgentCache = nextSessionId
+            ? state.sessionSubAgentLiveCache[nextSessionId]
+            : undefined
+          state.liveSessionId = nextSessionId
+          state.pendingToolCalls = cloneToolCallArray(cached?.pending ?? [])
+          state.executedToolCalls = cloneToolCallArray(cached?.executed ?? [])
+          state.activeSubAgents = cloneSubAgentMap(subAgentCache?.active ?? {})
+          state.completedSubAgents = cloneSubAgentMap(subAgentCache?.completed ?? {})
+          rebuildRunningSubAgentDerived(state)
+
           const cacheKeys = Object.keys(state.sessionToolCallsCache)
           if (cacheKeys.length > 10) {
             const toRemove = cacheKeys.slice(0, cacheKeys.length - 10)
             for (const key of toRemove) {
               delete state.sessionToolCallsCache[key]
+              delete state.sessionSubAgentLiveCache[key]
             }
           }
         })
       },
 
-      addToolCall: (tc) => {
+      resetLiveSessionExecution: (sessionId) => {
         set((state) => {
-          const normalizedTc = normalizeToolCall(tc)
-          // Idempotent: if already exists (e.g. from streaming phase), update in-place
-          const execIdx = state.executedToolCalls.findIndex((t) => t.id === normalizedTc.id)
-          if (execIdx !== -1) {
-            if (normalizedTc.status === 'pending_approval') {
-              // Move from executed to pending
-              const [moved] = state.executedToolCalls.splice(execIdx, 1)
-              Object.assign(moved, normalizedTc)
-              state.pendingToolCalls.push(moved)
-            } else {
-              Object.assign(state.executedToolCalls[execIdx], normalizedTc)
-            }
-            trimToolCallArray(state.executedToolCalls)
-            trimToolCallArray(state.pendingToolCalls)
-            return
-          }
-          const pendIdx = state.pendingToolCalls.findIndex((t) => t.id === normalizedTc.id)
-          if (pendIdx !== -1) {
-            if (normalizedTc.status !== 'pending_approval') {
-              // Move from pending to executed
-              const [moved] = state.pendingToolCalls.splice(pendIdx, 1)
-              Object.assign(moved, normalizedTc)
-              state.executedToolCalls.push(moved)
-            } else {
-              Object.assign(state.pendingToolCalls[pendIdx], normalizedTc)
-            }
-            trimToolCallArray(state.executedToolCalls)
-            trimToolCallArray(state.pendingToolCalls)
-            return
-          }
-          // New entry
-          if (normalizedTc.status === 'pending_approval') {
-            state.pendingToolCalls.push(normalizedTc)
-          } else {
-            state.executedToolCalls.push(normalizedTc)
-          }
-          trimToolCallArray(state.executedToolCalls)
-          trimToolCallArray(state.pendingToolCalls)
+          delete state.sessionToolCallsCache[sessionId]
+          delete state.sessionSubAgentLiveCache[sessionId]
+          delete state.sessionSubAgentSummaries[sessionId]
+
+          if (state.liveSessionId !== sessionId) return
+          state.pendingToolCalls = []
+          state.executedToolCalls = []
+          state.activeSubAgents = {}
+          state.completedSubAgents = {}
+          rebuildRunningSubAgentDerived(state)
         })
       },
 
-      updateToolCall: (id, patch) => {
+      addToolCall: (tc, sessionId) => {
         set((state) => {
-          const normalizedPatch = normalizeToolCallPatch(patch)
-          const pending = state.pendingToolCalls.find((t) => t.id === id)
-          if (pending) {
-            if (!toolCallPatchHasChanges(pending, normalizedPatch)) return
-            Object.assign(pending, normalizedPatch)
-            if (normalizedPatch.status && normalizedPatch.status !== 'pending_approval') {
-              const idx = state.pendingToolCalls.findIndex((t) => t.id === id)
-              if (idx !== -1) {
-                const [moved] = state.pendingToolCalls.splice(idx, 1)
-                state.executedToolCalls.push(moved)
-              }
-            }
-            trimToolCallArray(state.executedToolCalls)
-            trimToolCallArray(state.pendingToolCalls)
+          const targetSessionId = sessionId ?? tc.sessionId ?? state.liveSessionId
+          const target = resolveSessionToolCallTarget(state, targetSessionId)
+          applyToolCallToBuckets(target.pending, target.executed, {
+            ...tc,
+            ...(targetSessionId ? { sessionId: targetSessionId } : {})
+          })
+        })
+      },
+
+      updateToolCall: (id, patch, sessionId) => {
+        set((state) => {
+          const explicitSessionId = sessionId ?? patch.sessionId ?? null
+          if (explicitSessionId) {
+            const target = resolveSessionToolCallTarget(state, explicitSessionId)
+            if (applyToolCallPatchToBuckets(target.pending, target.executed, id, patch)) return
+          }
+
+          if (
+            applyToolCallPatchToBuckets(state.pendingToolCalls, state.executedToolCalls, id, patch)
+          ) {
             return
           }
-          const executed = state.executedToolCalls.find((t) => t.id === id)
-          if (executed) {
-            if (!toolCallPatchHasChanges(executed, normalizedPatch)) return
-            Object.assign(executed, normalizedPatch)
-            trimToolCallArray(state.executedToolCalls)
+
+          for (const cache of Object.values(state.sessionToolCallsCache)) {
+            if (applyToolCallPatchToBuckets(cache.pending, cache.executed, id, patch)) {
+              return
+            }
           }
         })
       },
@@ -947,7 +1077,8 @@ export const useAgentStore = create<AgentStore>()(
               } satisfies BackgroundProcessState
               state.backgroundProcesses[item.id] = nextProcess
               if (nextProcess.sessionId) {
-                const previous = state.sessionBackgroundProcessSummaries[nextProcess.sessionId] ?? []
+                const previous =
+                  state.sessionBackgroundProcessSummaries[nextProcess.sessionId] ?? []
                 state.sessionBackgroundProcessSummaries[nextProcess.sessionId] = [
                   buildBackgroundProcessSummary(nextProcess),
                   ...previous.filter((process) => process.id !== nextProcess.id)
@@ -982,7 +1113,8 @@ export const useAgentStore = create<AgentStore>()(
               )
               state.backgroundProcesses[payload.id] = nextProcess
               if (nextProcess.sessionId) {
-                const previous = state.sessionBackgroundProcessSummaries[nextProcess.sessionId] ?? []
+                const previous =
+                  state.sessionBackgroundProcessSummaries[nextProcess.sessionId] ?? []
                 state.sessionBackgroundProcessSummaries[nextProcess.sessionId] = [
                   buildBackgroundProcessSummary(nextProcess),
                   ...previous.filter((process) => process.id !== nextProcess.id)
@@ -1120,14 +1252,17 @@ export const useAgentStore = create<AgentStore>()(
 
       clearToolCalls: () => {
         set((state) => {
+          state.liveSessionId = null
           state.pendingToolCalls = []
           state.executedToolCalls = []
           state.activeSubAgents = {}
+          state.completedSubAgents = {}
           state.runningSubAgentNamesSig = ''
           state.runningSubAgentSessionIdsSig = ''
           state.approvedToolNames = []
           state.foregroundShellExecByToolUseId = {}
           state.sessionToolCallsCache = {}
+          state.sessionSubAgentLiveCache = {}
           state.sessionSubAgentSummaries = {}
           state.sessionBackgroundProcessSummaries = {}
         })
@@ -1491,12 +1626,22 @@ export const useAgentStore = create<AgentStore>()(
 
           // Remove cached tool calls for this session
           delete state.sessionToolCallsCache[sessionId]
+          delete state.sessionSubAgentLiveCache[sessionId]
+
+          if (state.liveSessionId === sessionId) {
+            state.pendingToolCalls = []
+            state.executedToolCalls = []
+            state.activeSubAgents = {}
+            state.completedSubAgents = {}
+          }
 
           for (const [runId, changeSet] of Object.entries(state.runChangesByRunId)) {
             if (changeSet.sessionId === sessionId) {
               delete state.runChangesByRunId[runId]
             }
           }
+
+          rebuildRunningSubAgentDerived(state)
 
           // Remove background processes bound to this session
           for (const [key, process] of Object.entries(state.backgroundProcesses)) {
@@ -1517,6 +1662,7 @@ export const useAgentStore = create<AgentStore>()(
         set((state) => {
           const targetSessionIds = new Set<string>([
             ...Object.keys(state.sessionToolCallsCache),
+            ...Object.keys(state.sessionSubAgentLiveCache),
             ...Object.keys(state.sessionSubAgentSummaries),
             ...Object.keys(state.sessionBackgroundProcessSummaries)
           ])
@@ -1525,6 +1671,7 @@ export const useAgentStore = create<AgentStore>()(
             if (residentSet.has(sessionId)) continue
 
             delete state.sessionToolCallsCache[sessionId]
+            delete state.sessionSubAgentLiveCache[sessionId]
 
             const subAgents = state.sessionSubAgentSummaries[sessionId]
             if (subAgents && subAgents.length > 0) {

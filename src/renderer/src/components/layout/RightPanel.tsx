@@ -1,31 +1,31 @@
 import { Loader2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { AnimatePresence } from 'motion/react'
+import { useTranslation } from 'react-i18next'
 import { Button } from '@renderer/components/ui/button'
+import { FadeIn } from '@renderer/components/animate-ui'
 import { useUIStore, type RightPanelTab } from '@renderer/stores/ui-store'
 import { StepsPanel } from '@renderer/components/cowork/StepsPanel'
 import { ArtifactsPanel } from '@renderer/components/cowork/ArtifactsPanel'
 import { ContextPanel } from '@renderer/components/cowork/ContextPanel'
 import { FileTreePanel } from '@renderer/components/cowork/FileTreePanel'
-import { SshFileExplorer } from '@renderer/components/ssh/SshFileExplorer'
-import { TeamPanel } from '@renderer/components/cowork/TeamPanel'
 import { PlanPanel } from '@renderer/components/cowork/PlanPanel'
 import { AcpPanel } from '@renderer/components/cowork/AcpPanel'
+import { SshFileExplorer } from '@renderer/components/ssh/SshFileExplorer'
+import { TerminalPanel } from '@renderer/components/terminal/TerminalPanel'
 import { usePlanStore } from '@renderer/stores/plan-store'
 import { useChatStore } from '@renderer/stores/chat-store'
 import { useAgentStore } from '@renderer/stores/agent-store'
 import { useSshStore } from '@renderer/stores/ssh-store'
 import { useSettingsStore } from '@renderer/stores/settings-store'
-import { useTranslation } from 'react-i18next'
 import { cn } from '@renderer/lib/utils'
-import { AnimatePresence } from 'motion/react'
-import { FadeIn } from '@renderer/components/animate-ui'
 import { RightPanelHeader } from './RightPanelHeader'
 import { RightPanelRail } from './RightPanelRail'
 import { PreviewPanel } from './PreviewPanel'
 import { DetailPanel } from './DetailPanel'
 import { SubAgentsPanel } from './SubAgentsPanel'
 import { SubAgentExecutionDetail } from './SubAgentExecutionDetail'
-import { TerminalPanel } from '@renderer/components/terminal/TerminalPanel'
+import { OrchestrationConsole } from './OrchestrationConsole'
 import {
   RIGHT_PANEL_DEFAULT_WIDTH,
   RIGHT_PANEL_SECTION_DEFS,
@@ -123,7 +123,6 @@ export function RightPanel({ compact = false }: { compact?: boolean }): React.JS
   const setRightPanelOpen = useUIStore((s) => s.setRightPanelOpen)
 
   const teamToolsEnabled = useSettingsStore((s) => s.teamToolsEnabled)
-
   const mode = useUIStore((s) => s.mode)
   const activeSessionId = useChatStore((s) => s.activeSessionId)
   const activeSession = useChatStore((s) =>
@@ -135,12 +134,8 @@ export function RightPanel({ compact = false }: { compact?: boolean }): React.JS
   })
   const hasSessionSubAgents = useAgentStore((s) => {
     if (!activeSessionId) return false
-    const hasActive = Object.values(s.activeSubAgents).some(
-      (item) => item.sessionId === activeSessionId
-    )
-    const hasCompleted = Object.values(s.completedSubAgents).some(
-      (item) => item.sessionId === activeSessionId
-    )
+    const hasActive = Object.values(s.activeSubAgents).some((item) => item.sessionId === activeSessionId)
+    const hasCompleted = Object.values(s.completedSubAgents).some((item) => item.sessionId === activeSessionId)
     const hasHistory = s.subAgentHistory.some((item) => item.sessionId === activeSessionId)
     return hasActive || hasCompleted || hasHistory
   })
@@ -149,6 +144,7 @@ export function RightPanel({ compact = false }: { compact?: boolean }): React.JS
   const shouldShowSubAgentsTab =
     hasSessionSubAgents ||
     tab === 'subagents' ||
+    tab === 'orchestration' ||
     !!selectedSubAgentToolUseId ||
     subAgentExecutionDetailOpen
 
@@ -156,16 +152,13 @@ export function RightPanel({ compact = false }: { compact?: boolean }): React.JS
     () =>
       RIGHT_PANEL_TAB_DEFS.filter((item) => teamToolsEnabled || item.value !== 'team')
         .filter((item) => hasPlan || planMode || item.value !== 'plan')
-        .filter((item) => shouldShowSubAgentsTab || item.value !== 'subagents')
+        .filter((item) => shouldShowSubAgentsTab || (item.value !== 'subagents' && item.value !== 'orchestration'))
         .filter((item) => (activeSession?.mode ?? mode) === 'acp' || item.value !== 'acp'),
     [teamToolsEnabled, hasPlan, planMode, shouldShowSubAgentsTab, activeSession?.mode, mode]
   )
 
   const availableSections = useMemo(
-    () =>
-      RIGHT_PANEL_SECTION_DEFS.filter((sectionDef) =>
-        visibleTabs.some((tabDef) => tabDef.section === sectionDef.value)
-      ),
+    () => RIGHT_PANEL_SECTION_DEFS.filter((sectionDef) => visibleTabs.some((tabDef) => tabDef.section === sectionDef.value)),
     [visibleTabs]
   )
   const resolvedTab = visibleTabs.some((tabDef) => tabDef.value === tab)
@@ -176,19 +169,14 @@ export function RightPanel({ compact = false }: { compact?: boolean }): React.JS
     : (availableSections[0]?.value ?? 'execution')
 
   useEffect(() => {
-    if (resolvedTab !== tab) {
-      setTab(resolvedTab)
-    }
+    if (resolvedTab !== tab) setTab(resolvedTab)
   }, [resolvedTab, tab, setTab])
 
   useEffect(() => {
-    if (resolvedSection !== section) {
-      setSection(resolvedSection)
-    }
+    if (resolvedSection !== section) setSection(resolvedSection)
   }, [resolvedSection, section, setSection])
 
-  const activeTabDef = visibleTabs.find((t) => t.value === resolvedTab) ?? visibleTabs[0]
-
+  const activeTabDef = visibleTabs.find((item) => item.value === resolvedTab) ?? visibleTabs[0]
   const draggingRef = useRef(false)
   const startXRef = useRef(0)
   const startWidthRef = useRef(rightPanelWidth)
@@ -198,11 +186,8 @@ export function RightPanel({ compact = false }: { compact?: boolean }): React.JS
     ? Math.min(rightPanelWidth, RIGHT_PANEL_DEFAULT_WIDTH)
     : rightPanelWidth
 
-  // Ensure rightPanelWidth has a valid initial value if it's somehow 0
   useEffect(() => {
-    if (rightPanelWidth === 0) {
-      setRightPanelWidth(RIGHT_PANEL_DEFAULT_WIDTH)
-    }
+    if (rightPanelWidth === 0) setRightPanelWidth(RIGHT_PANEL_DEFAULT_WIDTH)
   }, [rightPanelWidth, setRightPanelWidth])
 
   useEffect(() => {
@@ -211,8 +196,7 @@ export function RightPanel({ compact = false }: { compact?: boolean }): React.JS
     const handleMouseMove = (event: MouseEvent): void => {
       if (!draggingRef.current) return
       const delta = startXRef.current - event.clientX
-      const nextWidth = clampRightPanelWidth(startWidthRef.current + delta)
-      setRightPanelWidth(nextWidth)
+      setRightPanelWidth(clampRightPanelWidth(startWidthRef.current + delta))
     }
 
     const handleMouseUp = (): void => {
@@ -222,7 +206,6 @@ export function RightPanel({ compact = false }: { compact?: boolean }): React.JS
 
     window.addEventListener('mousemove', handleMouseMove)
     window.addEventListener('mouseup', handleMouseUp)
-
     return () => {
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
@@ -246,13 +229,10 @@ export function RightPanel({ compact = false }: { compact?: boolean }): React.JS
     <div
       data-tour="right-panel"
       className="relative flex h-full shrink-0 z-40 transition-[width] duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]"
-      style={{
-        width: rightPanelOpen ? targetPanelWidth + RIGHT_PANEL_RAIL_WIDTH : RIGHT_PANEL_RAIL_WIDTH
-      }}
+      style={{ width: rightPanelOpen ? targetPanelWidth + RIGHT_PANEL_RAIL_WIDTH : RIGHT_PANEL_RAIL_WIDTH }}
     >
       <aside className="relative flex h-full w-full transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] bg-background/40 backdrop-blur-sm before:absolute before:left-0 before:top-2 before:bottom-2 before:w-px before:rounded-full before:bg-border/40">
         <div className="flex h-full w-full overflow-hidden">
-          {/* Rail */}
           <RightPanelRail
             visibleTabs={visibleTabs}
             activeTab={resolvedTab}
@@ -262,22 +242,16 @@ export function RightPanel({ compact = false }: { compact?: boolean }): React.JS
             onToggle={() => setRightPanelOpen(!rightPanelOpen)}
           />
 
-          {/* Content Area */}
           <div
             className={cn(
-              'flex-1 min-w-0 border-l border-border/40 transition-all duration-500',
+              'flex min-h-0 flex-1 min-w-0 border-l border-border/40 transition-all duration-500',
               rightPanelOpen ? 'opacity-100' : 'w-0 opacity-0 pointer-events-none'
             )}
           >
             {activeTabDef && (
-              <div className="flex flex-col h-full w-full" style={{ width: targetPanelWidth }}>
-                <RightPanelHeader
-                  activeTabDef={activeTabDef}
-                  onClose={() => setRightPanelOpen(false)}
-                  t={t}
-                />
-
-                <div className="flex-1 overflow-auto bg-background/5 p-4">
+              <div className="flex h-full min-h-0 w-full flex-col" style={{ width: targetPanelWidth }}>
+                <RightPanelHeader activeTabDef={activeTabDef} onClose={() => setRightPanelOpen(false)} t={t} />
+                <div className="min-h-0 flex-1 overflow-auto bg-background/5 p-4">
                   <AnimatePresence mode="wait">
                     {resolvedTab === 'steps' && (
                       <FadeIn key="steps" className="h-full">
@@ -285,9 +259,9 @@ export function RightPanel({ compact = false }: { compact?: boolean }): React.JS
                       </FadeIn>
                     )}
 
-                    {resolvedTab === 'team' && (
-                      <FadeIn key="team" className="h-full">
-                        <TeamPanel />
+                    {(resolvedTab === 'orchestration' || resolvedTab === 'team') && (
+                      <FadeIn key="orchestration" className="h-full">
+                        <OrchestrationConsole />
                       </FadeIn>
                     )}
 
@@ -296,9 +270,7 @@ export function RightPanel({ compact = false }: { compact?: boolean }): React.JS
                         {subAgentExecutionDetailOpen ? (
                           <SubAgentExecutionDetail
                             embedded
-                            toolUseId={
-                              subAgentExecutionDetailToolUseId ?? selectedSubAgentToolUseId
-                            }
+                            toolUseId={subAgentExecutionDetailToolUseId ?? selectedSubAgentToolUseId}
                             inlineText={subAgentExecutionDetailInlineText ?? undefined}
                             onClose={() => useUIStore.getState().closeSubAgentExecutionDetail()}
                           />
@@ -311,10 +283,7 @@ export function RightPanel({ compact = false }: { compact?: boolean }): React.JS
                     {resolvedTab === 'files' && (
                       <FadeIn key="files" className="h-full">
                         {activeSession?.sshConnectionId ? (
-                          <SshFilesPanel
-                            connectionId={activeSession.sshConnectionId}
-                            rootPath={activeSession.workingFolder}
-                          />
+                          <SshFilesPanel connectionId={activeSession.sshConnectionId} rootPath={activeSession.workingFolder} />
                         ) : (
                           <FileTreePanel />
                         )}
@@ -371,7 +340,6 @@ export function RightPanel({ compact = false }: { compact?: boolean }): React.JS
           </div>
         </div>
 
-        {/* Resize Handle */}
         {rightPanelOpen && (
           <div
             className="absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-primary/30 transition-colors z-[60]"

@@ -35,8 +35,6 @@ import { useTranslation } from 'react-i18next'
 import * as React from 'react'
 import { useShallow } from 'zustand/react/shallow'
 
-// ── Helpers ────────────────────────────────────────────────────────
-
 function formatElapsed(ms: number): string {
   if (ms < 1000) return `${ms}ms`
   const secs = ms / 1000
@@ -47,8 +45,8 @@ function formatElapsed(ms: number): string {
 function timeAgo(ts: number): string {
   const diff = Date.now() - ts
   if (diff < 60_000) return `${Math.round(diff / 1000)}s ago`
-  if (diff < 3600_000) return `${Math.round(diff / 60_000)}m ago`
-  return `${Math.round(diff / 3600_000)}h ago`
+  if (diff < 3_600_000) return `${Math.round(diff / 60_000)}m ago`
+  return `${Math.round(diff / 3_600_000)}h ago`
 }
 
 function formatTokenCount(n: number): string {
@@ -64,8 +62,9 @@ function formatTokenCount(n: number): string {
 const statusDots: Record<string, string> = {
   working: 'bg-green-500 animate-pulse',
   idle: 'bg-cyan-400',
-  waiting: 'bg-amber-400',
-  stopped: 'bg-muted-foreground/30'
+  completed: 'bg-green-500',
+  stopped: 'bg-amber-500',
+  failed: 'bg-red-500'
 }
 
 const taskStatusConfig: Record<string, { bg: string; label: string }> = {
@@ -73,8 +72,6 @@ const taskStatusConfig: Record<string, { bg: string; label: string }> = {
   in_progress: { bg: 'bg-blue-500/15 text-blue-500', label: 'active' },
   completed: { bg: 'bg-green-500/15 text-green-500', label: 'done' }
 }
-
-// ── Message Input (send to teammate from UI) ─────────────────────
 
 function MessageInput({ targetName }: { targetName: string }): React.JSX.Element {
   const { t } = useTranslation('cowork')
@@ -86,8 +83,11 @@ function MessageInput({ targetName }: { targetName: string }): React.JSX.Element
   const send = (): void => {
     const content = text.trim()
     if (!content) return
+
+    const sessionId = useTeamStore.getState().activeTeam?.sessionId
     teamEvents.emit({
       type: 'team_message',
+      sessionId,
       message: {
         id: nanoid(8),
         from: 'user',
@@ -97,6 +97,7 @@ function MessageInput({ targetName }: { targetName: string }): React.JSX.Element
         timestamp: Date.now()
       }
     })
+
     setText('')
     inputRef.current?.focus()
   }
@@ -132,8 +133,6 @@ function MessageInput({ targetName }: { targetName: string }): React.JSX.Element
   )
 }
 
-// ── Member Detail Row (Expandable) ────────────────────────────────
-
 const MemberDetailRow = React.memo(function MemberDetailRow({
   member,
   task,
@@ -153,13 +152,12 @@ const MemberDetailRow = React.memo(function MemberDetailRow({
   const [now, setNow] = React.useState(member.startedAt)
   React.useEffect(() => {
     if (!isWorking) return
-    const timer = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(timer)
-  }, [isWorking, member.startedAt])
-  const elapsed = (member.completedAt ?? now) - member.startedAt
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [isWorking])
 
-  const lastTool =
-    member.toolCalls.length > 0 ? member.toolCalls[member.toolCalls.length - 1] : null
+  const elapsed = (member.completedAt ?? now) - member.startedAt
+  const lastTool = member.toolCalls.length > 0 ? member.toolCalls[member.toolCalls.length - 1] : null
   const currentAction = isWorking
     ? lastTool?.status === 'running'
       ? lastTool.name
@@ -179,27 +177,26 @@ const MemberDetailRow = React.memo(function MemberDetailRow({
             open && 'bg-muted/30'
           )}
         >
-          <span className={cn('size-2 rounded-full shrink-0', statusDots[member.status])} />
-          <span className="text-xs font-semibold text-cyan-600 dark:text-cyan-400 truncate min-w-0 flex-1">
+          <span className={cn('size-2 shrink-0 rounded-full', statusDots[member.status] ?? 'bg-muted')} />
+          <span className="min-w-0 flex-1 truncate text-xs font-semibold text-cyan-600 dark:text-cyan-400">
             {member.name}
           </span>
-          <span className="text-[9px] text-muted-foreground/50 truncate max-w-[80px] font-mono">
+          <span className="max-w-[80px] truncate font-mono text-[9px] text-muted-foreground/50">
             {currentAction}
           </span>
-          <span className="text-[9px] text-muted-foreground/40 tabular-nums shrink-0 flex items-center gap-0.5">
+          <span className="flex shrink-0 items-center gap-0.5 text-[9px] tabular-nums text-muted-foreground/40">
             <Clock className="size-2.5" />
             {formatElapsed(elapsed)}
           </span>
           {open ? (
-            <ChevronDown className="size-3 text-muted-foreground/40 shrink-0" />
+            <ChevronDown className="size-3 shrink-0 text-muted-foreground/40" />
           ) : (
-            <ChevronRight className="size-3 text-muted-foreground/40 shrink-0" />
+            <ChevronRight className="size-3 shrink-0 text-muted-foreground/40" />
           )}
         </button>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <div className="ml-4 mr-1 mt-0.5 mb-2 space-y-2 border-l-2 border-cyan-500/15 pl-3">
-          {/* Meta info */}
+        <div className="mb-2 ml-4 mr-1 mt-0.5 space-y-2 border-l-2 border-cyan-500/15 pl-3">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground/60">
             {member.agentName && (
               <span className="flex items-center gap-0.5 text-violet-500/80">
@@ -224,7 +221,6 @@ const MemberDetailRow = React.memo(function MemberDetailRow({
             )}
           </div>
 
-          {/* Task info */}
           {task && (
             <div className="rounded-md bg-muted/30 px-2.5 py-1.5">
               <div className="flex items-center gap-1.5">
@@ -232,25 +228,24 @@ const MemberDetailRow = React.memo(function MemberDetailRow({
                 <span className="text-[10px] font-medium text-muted-foreground/70">Task</span>
                 <Badge
                   variant="secondary"
-                  className={cn('text-[8px] h-3.5 px-1', taskStatusConfig[task.status]?.bg)}
+                  className={cn('h-3.5 px-1 text-[8px]', taskStatusConfig[task.status]?.bg)}
                 >
                   {taskStatusConfig[task.status]?.label ?? task.status}
                 </Badge>
               </div>
-              <p className="text-[11px] text-foreground/80 mt-0.5 leading-snug">{task.subject}</p>
+              <p className="mt-0.5 text-[11px] leading-snug text-foreground/80">{task.subject}</p>
             </div>
           )}
 
-          {/* Streaming text (live thinking) */}
           {isWorking && member.streamingText && (
-            <div className="rounded-md bg-cyan-500/[0.03] border border-cyan-500/10 px-2.5 py-2 max-h-32 overflow-y-auto">
-              <div className="flex items-center gap-1 mb-1">
+            <div className="max-h-32 overflow-y-auto rounded-md border border-cyan-500/10 bg-cyan-500/[0.03] px-2.5 py-2">
+              <div className="mb-1 flex items-center gap-1">
                 <Loader2 className="size-2.5 animate-spin text-cyan-400" />
-                <span className="text-[9px] font-medium text-cyan-400/70 uppercase tracking-wider">
+                <span className="text-[9px] font-medium uppercase tracking-wider text-cyan-400/70">
                   Thinking
                 </span>
               </div>
-              <p className="text-[11px] text-muted-foreground/70 leading-relaxed whitespace-pre-wrap break-words">
+              <p className="whitespace-pre-wrap break-words text-[11px] leading-relaxed text-muted-foreground/70">
                 {member.streamingText.length > 600
                   ? `…${member.streamingText.slice(-600)}`
                   : member.streamingText}
@@ -258,20 +253,19 @@ const MemberDetailRow = React.memo(function MemberDetailRow({
             </div>
           )}
 
-          {/* Thinking indicator (no text yet) */}
           {isWorking && member.toolCalls.length === 0 && !member.streamingText && (
             <div className="flex items-center gap-2 py-1">
               <span className="flex gap-1">
                 <span
-                  className="size-1.5 rounded-full bg-cyan-400/50 animate-bounce"
+                  className="size-1.5 animate-bounce rounded-full bg-cyan-400/50"
                   style={{ animationDelay: '0ms' }}
                 />
                 <span
-                  className="size-1.5 rounded-full bg-cyan-400/50 animate-bounce"
+                  className="size-1.5 animate-bounce rounded-full bg-cyan-400/50"
                   style={{ animationDelay: '150ms' }}
                 />
                 <span
-                  className="size-1.5 rounded-full bg-cyan-400/50 animate-bounce"
+                  className="size-1.5 animate-bounce rounded-full bg-cyan-400/50"
                   style={{ animationDelay: '300ms' }}
                 />
               </span>
@@ -279,39 +273,32 @@ const MemberDetailRow = React.memo(function MemberDetailRow({
             </div>
           )}
 
-          {/* Tool Calls (nested collapsible) */}
           {member.toolCalls.length > 0 && (
             <Collapsible open={toolsOpen} onOpenChange={setToolsOpen}>
               <CollapsibleTrigger asChild>
-                <button className="flex w-full items-center gap-1.5 text-[10px] text-muted-foreground/60 hover:text-muted-foreground transition-colors py-0.5">
+                <button className="flex w-full items-center gap-1.5 py-0.5 text-[10px] text-muted-foreground/60 transition-colors hover:text-muted-foreground">
                   <Wrench className="size-2.5" />
-                  <span className="font-medium uppercase tracking-wider">
-                    {t('team.toolCalls')}
-                  </span>
-                  <Badge variant="secondary" className="text-[8px] h-3.5 px-1 ml-0.5">
+                  <span className="font-medium uppercase tracking-wider">{t('team.toolCalls')}</span>
+                  <Badge variant="secondary" className="ml-0.5 h-3.5 px-1 text-[8px]">
                     {member.toolCalls.length}
                   </Badge>
                   <span className="flex-1" />
-                  {toolsOpen ? (
-                    <ChevronDown className="size-3" />
-                  ) : (
-                    <ChevronRight className="size-3" />
-                  )}
+                  {toolsOpen ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
                 </button>
               </CollapsibleTrigger>
               <CollapsibleContent>
-                <div className="mt-1 space-y-1 max-h-[400px] overflow-y-auto">
-                  {member.toolCalls.map((tc) => (
+                <div className="mt-1 max-h-[400px] space-y-1 overflow-y-auto">
+                  {member.toolCalls.map((toolCall) => (
                     <ToolCallCard
-                      key={tc.id}
-                      toolUseId={tc.id}
-                      name={tc.name}
-                      input={tc.input}
-                      output={tc.output}
-                      status={tc.status}
-                      error={tc.error}
-                      startedAt={tc.startedAt}
-                      completedAt={tc.completedAt}
+                      key={toolCall.id}
+                      toolUseId={toolCall.id}
+                      name={toolCall.name}
+                      input={toolCall.input}
+                      output={toolCall.output}
+                      status={toolCall.status}
+                      error={toolCall.error}
+                      startedAt={toolCall.startedAt}
+                      completedAt={toolCall.completedAt}
                     />
                   ))}
                 </div>
@@ -319,32 +306,29 @@ const MemberDetailRow = React.memo(function MemberDetailRow({
             </Collapsible>
           )}
 
-          {/* Send message to this teammate */}
           {isWorking && <MessageInput targetName={member.name} />}
 
-          {/* Stop button */}
           {isWorking && (
             <button
               onClick={(e) => {
                 e.stopPropagation()
                 onStop(member.id)
               }}
-              className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-muted-foreground/50 hover:text-destructive hover:bg-destructive/5 transition-colors border border-transparent hover:border-destructive/20"
+              className="flex items-center gap-1 rounded-md border border-transparent px-2 py-1 text-[10px] text-muted-foreground/50 transition-colors hover:border-destructive/20 hover:bg-destructive/5 hover:text-destructive"
             >
               <Square className="size-2.5" />
               {t('team.stopMember', { name: member.name })}
             </button>
           )}
 
-          {/* Completed summary for stopped members */}
           {member.status === 'stopped' && member.streamingText && (
             <div className="rounded-md bg-muted/30 px-2.5 py-1.5">
-              <span className="text-[9px] font-medium text-muted-foreground/50 uppercase tracking-wider">
+              <span className="text-[9px] font-medium uppercase tracking-wider text-muted-foreground/50">
                 {t('team.lastOutput')}
               </span>
-              <p className="text-[11px] text-muted-foreground/70 mt-0.5 leading-snug whitespace-pre-wrap break-words">
+              <p className="mt-0.5 whitespace-pre-wrap break-words text-[11px] leading-snug text-muted-foreground/70">
                 {member.streamingText.length > 300
-                  ? member.streamingText.slice(-300) + '…'
+                  ? `${member.streamingText.slice(-300)}…`
                   : member.streamingText}
               </p>
             </div>
@@ -355,25 +339,19 @@ const MemberDetailRow = React.memo(function MemberDetailRow({
   )
 })
 
-// ── Message Row ───────────────────────────────────────────────────
-
-const MessageRow = React.memo(function MessageRow({
-  msg
-}: {
-  msg: TeamMessage
-}): React.JSX.Element {
+const MessageRow = React.memo(function MessageRow({ msg }: { msg: TeamMessage }): React.JSX.Element {
   const { t } = useTranslation('cowork')
   const [expanded, setExpanded] = React.useState(false)
   const isLong = msg.content.length > 120
 
   return (
-    <div className="rounded-md px-2.5 py-1.5 hover:bg-muted/30 transition-colors">
+    <div className="rounded-md px-2.5 py-1.5 transition-colors hover:bg-muted/30">
       <div className="flex items-center gap-1.5 text-[10px]">
         <span className="font-medium text-cyan-600 dark:text-cyan-400">{msg.from}</span>
         <ArrowRight className="size-2.5 text-muted-foreground/30" />
         <span className="font-medium text-muted-foreground/70">{msg.to}</span>
         {msg.type !== 'message' && (
-          <Badge variant="secondary" className="text-[7px] h-3 px-1">
+          <Badge variant="secondary" className="h-3 px-1 text-[7px]">
             {msg.type}
           </Badge>
         )}
@@ -381,17 +359,17 @@ const MessageRow = React.memo(function MessageRow({
         <span className="text-[9px] text-muted-foreground/40">{timeAgo(msg.timestamp)}</span>
       </div>
       {msg.summary && !expanded && (
-        <p className="text-[10px] text-muted-foreground/60 mt-0.5 truncate">{msg.summary}</p>
+        <p className="mt-0.5 truncate text-[10px] text-muted-foreground/60">{msg.summary}</p>
       )}
       {(!msg.summary || expanded) && (
-        <p className="text-[10px] text-muted-foreground/60 mt-0.5 whitespace-pre-wrap break-words leading-snug">
-          {isLong && !expanded ? msg.content.slice(0, 120) + '…' : msg.content}
+        <p className="mt-0.5 whitespace-pre-wrap break-words text-[10px] leading-snug text-muted-foreground/60">
+          {isLong && !expanded ? `${msg.content.slice(0, 120)}…` : msg.content}
         </p>
       )}
       {isLong && (
         <button
-          onClick={() => setExpanded(!expanded)}
-          className="text-[9px] text-cyan-500/60 hover:text-cyan-500 mt-0.5 transition-colors"
+          onClick={() => setExpanded((value) => !value)}
+          className="mt-0.5 text-[9px] text-cyan-500/60 transition-colors hover:text-cyan-500"
         >
           {expanded ? t('team.showLess') : t('team.showMore')}
         </button>
@@ -399,8 +377,6 @@ const MessageRow = React.memo(function MessageRow({
     </div>
   )
 })
-
-// ── Messages Timeline (chronological order with auto-scroll) ─────
 
 const MessagesTimeline = React.memo(function MessagesTimeline({
   messages
@@ -410,11 +386,9 @@ const MessagesTimeline = React.memo(function MessagesTimeline({
   const bottomRef = React.useRef<HTMLDivElement>(null)
   const containerRef = React.useRef<HTMLDivElement>(null)
 
-  // Auto-scroll to bottom when new messages arrive
   React.useEffect(() => {
     const container = containerRef.current
     if (!container) return
-    // Only auto-scroll if user is near the bottom (within 60px)
     const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight
     if (distFromBottom < 60) {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -422,7 +396,7 @@ const MessagesTimeline = React.memo(function MessagesTimeline({
   }, [messages.length])
 
   return (
-    <div ref={containerRef} className="space-y-0.5 max-h-[300px] overflow-y-auto mb-2">
+    <div ref={containerRef} className="mb-2 max-h-[300px] space-y-0.5 overflow-y-auto">
       {messages.map((msg) => (
         <MessageRow key={msg.id} msg={msg} />
       ))}
@@ -430,8 +404,6 @@ const MessagesTimeline = React.memo(function MessagesTimeline({
     </div>
   )
 })
-
-// ── Section Header ────────────────────────────────────────────────
 
 function SectionHeader({
   icon,
@@ -443,13 +415,13 @@ function SectionHeader({
   count?: number
 }): React.JSX.Element {
   return (
-    <div className="flex items-center gap-1.5 mb-1">
+    <div className="mb-1 flex items-center gap-1.5">
       {icon}
-      <span className="text-[10px] font-medium text-muted-foreground/60 uppercase tracking-wider">
+      <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
         {label}
       </span>
       {count != null && count > 0 && (
-        <Badge variant="secondary" className="text-[8px] h-3.5 px-1">
+        <Badge variant="secondary" className="h-3.5 px-1 text-[8px]">
           {count}
         </Badge>
       )}
@@ -457,38 +429,34 @@ function SectionHeader({
   )
 }
 
-// ── Main TeamPanel ────────────────────────────────────────────────
-
 export function TeamPanel(): React.JSX.Element {
   const { t } = useTranslation('cowork')
   const activeTeam = useTeamStore(
-    useShallow((s) => {
-      const team = s.activeTeam
+    useShallow((state) => {
+      const team = state.activeTeam
       if (!team) return null
       return {
-        name: team.name,
-        description: team.description,
-        members: team.members,
-        tasks: team.tasks,
-        messages: team.messages
+        ...team,
+        members: [...team.members],
+        tasks: [...team.tasks],
+        messages: [...team.messages]
       }
     })
   )
 
   const handleStopMember = React.useCallback((memberId: string): void => {
-    abortTeammate(memberId)
+    const team = useTeamStore.getState().activeTeam
+    const member = team?.members.find((item) => item.id === memberId)
+    if (!member) return
+    abortTeammate(member.name)
   }, [])
 
   const handleClearAll = React.useCallback((): void => {
     const team = useTeamStore.getState().activeTeam
-    // 1. Pause auto-trigger to prevent dead loops
     resetTeamAutoTrigger()
-    // 2. Abort all running teammates
     abortAllTeammates()
-    // 3. Clean up concurrency limiter
     if (team) removeTeamLimiter(team.name)
-    // 4. Emit team_end so the store archives + clears
-    teamEvents.emit({ type: 'team_end' })
+    teamEvents.emit({ type: 'team_end', sessionId: team?.sessionId })
   }, [])
 
   if (!activeTeam) {
@@ -502,22 +470,21 @@ export function TeamPanel(): React.JSX.Element {
   }
 
   const { members, tasks, messages } = activeTeam
-  const workingMembers = members.filter((m) => m.status === 'working')
+  const workingMembers = members.filter((member) => member.status === 'working')
 
   return (
     <div className="space-y-3">
-      {/* ── Team Header ── */}
       <div className="space-y-2">
         <div className="flex items-center gap-2">
           <div className="flex items-center justify-center rounded-lg bg-cyan-500/15 p-1.5 text-cyan-500">
             <Users className="size-4" />
           </div>
-          <div className="flex-1 min-w-0">
+          <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
-              <span className="text-sm font-semibold text-cyan-600 dark:text-cyan-400 truncate">
+              <span className="truncate text-sm font-semibold text-cyan-600 dark:text-cyan-400">
                 {activeTeam.name}
               </span>
-              <Badge variant="secondary" className="text-[8px] h-3.5 px-1">
+              <Badge variant="secondary" className="h-3.5 px-1 text-[8px]">
                 {members.length}
               </Badge>
               {workingMembers.length > 0 && (
@@ -526,13 +493,11 @@ export function TeamPanel(): React.JSX.Element {
                 </span>
               )}
             </div>
-            <p className="text-[10px] text-muted-foreground/60 truncate">
-              {activeTeam.description}
-            </p>
+            <p className="truncate text-[10px] text-muted-foreground/60">{activeTeam.description}</p>
           </div>
           <button
             onClick={handleClearAll}
-            className="shrink-0 rounded-md p-1.5 text-muted-foreground/40 hover:text-destructive hover:bg-destructive/5 transition-colors"
+            className="shrink-0 rounded-md p-1.5 text-muted-foreground/40 transition-colors hover:bg-destructive/5 hover:text-destructive"
             title={t('team.stopAll')}
           >
             <Trash2 className="size-3.5" />
@@ -542,7 +507,6 @@ export function TeamPanel(): React.JSX.Element {
 
       <Separator />
 
-      {/* ── Members (expandable detail rows) ── */}
       {members.length > 0 && (
         <div>
           <SectionHeader
@@ -553,7 +517,7 @@ export function TeamPanel(): React.JSX.Element {
           <div className="space-y-0.5">
             {members.map((member) => {
               const memberTask = member.currentTaskId
-                ? (tasks.find((t) => t.id === member.currentTaskId) ?? null)
+                ? (tasks.find((task) => task.id === member.currentTaskId) ?? null)
                 : null
               return (
                 <MemberDetailRow
@@ -569,7 +533,6 @@ export function TeamPanel(): React.JSX.Element {
         </div>
       )}
 
-      {/* ── Messages Timeline ── */}
       {(messages.length > 0 || workingMembers.length > 0) && (
         <>
           <Separator />
@@ -580,7 +543,6 @@ export function TeamPanel(): React.JSX.Element {
               count={messages.length || undefined}
             />
             {messages.length > 0 && <MessagesTimeline messages={messages} />}
-            {/* Broadcast to all teammates */}
             {workingMembers.length > 0 && <MessageInput targetName="all" />}
           </div>
         </>

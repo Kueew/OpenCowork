@@ -1,7 +1,6 @@
 import { ipcMain, shell, BrowserWindow } from 'electron'
 import { safeSendToWindow } from '../window-ipc'
 import { spawn } from 'child_process'
-import { StringDecoder } from 'string_decoder'
 
 const ANSI_ESCAPE_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`, 'g')
 const COMPACT_OUTPUT_CHAR_THRESHOLD = 6000
@@ -16,6 +15,7 @@ const MAX_WARNING_LINE_COUNT = 20
 const ERROR_LIKE_RE =
   /\b(error|failed|exception|traceback|fatal|panic|cannot|unable|undefined reference|syntax error|test(?:s)? failed?)\b/i
 const WARNING_LIKE_RE = /\bwarn(?:ing)?\b/i
+const SHELL_OUTPUT_ENCODING = process.platform === 'win32' ? 'gb18030' : 'utf-8'
 
 type ShellStream = 'stdout' | 'stderr'
 
@@ -39,6 +39,14 @@ interface CompactStreamResult {
   compacted: boolean
 }
 
+function createOutputDecoder(): TextDecoder {
+  return new TextDecoder(SHELL_OUTPUT_ENCODING)
+}
+
+function decodeOutputChunk(decoder: TextDecoder, data: Buffer): string {
+  return decoder.decode(data, { stream: true })
+}
+
 function stripAnsi(raw: string): string {
   return raw.replace(ANSI_ESCAPE_RE, '')
 }
@@ -46,12 +54,10 @@ function stripAnsi(raw: string): string {
 function sanitizeOutput(raw: string, maxLen: number): string {
   const normalized = stripAnsi(raw)
   const trimmed = normalized.slice(0, maxLen)
-  // Detect binary / non-text output by sampling the first 256 chars
   const sample = trimmed.slice(0, 256)
   let bad = 0
   for (let i = 0; i < sample.length; i++) {
     const c = sample.charCodeAt(i)
-    // non-printable control chars (except tab, LF, CR) or replacement char U+FFFD
     if ((c < 0x20 && c !== 0x09 && c !== 0x0a && c !== 0x0d) || c === 0xfffd) bad++
   }
   if (sample.length > 0 && bad / sample.length > 0.1) {
@@ -229,29 +235,25 @@ export function registerShellHandlers(): void {
       const timeout = Math.min(args.timeout ?? DEFAULT_TIMEOUT, MAX_TIMEOUT)
       const execId = args.execId
 
-      // On Windows, default cmd.exe code page (e.g. CP936) != UTF-8.
-      // Prepend chcp 65001 to switch console to UTF-8 before running the command.
-      const cmd = process.platform === 'win32' ? `chcp 65001 >nul & ${args.command}` : args.command
-
       return new Promise((resolve) => {
         let stdout = ''
         let stderr = ''
+        const stdoutDecoder = createOutputDecoder()
+        const stderrDecoder = createOutputDecoder()
         let killed = false
         let settled = false
         let timeoutTimer: ReturnType<typeof setTimeout> | null = null
         let forceResolveTimer: ReturnType<typeof setTimeout> | null = null
         let exitResolveTimer: ReturnType<typeof setTimeout> | null = null
 
-        const child = spawn(cmd, {
+        const child = spawn(args.command, {
           cwd: args.cwd || process.cwd(),
           shell: true,
           stdio: ['ignore', 'pipe', 'pipe'],
           env: {
             ...process.env,
-            // Force Python to use UTF-8 for stdin/stdout/stderr
             PYTHONIOENCODING: 'utf-8',
             PYTHONUTF8: '1',
-            // Disable Python output buffering so streaming output arrives in real-time
             PYTHONUNBUFFERED: '1'
           }
         })
@@ -277,6 +279,8 @@ export function registerShellHandlers(): void {
             clearTimeout(exitResolveTimer)
             exitResolveTimer = null
           }
+          stdout += stdoutDecoder.decode()
+          stderr += stderrDecoder.decode()
           child.stdout?.removeAllListeners('data')
           child.stderr?.removeAllListeners('data')
           child.removeAllListeners('error')
@@ -313,7 +317,7 @@ export function registerShellHandlers(): void {
         }
 
         child.stdout?.on('data', (data: Buffer) => {
-          const text = data.toString('utf8')
+          const text = decodeOutputChunk(stdoutDecoder, data)
           stdout += text
           if (stdout.length > MAX_LIVE_BUFFER_CHARS) {
             stdout = stdout.slice(-MAX_LIVE_BUFFER_CHARS)
@@ -322,7 +326,7 @@ export function registerShellHandlers(): void {
         })
 
         child.stderr?.on('data', (data: Buffer) => {
-          const text = data.toString('utf8')
+          const text = decodeOutputChunk(stderrDecoder, data)
           stderr += text
           if (stderr.length > MAX_LIVE_BUFFER_CHARS) {
             stderr = stderr.slice(-MAX_LIVE_BUFFER_CHARS)
@@ -358,7 +362,6 @@ export function registerShellHandlers(): void {
           })
         })
 
-        // Safety: kill on timeout
         timeoutTimer = setTimeout(() => {
           requestAbort()
         }, timeout)

@@ -22,22 +22,5 @@ export function HtmlViewer({ content, viewMode, onContentChange }: ViewerProps):
     )
   }
 
-  return (
-    <Editor
-      height="100%"
-      language="html"
-      theme="vs-dark"
-      value={content}
-      onChange={(value) => onContentChange?.(value ?? '')}
-      options={{
-        minimap: { enabled: false },
-        fontSize: 13,
-        lineNumbers: 'on',
-        wordWrap: 'on',
-        scrollBeyondLastLine: false,
-        automaticLayout: true,
-        tabSize: 2
-      }}
-    />
-  )
+  return <CodeEditor filePath="preview.html" content={content} onChange={onContentChange} />
 }

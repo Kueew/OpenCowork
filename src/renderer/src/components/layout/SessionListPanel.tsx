@@ -66,6 +66,7 @@ import { ModelIcon } from '@renderer/components/settings/provider-icons'
 import { useUIStore } from '@renderer/stores/ui-store'
 import { useSettingsStore } from '@renderer/stores/settings-store'
 import { useAgentStore } from '@renderer/stores/agent-store'
+import { useBackgroundSessionStore } from '@renderer/stores/background-session-store'
 import { useTeamStore } from '@renderer/stores/team-store'
 import {
   abortSession,
@@ -210,6 +211,8 @@ export function SessionListPanel(): React.JSX.Element {
   const updateSettings = useSettingsStore((s) => s.updateSettings)
   const providers = useProviderStore((s) => s.providers)
   const runningSessions = useAgentStore((s) => s.runningSessions)
+  const blockedCountsBySession = useBackgroundSessionStore((s) => s.blockedCountsBySession)
+  const unreadCountsBySession = useBackgroundSessionStore((s) => s.unreadCountsBySession)
   const runningSubAgentSessionIdsSig = useAgentStore((s) => s.runningSubAgentSessionIdsSig)
   const runningBackgroundSessionIdsSig = useAgentStore((s) =>
     Object.values(s.backgroundProcesses)
@@ -487,23 +490,12 @@ export function SessionListPanel(): React.JSX.Element {
         sshConnectionId: sshConnectionId ?? undefined
       })
       setActiveProject(id)
+      setFolderPickerTarget(null)
       useUIStore.getState().navigateToHome()
       toast.success(t('sidebar_toast.projectCreated', { defaultValue: 'Project created' }))
     },
     [createProject, setActiveProject, t]
   )
-
-  const toggleProjectCollapsed = useCallback((projectId: string): void => {
-    setCollapsedProjectIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(projectId)) {
-        next.delete(projectId)
-      } else {
-        next.add(projectId)
-      }
-      return next
-    })
-  }, [])
 
   const toggleProjectHistoryExpanded = useCallback((projectId: string): void => {
     setExpandedHistoryProjectIds((prev) => {
@@ -525,12 +517,48 @@ export function SessionListPanel(): React.JSX.Element {
     []
   )
 
-  const handleRenameProject = useCallback(
-    (projectId: string, currentName: string): void => {
-      openRenameDialog('project', projectId, currentName)
+  const handleRenameProject = useCallback((projectId: string, currentName: string): void => {
+    openRenameDialog('project', projectId, currentName)
+  }, [openRenameDialog])
+
+  const handleDeleteProject = useCallback(
+    (projectId: string, name: string, sessionCount: number): void => {
+      setProjectDeleteTarget({ id: projectId, name, sessionCount })
     },
-    [openRenameDialog]
+    []
   )
+
+  const handleEditProjectDirectory = useCallback((projectId: string): void => {
+    setFolderPickerTarget({ type: 'project', projectId })
+  }, [])
+
+  const toggleProjectCollapsed = useCallback((projectId: string): void => {
+    setCollapsedProjectIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(projectId)) {
+        next.delete(projectId)
+      } else {
+        next.add(projectId)
+      }
+      return next
+    })
+  }, [])
+
+  const chatProviderGroups = useMemo(
+    () =>
+      providers
+        .filter(isProviderAvailableForModelSelection)
+        .map((provider) => ({
+          provider,
+          models: provider.models
+        }))
+        .filter((group) => group.models.length > 0),
+    [providers]
+  )
+
+  const buildModelValue = useCallback((providerId: string, modelId: string): string => {
+    return `${providerId}:${modelId}`
+  }, [])
 
   const confirmRename = useCallback((): void => {
     if (!renameDialog) return
@@ -541,50 +569,19 @@ export function SessionListPanel(): React.JSX.Element {
     if (nextName !== current) {
       if (renameDialog.type === 'project') {
         renameProject(renameDialog.id, nextName)
+        toast.success(t('sidebar_toast.projectRenamed', { defaultValue: 'Project renamed' }))
       } else {
         updateSessionTitle(renameDialog.id, nextName)
+        toast.success(t('sidebar_toast.sessionRenamed', { defaultValue: 'Session renamed' }))
       }
-      toast.success(t('action.rename', { ns: 'common' }))
     }
 
     setRenameDialog(null)
-  }, [renameDialog, renameProject, renameValue, t, updateSessionTitle])
-
-  const handleDeleteProject = useCallback(
-    (projectId: string, projectName: string, sessionCount: number): void => {
-      setProjectDeleteTarget({
-        id: projectId,
-        name: projectName,
-        sessionCount
-      })
-    },
-    []
-  )
-
-  const handleEditProjectDirectory = useCallback((projectId: string): void => {
-    setFolderPickerTarget({ type: 'project', projectId })
-  }, [])
+    setRenameValue('')
+  }, [renameDialog, renameValue, renameProject, t, updateSessionTitle])
 
   const handleEditProjectModel = useCallback((projectId: string, projectName: string): void => {
     setProjectModelDialog({ projectId, projectName })
-  }, [])
-
-  const chatProviderGroups = useMemo(
-    () =>
-      providers
-        .filter((provider) => isProviderAvailableForModelSelection(provider))
-        .map((provider) => ({
-          provider,
-          models: provider.models.filter(
-            (model) => model.enabled && (!model.category || model.category === 'chat')
-          )
-        }))
-        .filter((group) => group.models.length > 0),
-    [providers]
-  )
-
-  const buildModelValue = useCallback((providerId: string, modelId: string): string => {
-    return `${providerId}::${modelId}`
   }, [])
 
   const applyProjectModel = useCallback(
@@ -594,6 +591,7 @@ export function SessionListPanel(): React.JSX.Element {
         .getState()
         .projects.find((item) => item.id === projectModelDialog.projectId)
       if (!project) return
+
       if (value === '__global__') {
         const now = Date.now()
         useChatStore.setState((state) => {
@@ -607,8 +605,10 @@ export function SessionListPanel(): React.JSX.Element {
         toast.success('项目默认模型已改为跟随全局')
         return
       }
-      const [providerId, modelId] = value.split('::')
+
+      const [providerId, modelId] = value.split(':')
       if (!providerId || !modelId) return
+
       const now = Date.now()
       useChatStore.setState((state) => {
         const target = state.projects.find((item) => item.id === projectModelDialog.projectId)
@@ -630,6 +630,7 @@ export function SessionListPanel(): React.JSX.Element {
       .getState()
       .sessions.filter((session) => session.projectId === projectDeleteTarget.id)
       .map((session) => session.id)
+
     for (const sessionId of relatedSessionIds) {
       abortSession(sessionId)
       clearPendingSessionMessages(sessionId)
@@ -656,9 +657,11 @@ export function SessionListPanel(): React.JSX.Element {
         const session = getSessionSnapshot(sessionId)
         if (!session) return
 
-        const providerConfig = session.providerId && session.modelId
-          ? useProviderStore.getState().getProviderConfigById(session.providerId, session.modelId)
-          : useProviderStore.getState().getProviderConfig()
+        const providerStore = useProviderStore.getState()
+        const providerConfig =
+          session.providerId && session.modelId
+            ? providerStore.getProviderConfigById(session.providerId, session.modelId)
+            : providerStore.getActiveProviderConfig()
 
         if (!providerConfig) {
           toast.error('当前没有可用模型')
@@ -673,7 +676,10 @@ export function SessionListPanel(): React.JSX.Element {
               typeof message.content === 'string'
                 ? message.content
                 : message.content
-                    .filter((block): block is Extract<UnifiedMessage['content'][number], { type: 'text' }> => block.type === 'text')
+                    .filter(
+                      (block): block is Extract<UnifiedMessage['content'][number], { type: 'text' }> =>
+                        block.type === 'text'
+                    )
                     .map((block) => block.text)
                     .join('\n')
             return text.trim() ? `${message.role}: ${text.trim()}` : ''
@@ -709,7 +715,12 @@ export function SessionListPanel(): React.JSX.Element {
           }
         }
 
-        const cleanedTitle = nextTitle.replace(/[\r\n"“”'‘’《》【】]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 18)
+        const cleanedTitle = nextTitle
+          .replace(/[\r\n"“”'‘’《》【】]/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 18)
+
         if (!cleanedTitle) {
           toast.error('AI 未生成有效标题')
           return
@@ -992,6 +1003,16 @@ export function SessionListPanel(): React.JSX.Element {
               {runningSessions[session.id] === 'completed' && (
                 <CheckCircle2 className="size-3.5 text-emerald-500" />
               )}
+              {(blockedCountsBySession[session.id] ?? 0) > 0 && (
+                <span className="rounded-full border border-amber-500/20 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-medium text-amber-600 dark:text-amber-400">
+                  {(blockedCountsBySession[session.id] ?? 0) > 99 ? '99+' : blockedCountsBySession[session.id]}
+                </span>
+              )}
+              {(unreadCountsBySession[session.id] ?? 0) > 0 && (
+                <span className="rounded-full border border-sky-500/20 bg-sky-500/10 px-1.5 py-0.5 text-[9px] font-medium text-sky-600 dark:text-sky-400">
+                  {(unreadCountsBySession[session.id] ?? 0) > 99 ? '99+' : unreadCountsBySession[session.id]}
+                </span>
+              )}
               {getPendingSessionMessageCountForSession(session.id) > 0 && (
                 <span className="rounded-full border border-primary/20 bg-primary/10 px-1.5 py-0.5 text-[9px] font-medium text-primary">
                   {getPendingSessionMessageCountForSession(session.id)}
@@ -1099,17 +1120,6 @@ export function SessionListPanel(): React.JSX.Element {
             </ContextMenuItem>
           </>
         )}
-        <ContextMenuItem
-          onClick={() => {
-            togglePinSession(session.id)
-            toast.success(
-              session.pinned ? t('sidebar_toast.unpinned') : t('sidebar_toast.pinnedMsg')
-            )
-          }}
-        >
-          {session.pinned ? <PinOff className="size-4" /> : <Pin className="size-4" />}
-          {session.pinned ? t('action.unpin', { ns: 'common' }) : t('sidebar.pinToTop')}
-        </ContextMenuItem>
         <ContextMenuSub>
           <ContextMenuSubTrigger>
             {modeIcons[session.mode]}
@@ -1326,8 +1336,7 @@ export function SessionListPanel(): React.JSX.Element {
           )
         }}
       >
-        {/* Header: title + new chat */}
-        <div className="flex items-center justify-between px-3 pt-3 pb-1">
+        <div className="flex items-center justify-between px-3 pb-1 pt-3">
           <div className="flex items-center gap-1.5">
             <span className="text-xs font-semibold text-foreground/80">
               {t('sidebar.conversations')}
@@ -1383,11 +1392,10 @@ export function SessionListPanel(): React.JSX.Element {
           </div>
         </div>
 
-        {/* Search */}
         {sessions.length > 3 && (
           <div className="px-3 pb-1.5 pt-1">
             <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3 text-muted-foreground/60" />
+              <Search className="absolute left-2.5 top-1/2 size-3 -translate-y-1/2 text-muted-foreground/60" />
               <Input
                 ref={searchRef}
                 placeholder={t('sidebar.filterSessions')}
@@ -1399,11 +1407,11 @@ export function SessionListPanel(): React.JSX.Element {
                     searchRef.current?.blur()
                   }
                 }}
-                className={`h-7 rounded-lg pl-7 text-xs bg-muted/50 border-transparent focus:border-border transition-colors ${search ? 'pr-6' : ''}`}
+                className={`h-7 rounded-lg border-transparent bg-muted/50 pl-7 text-xs transition-colors focus:border-border ${search ? 'pr-6' : ''}`}
               />
               {search && (
                 <>
-                  <span className="absolute right-6 top-1/2 -translate-y-1/2 text-[9px] text-muted-foreground/40 pointer-events-none">
+                  <span className="pointer-events-none absolute right-6 top-1/2 -translate-y-1/2 text-[9px] text-muted-foreground/40">
                     {filteredSessions.length}/{sortedSessions.length}
                   </span>
                   <button
@@ -1411,7 +1419,7 @@ export function SessionListPanel(): React.JSX.Element {
                       setSearch('')
                       searchRef.current?.focus()
                     }}
-                    className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground hover:text-foreground transition-colors"
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground transition-colors hover:text-foreground"
                   >
                     <X className="size-3" />
                   </button>
@@ -1421,7 +1429,6 @@ export function SessionListPanel(): React.JSX.Element {
           </div>
         )}
 
-        {/* Session list */}
         <div className="flex-1 overflow-y-auto px-1.5">
           {filteredProjectGroups.length === 0 ? (
             <div className="px-2 py-4 text-center text-xs text-muted-foreground">
@@ -1452,7 +1459,6 @@ export function SessionListPanel(): React.JSX.Element {
           onMouseDown={startResize}
         />
 
-        {/* Footer stats */}
         <div className="border-t px-3 py-2">
           <p className="text-center text-[10px] text-muted-foreground/25">
             {sessions.length} {t('sidebar.sessions')} ·{' '}
@@ -1495,7 +1501,6 @@ export function SessionListPanel(): React.JSX.Element {
         </div>
       </div>
 
-      {/* Delete confirmation dialog */}
       <AlertDialog
         open={!!deleteTarget}
         onOpenChange={(open) => {
@@ -1583,13 +1588,13 @@ export function SessionListPanel(): React.JSX.Element {
           if (!open) setProjectModelDialog(null)
         }}
       >
-        <DialogContent className="sm:max-w-lg p-4">
+        <DialogContent className="p-4 sm:max-w-lg">
           <DialogHeader>
             <DialogTitle className="text-sm">
               修改项目默认模型{projectModelDialog ? ` · ${projectModelDialog.projectName}` : ''}
             </DialogTitle>
           </DialogHeader>
-          <div className="space-y-2 max-h-80 overflow-y-auto">
+          <div className="max-h-80 space-y-2 overflow-y-auto">
             <Button
               variant="outline"
               size="sm"
@@ -1600,7 +1605,7 @@ export function SessionListPanel(): React.JSX.Element {
             </Button>
             {chatProviderGroups.map(({ provider, models }) => (
               <div key={`project-model-${provider.id}`} className="space-y-1">
-                <div className="text-[10px] uppercase tracking-wide text-muted-foreground px-1">
+                <div className="px-1 text-[10px] uppercase tracking-wide text-muted-foreground">
                   {provider.name}
                 </div>
                 {models.map((model) => (
@@ -1611,7 +1616,7 @@ export function SessionListPanel(): React.JSX.Element {
                     className="w-full justify-start"
                     onClick={() => applyProjectModel(buildModelValue(provider.id, model.id))}
                   >
-                    <div className="flex items-center gap-2 min-w-0">
+                    <div className="flex min-w-0 items-center gap-2">
                       <ModelIcon
                         icon={model.icon}
                         modelId={model.id}
@@ -1620,8 +1625,8 @@ export function SessionListPanel(): React.JSX.Element {
                         className="text-muted-foreground/70"
                       />
                       <div className="flex min-w-0 flex-col items-start text-left">
-                        <span className="truncate max-w-[220px]">{model.name}</span>
-                        <span className="text-[10px] text-muted-foreground/60 truncate max-w-[220px]">
+                        <span className="max-w-[220px] truncate">{model.name}</span>
+                        <span className="max-w-[220px] truncate text-[10px] text-muted-foreground/60">
                           {model.id}
                         </span>
                       </div>

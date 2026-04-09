@@ -30,20 +30,14 @@ export const teamDeleteTool: ToolHandler = {
     const taskCount = team.tasks.length
     const completedCount = team.tasks.filter((t) => t.status === 'completed').length
 
-    // Stop all running teammate agent loops
     abortAllTeammates()
     await stopIsolatedTeamWorkers({ teamName })
-
-    // Resolve any pending approval promises from aborted teammates
-    // so they don't block the PermissionDialog or leak memory
     useAgentStore.getState().clearPendingApprovals()
-
-    // Clean up per-team concurrency limiter
     removeTeamLimiter(teamName)
 
     try {
       await deleteTeamRuntime({ teamName })
-      teamEvents.emit({ type: 'team_end' })
+      teamEvents.emit({ type: 'team_end', sessionId: team.sessionId })
 
       return encodeStructuredToolResult({
         success: true,

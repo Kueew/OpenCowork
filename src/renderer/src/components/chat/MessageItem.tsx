@@ -1,14 +1,14 @@
 import * as React from 'react'
-import type { ToolResultContent } from '@renderer/lib/api/types'
-import type { ToolCallState } from '@renderer/lib/agent/types'
-import { UserMessage } from './UserMessage'
-import { AssistantMessage } from './AssistantMessage'
-import { Users, ChevronDown } from 'lucide-react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { Users, ChevronDown } from 'lucide-react'
 import { SlideIn } from '@renderer/components/animate-ui'
+import { UserMessage } from './UserMessage'
+import { AssistantMessage } from './AssistantMessage'
+import type { UnifiedMessage, ToolResultContent } from '@renderer/lib/api/types'
+import type { ToolCallState } from '@renderer/lib/agent/types'
 import type { EditableUserMessageDraft } from '@renderer/lib/image-attachments'
-import type { UnifiedMessage } from '@renderer/lib/api/types'
+import type { OrchestrationRun } from '@renderer/lib/orchestration/types'
 
 type MessageRenderMode = 'default' | 'transcript'
 
@@ -27,6 +27,8 @@ interface MessageItemProps {
   toolResults?: Map<string, { content: ToolResultContent; isError?: boolean }>
   liveToolCallMap?: Map<string, ToolCallState> | null
   renderMode?: MessageRenderMode
+  orchestrationRun?: OrchestrationRun | null
+  hiddenToolUseIds?: Set<string>
 }
 
 function getToolUseInputSignal(input: Record<string, unknown>): string {
@@ -51,8 +53,7 @@ function getContentSignal(content: UnifiedMessage['content']): string {
   if (typeof content === 'string') return `s:${content.length}:${content.slice(-32)}`
   const last = content[content.length - 1]
   if (!last) return 'a:0'
-  if (last.type === 'text')
-    return `a:${content.length}:t:${last.text.length}:${last.text.slice(-32)}`
+  if (last.type === 'text') return `a:${content.length}:t:${last.text.length}:${last.text.slice(-32)}`
   if (last.type === 'thinking') {
     return `a:${content.length}:h:${last.thinking.length}:${last.completedAt ?? 0}`
   }
@@ -62,10 +63,8 @@ function getContentSignal(content: UnifiedMessage['content']): string {
   if (last.type === 'tool_result') {
     return `a:${content.length}:r:${last.toolUseId}:${typeof last.content === 'string' ? last.content.length : last.content.length}`
   }
-  if (last.type === 'image_error')
-    return `a:${content.length}:e:${last.code}:${last.message.length}`
-  if (last.type === 'agent_error')
-    return `a:${content.length}:ae:${last.code}:${last.message.length}`
+  if (last.type === 'image_error') return `a:${content.length}:e:${last.code}:${last.message.length}`
+  if (last.type === 'agent_error') return `a:${content.length}:ae:${last.code}:${last.message.length}`
   return `a:${content.length}:i:${last.source.type}:${last.source.url ?? last.source.data?.length ?? 0}`
 }
 
@@ -73,11 +72,8 @@ function formatTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-/** Render a teammate notification as a collapsible bar with smooth transition */
 function TeamNotification({ content }: { content: string }): React.JSX.Element {
   const [expanded, setExpanded] = React.useState(false)
-
-  // Extract the teammate name from the prefix "[Team message from X]:"
   const match = content.match(/^\[Team message from (.+?)\]:\n?/)
   const from = match?.[1] ?? 'teammate'
   const body = match ? content.slice(match[0].length) : content
@@ -124,27 +120,22 @@ function MessageItemInner({
   onDeleteMessage,
   toolResults,
   liveToolCallMap,
-  renderMode = 'default'
+  renderMode = 'default',
+  orchestrationRun,
+  hiddenToolUseIds
 }: MessageItemProps): React.JSX.Element | null {
   if (message.id !== messageId) return null
 
   const inner = (() => {
     switch (message.role) {
       case 'user': {
-        // Team notification messages (source: 'team') are rendered differently
         if (message.source === 'team') {
           return (
             <TeamNotification
-              content={
-                typeof message.content === 'string'
-                  ? message.content
-                  : JSON.stringify(message.content)
-              }
+              content={typeof message.content === 'string' ? message.content : JSON.stringify(message.content)}
             />
           )
         }
-        // Regular user message - pass content directly to UserMessage component
-        // UserMessage will handle ContentBlock[] extraction and system-remind filtering
         return (
           <UserMessage
             messageId={message.id}
@@ -171,6 +162,8 @@ function MessageItemInner({
             onDelete={onDeleteMessage}
             liveToolCallMap={liveToolCallMap}
             renderMode={renderMode}
+            orchestrationRun={orchestrationRun}
+            hiddenToolUseIds={hiddenToolUseIds}
           />
         )
       default:
@@ -245,7 +238,9 @@ function areEqual(prev: MessageItemProps, next: MessageItemProps): boolean {
     prevUsageSignal === nextUsageSignal &&
     areToolResultsEqual(prev.toolResults, next.toolResults) &&
     prev.liveToolCallMap === next.liveToolCallMap &&
-    prev.renderMode === next.renderMode
+    prev.renderMode === next.renderMode &&
+    prev.orchestrationRun === next.orchestrationRun &&
+    prev.hiddenToolUseIds === next.hiddenToolUseIds
   )
 }
 

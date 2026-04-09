@@ -53,6 +53,8 @@ import { TaskCard } from './TodoCard'
 import { ThinkingBlock } from './ThinkingBlock'
 import { TeamEventCard } from './TeamEventCard'
 import { AskUserQuestionCard } from './AskUserQuestionCard'
+import { OrchestrationBlock } from './OrchestrationBlock'
+import type { OrchestrationRun } from '@renderer/lib/orchestration/types'
 import { TASK_TOOL_NAME } from '@renderer/lib/agent/sub-agents/create-tool'
 import { TEAM_TOOL_NAMES } from '@renderer/lib/agent/teams/register'
 import { useProviderStore } from '@renderer/stores/provider-store'
@@ -105,6 +107,8 @@ interface AssistantMessageProps {
   onContinue?: () => void
   onDelete?: (messageId: string) => void
   renderMode?: AssistantRenderMode
+  orchestrationRun?: OrchestrationRun | null
+  hiddenToolUseIds?: Set<string>
 }
 
 const MARKDOWN_WRAPPER_CLASS = 'text-sm leading-relaxed text-foreground break-words'
@@ -684,7 +688,9 @@ export function AssistantMessage({
   isLastAssistantMessage,
   onRetry,
   onContinue,
-  onDelete
+  onDelete,
+  orchestrationRun,
+  hiddenToolUseIds
 }: AssistantMessageProps): React.JSX.Element {
   const { t } = useTranslation('chat')
   const devMode = useSettingsStore((s) => s.devMode)
@@ -897,6 +903,9 @@ export function AssistantMessage({
       key: string
     ): React.JSX.Element | null => {
       if (toolsCollapsed) return null
+      if (hiddenToolUseIds?.has(block.id)) {
+        return null
+      }
       if (block.name === 'TaskCreate') {
         const result = toolResults?.get(block.id)
         const liveTc = effectiveLiveToolCallMap?.get(block.id)
@@ -965,7 +974,7 @@ export function AssistantMessage({
           )
         }
         const result = toolResults?.get(block.id)
-        return (
+        return orchestrationRun ? null : (
           <ScaleIn key={key} className="w-full origin-left">
             <SubAgentCard
               name={block.name}
@@ -1052,6 +1061,7 @@ export function AssistantMessage({
 
     return (
       <div className="space-y-2">
+        {orchestrationRun ? <OrchestrationBlock run={orchestrationRun} /> : null}
         {structuredToolCount >= 2 && (
           <button
             onClick={() => setToolsCollapsed((v) => !v)}

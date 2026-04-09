@@ -23,6 +23,7 @@ import { useChatStore } from './stores/chat-store';
 import { usePlanStore } from './stores/plan-store';
 import { useSshStore } from './stores/ssh-store';
 import { useTeamStore } from './stores/team-store';
+import { useUIStore } from './stores/ui-store';
 import { registerAllTools, updateWebSearchToolRegistration } from './lib/tools';
 import { updateAppPluginToolRegistration } from './lib/app-plugin';
 import { registerAllProviders } from './lib/api';
@@ -254,6 +255,7 @@ function App(): React.JSX.Element {
                ? await usePlanStore.getState().loadPlanForSession(activeSessionId)
                : undefined
             usePlanStore.getState().setActivePlan(activePlan?.id ?? null)
+            useUIStore.getState().applyChatRouteFromLocation()
          })
       window.electron.ipcRenderer
          .invoke('settings:get', 'apiKey')
@@ -265,6 +267,15 @@ function App(): React.JSX.Element {
          .catch(() => {
             // Ignore — main process may not have a stored key yet
          })
+   }, [])
+
+   useEffect(() => {
+      const syncFromLocation = (): void => {
+         useUIStore.getState().applyChatRouteFromLocation()
+      }
+
+      window.addEventListener('hashchange', syncFromLocation)
+      return () => window.removeEventListener('hashchange', syncFromLocation)
    }, [])
 
    // Watch global memory file and refresh system context on changes

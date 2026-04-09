@@ -31,6 +31,7 @@ export interface ToolCallState {
   error?: string
   requiresApproval: boolean
   extraContent?: ToolCallExtraContent
+  sessionId?: string
   startedAt?: number
   completedAt?: number
 }

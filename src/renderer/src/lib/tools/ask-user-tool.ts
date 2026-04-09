@@ -1,6 +1,9 @@
+import { toast } from 'sonner'
 import { toolRegistry } from '../agent/tool-registry'
 import type { ToolDefinition } from '../api/types'
 import { useChatStore } from '@renderer/stores/chat-store'
+import { useBackgroundSessionStore } from '@renderer/stores/background-session-store'
+import { isSessionForeground } from '@renderer/lib/agent/session-runtime-router'
 import { encodeStructuredToolResult, encodeToolError } from './tool-result-format'
 import type { ToolHandler } from './tool-types'
 
@@ -234,6 +237,7 @@ export function resolveAskUserAnswers(
     resolve(normalizeResolvedPayload(payload))
     answerResolvers.delete(toolUseId)
   }
+  useBackgroundSessionStore.getState().resolveInboxItemByToolUseId(toolUseId)
 }
 
 export function clearPendingQuestions(): void {
@@ -272,15 +276,18 @@ const askUserToolDefinition: Omit<ToolDefinition, 'name'> = {
           properties: {
             question: {
               type: 'string',
-              description: 'The complete question to ask the user. It should be clear, specific, and end with a question mark when appropriate.'
+              description:
+                'The complete question to ask the user. It should be clear, specific, and end with a question mark when appropriate.'
             },
             header: {
               type: 'string',
-              description: 'Very short chip label shown above the question, ideally 1-3 words and no more than 12 characters.'
+              description:
+                'Very short chip label shown above the question, ideally 1-3 words and no more than 12 characters.'
             },
             options: {
               type: 'array',
-              description: 'Available choices for the user. Provide 2-4 options. Do not include an Other option.',
+              description:
+                'Available choices for the user. Provide 2-4 options. Do not include an Other option.',
               minItems: 2,
               maxItems: 4,
               items: {
@@ -296,7 +303,8 @@ const askUserToolDefinition: Omit<ToolDefinition, 'name'> = {
                   },
                   preview: {
                     type: 'string',
-                    description: 'Optional preview content for side-by-side comparison. Use markdown or a safe HTML fragment only when visual comparison matters.'
+                    description:
+                      'Optional preview content for side-by-side comparison. Use markdown or a safe HTML fragment only when visual comparison matters.'
                   }
                 },
                 required: ['label'],
@@ -383,6 +391,20 @@ const askUserToolExecute: ToolHandler['execute'] = async (input, ctx) => {
     return `You are in a plugin session and cannot show interactive UI to the user. Instead, ask the user these questions directly in your reply message:\n${lines.join('\n')}\nWait for the user to respond before proceeding.`
   }
 
+  if (ctx.sessionId && !isSessionForeground(ctx.sessionId)) {
+    const sessionTitle =
+      useChatStore.getState().sessions.find((item) => item.id === ctx.sessionId)?.title ??
+      '后台会话'
+    useBackgroundSessionStore.getState().addInboxItem({
+      sessionId: ctx.sessionId,
+      type: 'ask_user',
+      title: questions[0]?.header || '需要确认',
+      description: `${sessionTitle} 正在等待你的选择`,
+      toolUseId
+    })
+    toast.warning('后台会话等待你的选择', { description: sessionTitle })
+  }
+
   const payload = await new Promise<AskUserResolvedPayload>((resolve) => {
     answerResolvers.set(toolUseId, resolve)
 
@@ -397,15 +419,21 @@ const askUserToolExecute: ToolHandler['execute'] = async (input, ctx) => {
   })
 
   if (ctx.signal.aborted) {
+    useBackgroundSessionStore.getState().resolveInboxItemByToolUseId(toolUseId)
     return encodeToolError('Aborted by user')
   }
+
+  useBackgroundSessionStore.getState().resolveInboxItemByToolUseId(toolUseId)
 
   if (Object.keys(payload.answers).length === 0) {
     return encodeToolError('No answers provided')
   }
 
   return encodeStructuredToolResult(
-    buildStructuredResult(questions, payload, { source: metadataSource }) as unknown as Record<string, unknown>
+    buildStructuredResult(questions, payload, { source: metadataSource }) as unknown as Record<
+      string,
+      unknown
+    >
   )
 }
 

@@ -6,6 +6,7 @@ import { useSettingsStore, resolveReasoningEffortForModel } from '@renderer/stor
 import { useProviderStore } from '@renderer/stores/provider-store'
 import { ensureProviderAuthReady } from '@renderer/lib/auth/provider-auth'
 import { useAgentStore } from '@renderer/stores/agent-store'
+import { useBackgroundSessionStore } from '@renderer/stores/background-session-store'
 import { useUIStore } from '@renderer/stores/ui-store'
 import { useSshStore } from '@renderer/stores/ssh-store'
 import { toolRegistry } from '@renderer/lib/agent/tool-registry'
@@ -78,6 +79,19 @@ import {
   resolveCompressionThreshold
 } from '@renderer/lib/agent/context-compression'
 import { runAgentLoop } from '@renderer/lib/agent/agent-loop'
+import {
+  addRuntimeMessage,
+  appendRuntimeContentBlock,
+  appendRuntimeTextDelta,
+  appendRuntimeThinkingDelta,
+  appendRuntimeToolUse,
+  completeRuntimeThinking,
+  flushBackgroundSessionToForeground,
+  isSessionForeground,
+  setRuntimeThinkingEncryptedContent,
+  updateRuntimeMessage,
+  updateRuntimeToolUseInput
+} from '@renderer/lib/agent/session-runtime-router'
 import type { CompressionConfig } from '@renderer/lib/agent/context-compression'
 import { useChannelStore } from '@renderer/stores/channel-store'
 import { useAppPluginStore } from '@renderer/stores/app-plugin-store'
@@ -324,7 +338,13 @@ function assistantLooksComplete(message?: UnifiedMessage): boolean {
 
 function hasLiveToolOrBackgroundWork(sessionId: string): boolean {
   const agentState = useAgentStore.getState()
-  const toolCalls = [...agentState.pendingToolCalls, ...agentState.executedToolCalls]
+  const toolCalls =
+    agentState.liveSessionId === sessionId
+      ? [...agentState.pendingToolCalls, ...agentState.executedToolCalls]
+      : [
+          ...(agentState.sessionToolCallsCache[sessionId]?.pending ?? []),
+          ...(agentState.sessionToolCallsCache[sessionId]?.executed ?? [])
+        ]
   const hasToolStillRunning = toolCalls.some(
     (toolCall) =>
       toolCall.status === 'streaming' ||
@@ -1146,21 +1166,19 @@ function createStreamDeltaBuffer(sessionId: string, assistantMsgId: string): Str
 
     if (!thinkingBuffer && !textBuffer && toolInputBuffer.size === 0) return
 
-    const store = useChatStore.getState()
-
     if (thinkingBuffer) {
-      store.appendThinkingDelta(sessionId, assistantMsgId, thinkingBuffer)
+      appendRuntimeThinkingDelta(sessionId, assistantMsgId, thinkingBuffer)
       thinkingBuffer = ''
     }
 
     if (textBuffer) {
-      store.appendTextDelta(sessionId, assistantMsgId, textBuffer)
+      appendRuntimeTextDelta(sessionId, assistantMsgId, textBuffer)
       textBuffer = ''
     }
 
     if (toolInputBuffer.size > 0) {
       for (const [toolUseId, input] of toolInputBuffer) {
-        store.updateToolUseInput(sessionId, assistantMsgId, toolUseId, input)
+        updateRuntimeToolUseInput(sessionId, assistantMsgId, toolUseId, input)
       }
       toolInputBuffer.clear()
     }
@@ -1444,8 +1462,24 @@ function createNodeAgentLoop(args: {
       return true
     }
 
-    agentState.addToolCall(toolCall)
+    agentState.addToolCall(toolCall, args.sessionId)
+    if (args.sessionId && !isSessionForeground(args.sessionId)) {
+      const sessionTitle =
+        useChatStore.getState().sessions.find((session) => session.id === args.sessionId)?.title ??
+        '后台会话'
+      useBackgroundSessionStore.getState().addInboxItem({
+        sessionId: args.sessionId,
+        type: 'approval',
+        title: toolCall.name,
+        description: `${sessionTitle} 正在等待工具审批`,
+        toolUseId: toolCall.id
+      })
+      toast.warning('后台会话等待审批', {
+        description: `${sessionTitle} · ${toolCall.name}`
+      })
+    }
     const approved = await agentState.requestApproval(toolCall.id)
+    useBackgroundSessionStore.getState().resolveInboxItemByToolUseId(toolCall.id)
     if (approved) {
       agentState.addApprovedTool(toolCall.name)
     }
@@ -1555,27 +1589,31 @@ function createSubAgentEventBuffer(sessionId: string): {
       entry.timer = undefined
     }
     if (entry.thinking) {
-      useAgentStore.getState().handleSubAgentEvent(
-        {
-          type: 'sub_agent_thinking_delta',
-          subAgentName: entry.subAgentName,
-          toolUseId,
-          thinking: entry.thinking
-        },
-        sessionId
-      )
+      if (isSessionForeground(sessionId)) {
+        useAgentStore.getState().handleSubAgentEvent(
+          {
+            type: 'sub_agent_thinking_delta',
+            subAgentName: entry.subAgentName,
+            toolUseId,
+            thinking: entry.thinking
+          },
+          sessionId
+        )
+      }
       entry.thinking = ''
     }
     if (entry.text) {
-      useAgentStore.getState().handleSubAgentEvent(
-        {
-          type: 'sub_agent_text_delta',
-          subAgentName: entry.subAgentName,
-          toolUseId,
-          text: entry.text
-        },
-        sessionId
-      )
+      if (isSessionForeground(sessionId)) {
+        useAgentStore.getState().handleSubAgentEvent(
+          {
+            type: 'sub_agent_text_delta',
+            subAgentName: entry.subAgentName,
+            toolUseId,
+            text: entry.text
+          },
+          sessionId
+        )
+      }
       entry.text = ''
     }
   }
@@ -1620,7 +1658,9 @@ function createSubAgentEventBuffer(sessionId: string): {
       }
 
       flushBeforeBoundary(event)
-      useAgentStore.getState().handleSubAgentEvent(event, sessionId)
+      if (isSessionForeground(sessionId)) {
+        useAgentStore.getState().handleSubAgentEvent(event, sessionId)
+      }
     },
     dispose: () => {
       flushAll()
@@ -1649,6 +1689,13 @@ export function useChatActions(): {
   deleteMessage: (messageId: string) => Promise<void>
   manualCompressContext: (focusPrompt?: string) => Promise<void>
 } {
+  const activeSessionId = useChatStore((state) => state.activeSessionId)
+
+  useEffect(() => {
+    if (!activeSessionId) return
+    void flushBackgroundSessionToForeground(activeSessionId)
+  }, [activeSessionId])
+
   const sendMessage = useCallback(
     async (
       text: string,
@@ -2032,6 +2079,12 @@ export function useChatActions(): {
           agentStore.setSessionStatus(sessionId, 'completed')
           sessionAbortControllers.delete(sessionId)
           sessionSidecarRunIds.delete(sessionId)
+          if (!isSessionForeground(sessionId)) {
+            const sessionTitle =
+              useChatStore.getState().sessions.find((item) => item.id === sessionId)?.title ??
+              '后台会话'
+            toast.success('后台会话已完成', { description: sessionTitle })
+          }
           dispatchNextQueuedMessage(sessionId)
         }
       } else {
@@ -2264,7 +2317,9 @@ export function useChatActions(): {
           computerUseEnabled: desktopControlMode === 'computer-use',
           systemPrompt: agentSystemPrompt
         }
-        const planModeInlineToolHandlers = isPlanMode ? createPlanModeInlineToolHandlers() : undefined
+        const planModeInlineToolHandlers = isPlanMode
+          ? createPlanModeInlineToolHandlers()
+          : undefined
         setRequestTraceInfo(assistantMsgId, {
           providerId: agentProviderConfig.providerId,
           providerBuiltinId: agentProviderConfig.providerBuiltinId,
@@ -2283,7 +2338,7 @@ export function useChatActions(): {
 
         agentStore.setRunning(true)
         agentStore.setSessionStatus(sessionId, 'running')
-        agentStore.clearToolCalls()
+        agentStore.resetLiveSessionExecution(sessionId)
 
         // Accumulate usage across all iterations + SubAgent runs
         const accumulatedUsage: TokenUsage = existingAssistantMessage?.usage
@@ -2302,9 +2357,9 @@ export function useChatActions(): {
           // Accumulate SubAgent token usage into the parent message
           if (event.type === 'sub_agent_end' && event.result?.usage) {
             mergeUsage(accumulatedUsage, event.result.usage)
-            useChatStore
-              .getState()
-              .updateMessage(sessionId!, assistantMsgId, { usage: { ...accumulatedUsage } })
+            updateRuntimeMessage(sessionId!, assistantMsgId, {
+              usage: { ...accumulatedUsage }
+            })
           }
         })
 
@@ -2418,7 +2473,8 @@ export function useChatActions(): {
             compression: compressionConfig
           })
 
-          const useSidecar = !isPlanMode &&
+          const useSidecar =
+            !isPlanMode &&
             (await canUseSidecarForAgentRun({
               messages: messagesToSend,
               provider: agentProviderConfig,
@@ -2581,9 +2637,7 @@ export function useChatActions(): {
             entry.lastSent = snapshot
             const pending = entry.pending
             entry.pending = undefined
-            useChatStore
-              .getState()
-              .updateToolUseInput(sessionId!, assistantMsgId, toolCallId, pending)
+            updateRuntimeToolUseInput(sessionId!, assistantMsgId, toolCallId, pending)
           }
 
           const flushToolInput = (toolCallId: string): void => {
@@ -2598,7 +2652,7 @@ export function useChatActions(): {
             entry.lastSent = snapshot
             const pending = entry.pending
             entry.pending = undefined
-            useAgentStore.getState().updateToolCall(toolCallId, { input: pending })
+            useAgentStore.getState().updateToolCall(toolCallId, { input: pending }, sessionId!)
           }
 
           const scheduleChatToolInputUpdate = (
@@ -2666,14 +2720,12 @@ export function useChatActions(): {
 
               case 'thinking_encrypted':
                 if (event.thinkingEncryptedContent && event.thinkingEncryptedProvider) {
-                  useChatStore
-                    .getState()
-                    .setThinkingEncryptedContent(
-                      sessionId!,
-                      assistantMsgId,
-                      event.thinkingEncryptedContent,
-                      event.thinkingEncryptedProvider
-                    )
+                  setRuntimeThinkingEncryptedContent(
+                    sessionId!,
+                    assistantMsgId,
+                    event.thinkingEncryptedContent,
+                    event.thinkingEncryptedProvider
+                  )
                 }
                 break
 
@@ -2695,7 +2747,7 @@ export function useChatActions(): {
                       }
                       streamDeltaBuffer.flushNow()
                       thinkingDone = true
-                      useChatStore.getState().completeThinking(sessionId!, assistantMsgId)
+                      completeRuntimeThinking(sessionId!, assistantMsgId)
                       if (afterClose) {
                         streamDeltaBuffer.pushText(afterClose)
                       }
@@ -2703,7 +2755,7 @@ export function useChatActions(): {
                     }
                     thinkingDone = true
                     streamDeltaBuffer.flushNow()
-                    useChatStore.getState().completeThinking(sessionId!, assistantMsgId)
+                    completeRuntimeThinking(sessionId!, assistantMsgId)
                   }
                 }
                 streamDeltaBuffer.pushText(event.text)
@@ -2714,13 +2766,11 @@ export function useChatActions(): {
                 streamDeltaBuffer.flushNow()
                 if (!thinkingDone) {
                   thinkingDone = true
-                  useChatStore.getState().completeThinking(sessionId!, assistantMsgId)
+                  completeRuntimeThinking(sessionId!, assistantMsgId)
                 }
                 // Add image block to assistant message
                 if (event.imageBlock) {
-                  useChatStore
-                    .getState()
-                    .appendContentBlock(sessionId!, assistantMsgId, event.imageBlock)
+                  appendRuntimeContentBlock(sessionId!, assistantMsgId, event.imageBlock)
                 }
                 // Clear generating state after first image
                 useChatStore.getState().setGeneratingImage(assistantMsgId, false)
@@ -2730,10 +2780,10 @@ export function useChatActions(): {
                 streamDeltaBuffer.flushNow()
                 if (!thinkingDone) {
                   thinkingDone = true
-                  useChatStore.getState().completeThinking(sessionId!, assistantMsgId)
+                  completeRuntimeThinking(sessionId!, assistantMsgId)
                 }
                 if (event.imageError) {
-                  useChatStore.getState().appendContentBlock(sessionId!, assistantMsgId, {
+                  appendRuntimeContentBlock(sessionId!, assistantMsgId, {
                     type: 'image_error',
                     code: event.imageError.code,
                     message: event.imageError.message
@@ -2747,10 +2797,10 @@ export function useChatActions(): {
                 streamDeltaBuffer.flushNow()
                 if (!thinkingDone) {
                   thinkingDone = true
-                  useChatStore.getState().completeThinking(sessionId!, assistantMsgId)
+                  completeRuntimeThinking(sessionId!, assistantMsgId)
                 }
                 // Immediately show tool card with name while args are still streaming
-                useChatStore.getState().appendToolUse(sessionId!, assistantMsgId, {
+                appendRuntimeToolUse(sessionId!, assistantMsgId, {
                   type: 'tool_use',
                   id: event.toolCallId,
                   name: event.toolName,
@@ -2759,16 +2809,19 @@ export function useChatActions(): {
                     ? { extraContent: event.toolCallExtraContent }
                     : {})
                 })
-                useAgentStore.getState().addToolCall({
-                  id: event.toolCallId,
-                  name: event.toolName,
-                  input: {},
-                  status: 'streaming',
-                  requiresApproval: false,
-                  ...(event.toolCallExtraContent
-                    ? { extraContent: event.toolCallExtraContent }
-                    : {})
-                })
+                useAgentStore.getState().addToolCall(
+                  {
+                    id: event.toolCallId,
+                    name: event.toolName,
+                    input: {},
+                    status: 'streaming',
+                    requiresApproval: false,
+                    ...(event.toolCallExtraContent
+                      ? { extraContent: event.toolCallExtraContent }
+                      : {})
+                  },
+                  sessionId!
+                )
                 break
 
               case 'tool_use_args_delta': {
@@ -2794,19 +2847,19 @@ export function useChatActions(): {
                 // Some providers emit only tool_use_generated without a prior tool_use_streaming_start.
                 // Ensure the assistant message has a visible tool block so later results can attach to it.
                 if (
-                  !useAgentStore
-                    .getState()
-                    .executedToolCalls.some((tc) => tc.id === event.toolUseBlock.id) &&
-                  !useAgentStore
-                    .getState()
-                    .pendingToolCalls.some((tc) => tc.id === event.toolUseBlock.id)
+                  ![
+                    ...useAgentStore.getState().executedToolCalls,
+                    ...useAgentStore.getState().pendingToolCalls,
+                    ...(useAgentStore.getState().sessionToolCallsCache[sessionId!]?.executed ?? []),
+                    ...(useAgentStore.getState().sessionToolCallsCache[sessionId!]?.pending ?? [])
+                  ].some((tc) => tc.id === event.toolUseBlock.id)
                 ) {
                   streamDeltaBuffer.flushNow()
                   if (!thinkingDone) {
                     thinkingDone = true
-                    useChatStore.getState().completeThinking(sessionId!, assistantMsgId)
+                    completeRuntimeThinking(sessionId!, assistantMsgId)
                   }
-                  useChatStore.getState().appendToolUse(sessionId!, assistantMsgId, {
+                  appendRuntimeToolUse(sessionId!, assistantMsgId, {
                     type: 'tool_use',
                     id: event.toolUseBlock.id,
                     name: event.toolUseBlock.name,
@@ -2815,34 +2868,41 @@ export function useChatActions(): {
                       ? { extraContent: event.toolUseBlock.extraContent }
                       : {})
                   })
-                  useAgentStore.getState().addToolCall({
-                    id: event.toolUseBlock.id,
-                    name: event.toolUseBlock.name,
-                    input: event.toolUseBlock.input,
-                    status: 'running',
-                    requiresApproval: false,
-                    ...(event.toolUseBlock.extraContent
-                      ? { extraContent: event.toolUseBlock.extraContent }
-                      : {}),
-                    startedAt: Date.now()
-                  })
+                  useAgentStore.getState().addToolCall(
+                    {
+                      id: event.toolUseBlock.id,
+                      name: event.toolUseBlock.name,
+                      input: event.toolUseBlock.input,
+                      status: 'running',
+                      requiresApproval: false,
+                      ...(event.toolUseBlock.extraContent
+                        ? { extraContent: event.toolUseBlock.extraContent }
+                        : {}),
+                      startedAt: Date.now()
+                    },
+                    sessionId!
+                  )
                 }
                 // Args fully streamed — update the existing block's input (final)
                 streamDeltaBuffer.setToolInput(event.toolUseBlock.id, event.toolUseBlock.input)
                 streamDeltaBuffer.flushNow()
                 flushChatToolInput(event.toolUseBlock.id)
                 flushToolInput(event.toolUseBlock.id)
-                useAgentStore.getState().updateToolCall(event.toolUseBlock.id, {
-                  input: event.toolUseBlock.input,
-                  ...(event.toolUseBlock.extraContent
-                    ? { extraContent: event.toolUseBlock.extraContent }
-                    : {})
-                })
+                useAgentStore.getState().updateToolCall(
+                  event.toolUseBlock.id,
+                  {
+                    input: event.toolUseBlock.input,
+                    ...(event.toolUseBlock.extraContent
+                      ? { extraContent: event.toolUseBlock.extraContent }
+                      : {})
+                  },
+                  sessionId!
+                )
                 break
 
               case 'tool_call_start':
                 runUsedTools = true
-                useAgentStore.getState().addToolCall(event.toolCall)
+                useAgentStore.getState().addToolCall(event.toolCall, sessionId!)
                 break
 
               case 'tool_call_approval_needed': {
@@ -2852,7 +2912,7 @@ export function useChatActions(): {
                   useSettingsStore.getState().autoApprove ||
                   useAgentStore.getState().approvedToolNames.includes(event.toolCall.name)
                 if (!willAutoApprove) {
-                  useAgentStore.getState().addToolCall(event.toolCall)
+                  useAgentStore.getState().addToolCall(event.toolCall, sessionId!)
                 }
                 break
               }
@@ -2869,12 +2929,16 @@ export function useChatActions(): {
                     error: event.toolCall.error
                   })
                 }
-                useAgentStore.getState().updateToolCall(event.toolCall.id, {
-                  status: event.toolCall.status,
-                  output: event.toolCall.output,
-                  error: event.toolCall.error,
-                  completedAt: event.toolCall.completedAt
-                })
+                useAgentStore.getState().updateToolCall(
+                  event.toolCall.id,
+                  {
+                    status: event.toolCall.status,
+                    output: event.toolCall.output,
+                    error: event.toolCall.error,
+                    completedAt: event.toolCall.completedAt
+                  },
+                  sessionId!
+                )
                 if (event.toolCall.status === 'completed' || event.toolCall.status === 'error') {
                   reconcileSubAgentCompletionFromTaskToolCall(sessionId!, event.toolCall)
                 }
@@ -2927,7 +2991,7 @@ export function useChatActions(): {
                     })),
                     createdAt: Date.now()
                   }
-                  useChatStore.getState().addMessage(sessionId!, toolResultMsg)
+                  addRuntimeMessage(sessionId!, toolResultMsg)
                 }
                 // If there are queued user messages, abort the loop now.
                 // At this point tools have finished and tool_results are appended,
@@ -2945,7 +3009,7 @@ export function useChatActions(): {
                 streamDeltaBuffer.flushNow()
                 if (!thinkingDone) {
                   thinkingDone = true
-                  useChatStore.getState().completeThinking(sessionId!, assistantMsgId)
+                  completeRuntimeThinking(sessionId!, assistantMsgId)
                 }
                 if (event.usage) {
                   mergeUsage(accumulatedUsage, event.usage)
@@ -2958,7 +3022,7 @@ export function useChatActions(): {
                   accumulatedUsage.requestTimings = [...requestTimings]
                 }
                 if (event.usage || event.timing) {
-                  useChatStore.getState().updateMessage(sessionId!, assistantMsgId, {
+                  updateRuntimeMessage(sessionId!, assistantMsgId, {
                     usage: { ...accumulatedUsage },
                     ...(event.providerResponseId
                       ? { providerResponseId: event.providerResponseId }
@@ -3001,9 +3065,9 @@ export function useChatActions(): {
                 if (requestTimings.length > 0) {
                   accumulatedUsage.requestTimings = [...requestTimings]
                 }
-                useChatStore
-                  .getState()
-                  .updateMessage(sessionId!, assistantMsgId, { usage: { ...accumulatedUsage } })
+                updateRuntimeMessage(sessionId!, assistantMsgId, {
+                  usage: { ...accumulatedUsage }
+                })
                 shouldAutoContinueLongRunning = shouldAutoContinueLongRunningRun({
                   sessionId,
                   assistantMessageId: assistantMsgId,
@@ -3026,13 +3090,17 @@ export function useChatActions(): {
                 break
 
               case 'context_compression_start':
-                toast.info('正在压缩上下文...', { description: '历史消息将被压缩为记忆摘要' })
+                if (isSessionForeground(sessionId!)) {
+                  toast.info('正在压缩上下文...', { description: '历史消息将被压缩为记忆摘要' })
+                }
                 break
 
               case 'context_compressed':
-                toast.success('上下文已压缩', {
-                  description: `${event.originalCount} 条消息 → ${event.newCount} 条（核心信息已保留）`
-                })
+                if (isSessionForeground(sessionId!)) {
+                  toast.success('上下文已压缩', {
+                    description: `${event.originalCount} 条消息 → ${event.newCount} 条（核心信息已保留）`
+                  })
+                }
                 break
 
               case 'error': {
@@ -3040,7 +3108,18 @@ export function useChatActions(): {
                 const errorMessage = normalizeContinuationErrorMessage(event.error.message)
                 console.error('[Agent Loop Error]', event.error)
                 toast.error('Agent Error', { description: errorMessage })
-                useChatStore.getState().appendContentBlock(sessionId!, assistantMsgId, {
+                if (!isSessionForeground(sessionId!)) {
+                  const sessionTitle =
+                    useChatStore.getState().sessions.find((item) => item.id === sessionId)?.title ??
+                    '后台会话'
+                  useBackgroundSessionStore.getState().addInboxItem({
+                    sessionId: sessionId!,
+                    type: 'error',
+                    title: '运行错误',
+                    description: `${sessionTitle} · ${errorMessage}`
+                  })
+                }
+                appendRuntimeContentBlock(sessionId!, assistantMsgId, {
                   type: 'agent_error',
                   code: 'runtime_error',
                   message: errorMessage,
@@ -3061,9 +3140,18 @@ export function useChatActions(): {
             )
             console.error('[Agent Loop Exception]', err)
             toast.error('Agent failed', { description: errMsg })
-            useChatStore
-              .getState()
-              .appendTextDelta(sessionId!, assistantMsgId, `\n\n> **Error:** ${errMsg}`)
+            if (!isSessionForeground(sessionId!)) {
+              const sessionTitle =
+                useChatStore.getState().sessions.find((item) => item.id === sessionId)?.title ??
+                '后台会话'
+              useBackgroundSessionStore.getState().addInboxItem({
+                sessionId: sessionId!,
+                type: 'error',
+                title: '运行错误',
+                description: `${sessionTitle} · ${errMsg}`
+              })
+            }
+            appendRuntimeTextDelta(sessionId!, assistantMsgId, `\n\n> **Error:** ${errMsg}`)
             if (err instanceof ApiStreamError) {
               setLastDebugInfo(assistantMsgId, err.debugInfo as RequestDebugInfo)
             }
@@ -3076,14 +3164,25 @@ export function useChatActions(): {
           useChatStore.getState().setGeneratingImage(assistantMsgId, false)
           // Defensive cleanup: if provider stream ended without completing a tool call,
           // avoid leaving tool cards stuck at "receiving args".
-          const { executedToolCalls, pendingToolCalls, updateToolCall } = useAgentStore.getState()
-          for (const tc of [...executedToolCalls, ...pendingToolCalls]) {
+          const { executedToolCalls, pendingToolCalls, sessionToolCallsCache, updateToolCall } =
+            useAgentStore.getState()
+          const sessionToolCalls = sessionToolCallsCache[sessionId]
+          for (const tc of [
+            ...executedToolCalls,
+            ...pendingToolCalls,
+            ...(sessionToolCalls?.executed ?? []),
+            ...(sessionToolCalls?.pending ?? [])
+          ]) {
             if (tc.status === 'streaming') {
-              updateToolCall(tc.id, {
-                status: 'error',
-                error: 'Tool call stream ended before execution',
-                completedAt: Date.now()
-              })
+              updateToolCall(
+                tc.id,
+                {
+                  status: 'error',
+                  error: 'Tool call stream ended before execution',
+                  completedAt: Date.now()
+                },
+                sessionId
+              )
             }
           }
           unsubSubAgent()
@@ -3108,6 +3207,13 @@ export function useChatActions(): {
             })
           } else {
             longRunningVerificationPasses.delete(sessionId)
+
+            if (!isSessionForeground(sessionId)) {
+              const sessionTitle =
+                useChatStore.getState().sessions.find((session) => session.id === sessionId)
+                  ?.title ?? '后台会话'
+              toast.success('后台会话已完成', { description: sessionTitle })
+            }
 
             // Notify when agent finishes and window is not focused
             if (!document.hasFocus() && Notification.permission === 'granted') {
@@ -3173,8 +3279,24 @@ export function useChatActions(): {
         return
       }
 
-      agentStore.addToolCall(request.toolCall)
+      agentStore.addToolCall(request.toolCall, request.sessionId)
+      if (request.sessionId && !isSessionForeground(request.sessionId)) {
+        const sessionTitle =
+          useChatStore.getState().sessions.find((session) => session.id === request.sessionId)
+            ?.title ?? '后台会话'
+        useBackgroundSessionStore.getState().addInboxItem({
+          sessionId: request.sessionId,
+          type: 'approval',
+          title: request.toolCall.name,
+          description: `${sessionTitle} 正在等待工具审批`,
+          toolUseId: request.toolCall.id
+        })
+        toast.warning('后台会话等待审批', {
+          description: `${sessionTitle} · ${request.toolCall.name}`
+        })
+      }
       const approved = await agentStore.requestApproval(request.toolCall.id)
+      useBackgroundSessionStore.getState().resolveInboxItemByToolUseId(request.toolCall.id)
       if (approved) {
         agentStore.addApprovedTool(request.toolCall.name)
       }
@@ -3299,50 +3421,64 @@ export function useChatActions(): {
             )
 
             if (requiresApproval) {
-              agentStore.addToolCall({
-                id: toolUse.id,
-                name: toolUse.name,
-                input: toolUse.input,
-                status: 'pending_approval',
-                requiresApproval: true
-              })
+              agentStore.addToolCall(
+                {
+                  id: toolUse.id,
+                  name: toolUse.name,
+                  input: toolUse.input,
+                  status: 'pending_approval',
+                  requiresApproval: true
+                },
+                sessionId
+              )
 
               const approved = await agentStore.requestApproval(toolUse.id)
               if (approved) {
                 agentStore.addApprovedTool(toolUse.name)
               } else {
                 const deniedOutput = encodeToolError('User denied permission')
-                agentStore.updateToolCall(toolUse.id, {
-                  status: 'error',
-                  output: deniedOutput,
-                  error: 'User denied permission',
-                  completedAt: Date.now()
-                })
+                agentStore.updateToolCall(
+                  toolUse.id,
+                  {
+                    status: 'error',
+                    output: deniedOutput,
+                    error: 'User denied permission',
+                    completedAt: Date.now()
+                  },
+                  sessionId
+                )
                 toolResultsById.set(toolUse.id, { content: deniedOutput, isError: true })
                 continue
               }
             }
 
             const startedAt = Date.now()
-            agentStore.addToolCall({
-              id: toolUse.id,
-              name: toolUse.name,
-              input: toolUse.input,
-              status: 'running',
-              requiresApproval,
-              startedAt
-            })
+            agentStore.addToolCall(
+              {
+                id: toolUse.id,
+                name: toolUse.name,
+                input: toolUse.input,
+                status: 'running',
+                requiresApproval,
+                startedAt
+              },
+              sessionId
+            )
 
             const output = await toolRegistry.execute(toolUse.name, toolUse.input, toolCtx)
             const isError = typeof output === 'string' && isStructuredToolErrorText(output)
             const errorMessage = extractToolErrorMessage(output)
 
-            agentStore.updateToolCall(toolUse.id, {
-              status: isError ? 'error' : 'completed',
-              output,
-              ...(errorMessage ? { error: errorMessage } : {}),
-              completedAt: Date.now()
-            })
+            agentStore.updateToolCall(
+              toolUse.id,
+              {
+                status: isError ? 'error' : 'completed',
+                output,
+                ...(errorMessage ? { error: errorMessage } : {}),
+                completedAt: Date.now()
+              },
+              sessionId
+            )
 
             if (
               resumedAssistantMessageId &&
@@ -3404,9 +3540,11 @@ export function useChatActions(): {
           : normalizedMessage
       console.error('[Continue Tool Execution]', err)
       toast.error('继续执行失败', { description: apiErrorDetail })
-      useChatStore
-        .getState()
-        .appendTextDelta(sessionId, resumedAssistantMessageId, `\n\n> **Error:** ${apiErrorDetail}`)
+      appendRuntimeTextDelta(
+        sessionId,
+        resumedAssistantMessageId,
+        `\n\n> **Error:** ${apiErrorDetail}`
+      )
     } finally {
       if (!handedOffToSendMessage) {
         if (useChatStore.getState().streamingMessages[sessionId] === resumedAssistantMessageId) {
@@ -3944,14 +4082,12 @@ async function runSimpleChat(
           break
         case 'thinking_encrypted':
           if (event.thinkingEncryptedContent && event.thinkingEncryptedProvider) {
-            useChatStore
-              .getState()
-              .setThinkingEncryptedContent(
-                sessionId,
-                assistantMsgId,
-                event.thinkingEncryptedContent,
-                event.thinkingEncryptedProvider
-              )
+            setRuntimeThinkingEncryptedContent(
+              sessionId,
+              assistantMsgId,
+              event.thinkingEncryptedContent,
+              event.thinkingEncryptedProvider
+            )
           }
           break
         case 'text_delta':
@@ -3970,7 +4106,7 @@ async function runSimpleChat(
                 }
                 streamDeltaBuffer.flushNow()
                 thinkingDone = true
-                useChatStore.getState().completeThinking(sessionId, assistantMsgId)
+                completeRuntimeThinking(sessionId, assistantMsgId)
                 if (afterClose) {
                   streamDeltaBuffer.pushText(afterClose)
                 }
@@ -3978,7 +4114,7 @@ async function runSimpleChat(
               }
               thinkingDone = true
               streamDeltaBuffer.flushNow()
-              useChatStore.getState().completeThinking(sessionId, assistantMsgId)
+              completeRuntimeThinking(sessionId, assistantMsgId)
             }
           }
           streamDeltaBuffer.pushText(event.text!)
@@ -3987,10 +4123,10 @@ async function runSimpleChat(
           streamDeltaBuffer.flushNow()
           if (!thinkingDone) {
             thinkingDone = true
-            useChatStore.getState().completeThinking(sessionId, assistantMsgId)
+            completeRuntimeThinking(sessionId, assistantMsgId)
           }
           if (event.imageBlock) {
-            useChatStore.getState().appendContentBlock(sessionId, assistantMsgId, event.imageBlock)
+            appendRuntimeContentBlock(sessionId, assistantMsgId, event.imageBlock)
           }
           useChatStore.getState().setGeneratingImage(assistantMsgId, false)
           break
@@ -3998,10 +4134,10 @@ async function runSimpleChat(
           streamDeltaBuffer.flushNow()
           if (!thinkingDone) {
             thinkingDone = true
-            useChatStore.getState().completeThinking(sessionId, assistantMsgId)
+            completeRuntimeThinking(sessionId, assistantMsgId)
           }
           if (event.imageError) {
-            useChatStore.getState().appendContentBlock(sessionId, assistantMsgId, {
+            appendRuntimeContentBlock(sessionId, assistantMsgId, {
               type: 'image_error',
               code: event.imageError.code,
               message: event.imageError.message
@@ -4013,14 +4149,14 @@ async function runSimpleChat(
           streamDeltaBuffer.flushNow()
           if (!thinkingDone) {
             thinkingDone = true
-            useChatStore.getState().completeThinking(sessionId, assistantMsgId)
+            completeRuntimeThinking(sessionId, assistantMsgId)
           }
           if (event.usage) {
             const normalizedUsage = {
               ...event.usage,
               contextTokens: event.usage.contextTokens ?? event.usage.inputTokens
             }
-            useChatStore.getState().updateMessage(sessionId, assistantMsgId, {
+            updateRuntimeMessage(sessionId, assistantMsgId, {
               usage: normalizedUsage,
               ...(event.providerResponseId ? { providerResponseId: event.providerResponseId } : {})
             })
@@ -4047,11 +4183,24 @@ async function runSimpleChat(
             })
           }
           break
-        case 'error':
+        case 'error': {
           streamDeltaBuffer.flushNow()
+          const errorMessage = event.error?.message ?? 'Unknown error'
           console.error('[Chat Error]', event.error)
-          toast.error('Chat Error', { description: event.error?.message ?? 'Unknown error' })
+          toast.error('Chat Error', { description: errorMessage })
+          if (!isSessionForeground(sessionId)) {
+            const sessionTitle =
+              useChatStore.getState().sessions.find((item) => item.id === sessionId)?.title ??
+              '后台会话'
+            useBackgroundSessionStore.getState().addInboxItem({
+              sessionId,
+              type: 'error',
+              title: '运行错误',
+              description: `${sessionTitle} · ${errorMessage}`
+            })
+          }
           break
+        }
       }
     }
   } catch (err) {
@@ -4060,9 +4209,18 @@ async function runSimpleChat(
       const errMsg = err instanceof Error ? err.message : String(err)
       console.error('[Chat Exception]', err)
       toast.error('Chat failed', { description: errMsg })
-      useChatStore
-        .getState()
-        .appendTextDelta(sessionId, assistantMsgId, `\n\n> **Error:** ${errMsg}`)
+      if (!isSessionForeground(sessionId)) {
+        const sessionTitle =
+          useChatStore.getState().sessions.find((item) => item.id === sessionId)?.title ??
+          '后台会话'
+        useBackgroundSessionStore.getState().addInboxItem({
+          sessionId,
+          type: 'error',
+          title: '运行错误',
+          description: `${sessionTitle} · ${errMsg}`
+        })
+      }
+      appendRuntimeTextDelta(sessionId, assistantMsgId, `\n\n> **Error:** ${errMsg}`)
       if (err instanceof ApiStreamError) {
         setLastDebugInfo(assistantMsgId, {
           ...(err.debugInfo as RequestDebugInfo),

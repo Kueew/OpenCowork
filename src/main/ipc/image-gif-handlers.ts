@@ -16,8 +16,10 @@ const EMPTY_EDGE_ALPHA_THRESHOLD = 8
 const GAP_LINE_ALPHA_THRESHOLD = 8
 const GAP_LINE_REQUIRED_RATIO = 0.98
 const MAX_SIZE_DRIFT_RATIO = 0.14
-const MAX_CENTER_DRIFT_RATIO = 0.08
-const MAX_BOTTOM_DRIFT_RATIO = 0.08
+const OPAQUE_BACKGROUND_BBOX_RATIO = 0.96
+const BACKGROUND_SAMPLE_BORDER = 8
+const BACKGROUND_COLOR_TOLERANCE = 30
+const BACKGROUND_SWATCH_LIMIT = 6
 
 interface PersistedImageResult {
   filePath: string
@@ -28,12 +30,23 @@ interface PersistedImageResult {
 interface FrameContentStats {
   bboxWidthRatio: number
   bboxHeightRatio: number
-  centerXRatio: number
-  bottomYRatio: number
+  anchorX: number
   minX: number
   minY: number
   maxX: number
   maxY: number
+}
+
+interface AlignedFrameLayout {
+  width: number
+  height: number
+  anchorX: number
+}
+
+interface ColorSwatch {
+  red: number
+  green: number
+  blue: number
 }
 
 function getGeneratedImagesDir(): string {
@@ -247,6 +260,135 @@ function resolveGridSegments(
   return segments
 }
 
+function collectBackgroundSwatches(bitmap: Buffer, width: number, height: number): ColorSwatch[] {
+  const border = Math.max(1, Math.min(BACKGROUND_SAMPLE_BORDER, Math.floor(Math.min(width, height) / 8)))
+  const buckets = new Map<
+    string,
+    { count: number; redTotal: number; greenTotal: number; blueTotal: number }
+  >()
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      if (x >= border && x < width - border && y >= border && y < height - border) {
+        continue
+      }
+
+      const offset = (y * width + x) * 4
+      const alpha = bitmap[offset + 3]
+      if (alpha <= EMPTY_EDGE_ALPHA_THRESHOLD) {
+        continue
+      }
+
+      const blue = bitmap[offset]
+      const green = bitmap[offset + 1]
+      const red = bitmap[offset + 2]
+      const key = `${Math.round(red / 16)}-${Math.round(green / 16)}-${Math.round(blue / 16)}`
+      const current = buckets.get(key) ?? { count: 0, redTotal: 0, greenTotal: 0, blueTotal: 0 }
+
+      current.count += 1
+      current.redTotal += red
+      current.greenTotal += green
+      current.blueTotal += blue
+      buckets.set(key, current)
+    }
+  }
+
+  return Array.from(buckets.values())
+    .sort((a, b) => b.count - a.count)
+    .slice(0, BACKGROUND_SWATCH_LIMIT)
+    .map((bucket) => ({
+      red: Math.round(bucket.redTotal / bucket.count),
+      green: Math.round(bucket.greenTotal / bucket.count),
+      blue: Math.round(bucket.blueTotal / bucket.count)
+    }))
+}
+
+function isBackgroundLikePixel(bitmap: Buffer, offset: number, swatches: ColorSwatch[]): boolean {
+  const alpha = bitmap[offset + 3]
+  if (alpha <= EMPTY_EDGE_ALPHA_THRESHOLD) {
+    return true
+  }
+
+  if (swatches.length === 0) {
+    return false
+  }
+
+  const blue = bitmap[offset]
+  const green = bitmap[offset + 1]
+  const red = bitmap[offset + 2]
+  const toleranceSquared = BACKGROUND_COLOR_TOLERANCE * BACKGROUND_COLOR_TOLERANCE
+
+  return swatches.some((swatch) => {
+    const redDelta = red - swatch.red
+    const greenDelta = green - swatch.green
+    const blueDelta = blue - swatch.blue
+    return redDelta * redDelta + greenDelta * greenDelta + blueDelta * blueDelta <= toleranceSquared
+  })
+}
+
+function resolveForegroundBoundsByBackground(
+  bitmap: Buffer,
+  width: number,
+  height: number,
+  bounds: { x: number; y: number; width: number; height: number }
+): { minX: number; minY: number; maxX: number; maxY: number } | null {
+  const swatches = collectBackgroundSwatches(bitmap, width, height)
+  let minX = width
+  let minY = height
+  let maxX = -1
+  let maxY = -1
+
+  for (let y = bounds.y; y < bounds.y + bounds.height; y += 1) {
+    for (let x = bounds.x; x < bounds.x + bounds.width; x += 1) {
+      const offset = (y * width + x) * 4
+      if (isBackgroundLikePixel(bitmap, offset, swatches)) {
+        continue
+      }
+
+      if (x < minX) minX = x
+      if (y < minY) minY = y
+      if (x > maxX) maxX = x
+      if (y > maxY) maxY = y
+    }
+  }
+
+  if (maxX < minX || maxY < minY) {
+    return null
+  }
+
+  return { minX, minY, maxX, maxY }
+}
+
+function resolveFrameAnchorX(
+  bitmap: Buffer,
+  width: number,
+  minX: number,
+  minY: number,
+  maxX: number,
+  maxY: number
+): number {
+  const bboxHeight = maxY - minY + 1
+  const lowerBodyStartY = Math.min(maxY, minY + Math.floor(bboxHeight * 0.55))
+  let lowerMinX = width
+  let lowerMaxX = -1
+
+  for (let y = lowerBodyStartY; y <= maxY; y += 1) {
+    for (let x = minX; x <= maxX; x += 1) {
+      const offset = (y * width + x) * 4
+      if (bitmap[offset + 3] > VISIBLE_ALPHA_THRESHOLD) {
+        if (x < lowerMinX) lowerMinX = x
+        if (x > lowerMaxX) lowerMaxX = x
+      }
+    }
+  }
+
+  if (lowerMaxX >= lowerMinX) {
+    return Math.round((lowerMinX + lowerMaxX) / 2)
+  }
+
+  return Math.round((minX + maxX) / 2)
+}
+
 function analyzeFrameContent(bitmap: Buffer, width: number, height: number): FrameContentStats {
   const trimmedBounds = trimUniformTransparentEdges(bitmap, width, height)
   let minX = width
@@ -268,6 +410,24 @@ function analyzeFrameContent(bitmap: Buffer, width: number, height: number): Fra
     }
   }
 
+  const alphaBoundsValid = maxX >= minX && maxY >= minY
+  const alphaBBoxWidth = alphaBoundsValid ? maxX - minX + 1 : 0
+  const alphaBBoxHeight = alphaBoundsValid ? maxY - minY + 1 : 0
+  const shouldUseBackgroundFallback =
+    !alphaBoundsValid ||
+    (alphaBBoxWidth / width >= OPAQUE_BACKGROUND_BBOX_RATIO &&
+      alphaBBoxHeight / height >= OPAQUE_BACKGROUND_BBOX_RATIO)
+
+  if (shouldUseBackgroundFallback) {
+    const fallbackBounds = resolveForegroundBoundsByBackground(bitmap, width, height, trimmedBounds)
+    if (fallbackBounds) {
+      minX = fallbackBounds.minX
+      minY = fallbackBounds.minY
+      maxX = fallbackBounds.maxX
+      maxY = fallbackBounds.maxY
+    }
+  }
+
   if (maxX < minX || maxY < minY) {
     throw new Error('Generated frame does not contain a visible subject.')
   }
@@ -278,8 +438,7 @@ function analyzeFrameContent(bitmap: Buffer, width: number, height: number): Fra
   return {
     bboxWidthRatio: bboxWidth / width,
     bboxHeightRatio: bboxHeight / height,
-    centerXRatio: (minX + maxX + 1) / 2 / width,
-    bottomYRatio: (maxY + 1) / height,
+    anchorX: resolveFrameAnchorX(bitmap, width, minX, minY, maxX, maxY),
     minX,
     minY,
     maxX,
@@ -290,51 +449,60 @@ function analyzeFrameContent(bitmap: Buffer, width: number, height: number): Fra
 function ensureConsistentSubjectScale(statsList: FrameContentStats[]): void {
   const reference = statsList[0]
 
-  const exceedsTolerance = (
-    current: number,
-    target: number,
-    tolerance: number,
-    useRelative = true
-  ): boolean => {
-    if (useRelative) {
-      return Math.abs(current - target) / Math.max(target, 0.0001) > tolerance
-    }
-
-    return Math.abs(current - target) > tolerance
-  }
+  const exceedsTolerance = (current: number, target: number, tolerance: number): boolean =>
+    Math.abs(current - target) / Math.max(target, 0.0001) > tolerance
 
   const inconsistentFrame = statsList.findIndex(
     (stats) =>
       exceedsTolerance(stats.bboxWidthRatio, reference.bboxWidthRatio, MAX_SIZE_DRIFT_RATIO) ||
-      exceedsTolerance(stats.bboxHeightRatio, reference.bboxHeightRatio, MAX_SIZE_DRIFT_RATIO) ||
-      exceedsTolerance(stats.centerXRatio, reference.centerXRatio, MAX_CENTER_DRIFT_RATIO, false) ||
-      exceedsTolerance(stats.bottomYRatio, reference.bottomYRatio, MAX_BOTTOM_DRIFT_RATIO, false)
+      exceedsTolerance(stats.bboxHeightRatio, reference.bboxHeightRatio, MAX_SIZE_DRIFT_RATIO)
   )
 
   if (inconsistentFrame !== -1) {
     throw new Error(
-      `Frame ${inconsistentFrame + 1} has inconsistent subject scale or anchor position. The character size, center, or baseline drifted too much across the 9 panels.`
+      `Frame ${inconsistentFrame + 1} has inconsistent subject scale. The character size drifted too much across the 9 panels.`
     )
   }
 }
 
-function resolveSharedCrop(statsList: FrameContentStats[]): {
-  x: number
-  y: number
-  width: number
-  height: number
-} {
-  const minX = Math.min(...statsList.map((stats) => stats.minX))
-  const minY = Math.min(...statsList.map((stats) => stats.minY))
-  const maxX = Math.max(...statsList.map((stats) => stats.maxX))
-  const maxY = Math.max(...statsList.map((stats) => stats.maxY))
+function resolveAlignedFrameLayout(statsList: FrameContentStats[]): AlignedFrameLayout {
+  let maxLeftSpan = 0
+  let maxRightSpan = 0
+  let maxHeight = 0
+
+  for (const stats of statsList) {
+    maxLeftSpan = Math.max(maxLeftSpan, stats.anchorX - stats.minX)
+    maxRightSpan = Math.max(maxRightSpan, stats.maxX - stats.anchorX)
+    maxHeight = Math.max(maxHeight, stats.maxY - stats.minY + 1)
+  }
 
   return {
-    x: minX,
-    y: minY,
-    width: maxX - minX + 1,
-    height: maxY - minY + 1
+    width: maxLeftSpan + maxRightSpan + 1,
+    height: maxHeight,
+    anchorX: maxLeftSpan
   }
+}
+
+function composeAlignedFrameBitmap(
+  sourceBitmap: Buffer,
+  sourceWidth: number,
+  stats: FrameContentStats,
+  layout: AlignedFrameLayout
+): Buffer {
+  const bboxWidth = stats.maxX - stats.minX + 1
+  const bboxHeight = stats.maxY - stats.minY + 1
+  const destX = layout.anchorX - (stats.anchorX - stats.minX)
+  const destY = layout.height - bboxHeight
+  const output = Buffer.alloc(layout.width * layout.height * 4)
+
+  for (let row = 0; row < bboxHeight; row += 1) {
+    const sourceStart = ((stats.minY + row) * sourceWidth + stats.minX) * 4
+    const sourceEnd = sourceStart + bboxWidth * 4
+    const targetStart = ((destY + row) * layout.width + destX) * 4
+    sourceBitmap.copy(output, targetStart, sourceStart, sourceEnd)
+  }
+
+  return output
 }
 
 export function registerImageGifHandlers(): void {
@@ -364,7 +532,7 @@ export function registerImageGifHandlers(): void {
         const gridPng = normalizedGrid.toPNG()
         const grid = toPersistedImageResult(join(outputDir, 'grid.png'), gridPng, 'image/png')
 
-        const rawFrames: Electron.NativeImage[] = []
+        const rawFrames: Array<{ width: number; height: number; bitmap: Buffer }> = []
         const frameStats: FrameContentStats[] = []
         const gridBitmap = normalizedGrid.toBitmap()
         const columnSegments = resolveGridSegments(
@@ -386,10 +554,13 @@ export function registerImageGifHandlers(): void {
               width: columnSegment.size,
               height: rowSegment.size
             })
-            rawFrames.push(frameImage)
-            frameStats.push(
-              analyzeFrameContent(frameImage.toBitmap(), columnSegment.size, rowSegment.size)
-            )
+            const frameBitmap = frameImage.toBitmap()
+            rawFrames.push({
+              width: columnSegment.size,
+              height: rowSegment.size,
+              bitmap: frameBitmap
+            })
+            frameStats.push(analyzeFrameContent(frameBitmap, columnSegment.size, rowSegment.size))
           }
         }
 
@@ -399,13 +570,23 @@ export function registerImageGifHandlers(): void {
 
         ensureConsistentSubjectScale(frameStats)
 
-        const sharedCrop = resolveSharedCrop(frameStats)
+        const alignedLayout = resolveAlignedFrameLayout(frameStats)
         const frames: PersistedImageResult[] = []
         const gifFrames: Array<{ width: number; height: number; bitmap: Buffer }> = []
 
-        rawFrames.forEach((frameImage, index) => {
-          const croppedFrame = frameImage.crop(sharedCrop)
-          const frameBuffer = croppedFrame.toPNG()
+        rawFrames.forEach((frame, index) => {
+          const alignedBitmap = composeAlignedFrameBitmap(
+            frame.bitmap,
+            frame.width,
+            frameStats[index],
+            alignedLayout
+          )
+          const alignedImage = nativeImage.createFromBitmap(alignedBitmap, {
+            width: alignedLayout.width,
+            height: alignedLayout.height,
+            scaleFactor: 1
+          })
+          const frameBuffer = alignedImage.toPNG()
           frames.push(
             toPersistedImageResult(
               join(outputDir, `frame-${String(index + 1).padStart(2, '0')}.png`),
@@ -414,9 +595,9 @@ export function registerImageGifHandlers(): void {
             )
           )
           gifFrames.push({
-            width: sharedCrop.width,
-            height: sharedCrop.height,
-            bitmap: croppedFrame.toBitmap()
+            width: alignedLayout.width,
+            height: alignedLayout.height,
+            bitmap: alignedBitmap
           })
         })
 

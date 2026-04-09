@@ -45,6 +45,7 @@ export const RIGHT_PANEL_TAB_DEFS: RightPanelTabDef[] = [
   { value: 'preview', labelKey: 'preview', section: 'resources', icon: Monitor },
   { value: 'terminal', labelKey: 'terminal', section: 'resources', icon: SquareTerminal },
   { value: 'artifacts', labelKey: 'artifacts', section: 'resources', icon: FileOutput },
+  { value: 'orchestration', labelKey: 'orchestration', section: 'collaboration', icon: Users },
   { value: 'subagents', labelKey: 'subagents', section: 'collaboration', icon: Bot },
   { value: 'team', labelKey: 'team', section: 'collaboration', icon: Users },
   { value: 'context', labelKey: 'context', section: 'monitoring', icon: Database },
@@ -79,7 +80,7 @@ export const RIGHT_PANEL_SECTION_DEFS: RightPanelSectionDef[] = [
 export const RIGHT_PANEL_DEFAULT_TAB_BY_SECTION: Record<RightPanelSection, RightPanelTab> = {
   execution: 'steps',
   resources: 'files',
-  collaboration: 'team',
+  collaboration: 'orchestration',
   monitoring: 'context'
 }
 

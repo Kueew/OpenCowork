@@ -52,6 +52,18 @@ export const bigmodelPreset: BuiltinProviderPreset = {
       supportsFunctionCall: true,
       supportsThinking: true,
       thinkingConfig: { bodyParams: { thinking_mode: 'auto' } }
+    }, {
+      id: 'glm-5.1',
+      name: 'GLM 5.1',
+      icon: 'chatglm',
+      enabled: true,
+      contextLength: 202_752,
+      maxOutputTokens: 8_192,
+      supportsVision: false,
+      supportsFunctionCall: true,
+      inputPrice: 1.395,
+      outputPrice: 4.40,
+      cacheHitPrice: 0.3,
     },
     // GLM-4 series
     {

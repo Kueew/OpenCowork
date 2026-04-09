@@ -12,20 +12,8 @@ import { startTeamInboxPoller } from './inbox-poller'
 
 const TEAM_TOOLS = [teamCreateTool, sendMessageTool, teamStatusTool, teamDeleteTool]
 
-/** All team tool names for identification in UI rendering */
 export const TEAM_TOOL_NAMES = new Set(TEAM_TOOLS.map((t) => t.definition.name))
 
-/**
- * Register all Agent Team tools into the global tool registry
- * and set up the persistent teamEvents → team-store subscription.
- *
- * Call this once at application startup. The event subscription is
- * global and never unsubscribed — teammate agent loops outlive the
- * lead's agent loop, so scoped subscriptions would lose events.
- *
- * Guard: safe to call multiple times (e.g. HMR / StrictMode);
- * tools and the event subscription are only registered once.
- */
 let _teamToolsRegistered = false
 
 export function registerTeamTools(): void {
@@ -36,12 +24,10 @@ export function registerTeamTools(): void {
     toolRegistry.register(tool)
   }
 
-  // Persistent global subscription: forward all team events to the store
   teamEvents.on((event) => {
-    const sessionId = useChatStore.getState().activeSessionId ?? undefined
+    const sessionId = event.sessionId ?? useChatStore.getState().activeSessionId ?? undefined
     useTeamStore.getState().handleTeamEvent(event, sessionId)
 
-    // Auto-switch to Team tab when a team is created
     if (event.type === 'team_start') {
       const ui = useUIStore.getState()
       ui.setRightPanelOpen(true)
@@ -54,8 +40,7 @@ export function registerTeamTools(): void {
     void getTeamRuntimeSnapshot({ teamName: activeTeam.name, limit: 10 })
       .then((snapshot) => {
         if (!snapshot) return
-        const sessionId = useChatStore.getState().activeSessionId ?? undefined
-        useTeamStore.getState().syncRuntimeSnapshot(snapshot, sessionId)
+        useTeamStore.getState().syncRuntimeSnapshot(snapshot, activeTeam.sessionId)
       })
       .catch((error) => {
         console.error('[TeamRuntime] Failed to load active team snapshot:', error)

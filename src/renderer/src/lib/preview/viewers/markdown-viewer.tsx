@@ -12,32 +12,7 @@ export function MarkdownViewer({
   onContentChange
 }: ViewerProps): React.JSX.Element {
   if (viewMode === 'code') {
-    return (
-      <React.Suspense
-        fallback={
-          <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
-            Loading editor...
-          </div>
-        }
-      >
-        <MonacoEditor
-          height="100%"
-          language="markdown"
-          theme="vs-dark"
-          value={content}
-          onChange={(value) => onContentChange?.(value ?? '')}
-          options={{
-            minimap: { enabled: false },
-            fontSize: 13,
-            lineNumbers: 'on',
-            wordWrap: 'on',
-            scrollBeyondLastLine: false,
-            automaticLayout: true,
-            tabSize: 2
-          }}
-        />
-      </React.Suspense>
-    )
+    return <CodeEditor filePath={filePath} content={content} onChange={onContentChange} />
   }
 
   return (

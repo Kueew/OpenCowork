@@ -38,8 +38,6 @@ export const taskCreateTool: ToolHandler = {
     }
 
     const subject = String(input.subject)
-
-    // Guard: skip if a task with the same subject already exists
     const existing = team.tasks.find((t) => t.subject === subject)
     if (existing) {
       return encodeStructuredToolResult({
@@ -66,7 +64,7 @@ export const taskCreateTool: ToolHandler = {
       }
     })
 
-    teamEvents.emit({ type: 'team_task_add', task })
+    teamEvents.emit({ type: 'team_task_add', sessionId: team.sessionId, task })
 
     return encodeStructuredToolResult({
       success: true,

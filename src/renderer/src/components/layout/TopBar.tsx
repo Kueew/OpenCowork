@@ -36,7 +36,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useShallow } from 'zustand/react/shallow'
 import { WindowControls } from './WindowControls'
-import { RunningAgentSessionsPopover } from './RunningAgentSessionsPopover'
+import { PendingInboxPopover } from './PendingInboxPopover'
 
 const modes: { value: AppMode; labelKey: string; icon: React.ReactNode }[] = [
   { value: 'clarify', labelKey: 'mode.clarify', icon: <CircleHelp className="size-4" /> },
@@ -62,9 +62,7 @@ export function TopBar(): React.JSX.Element {
   const updateSessionMode = useChatStore((s) => s.updateSessionMode)
   const autoApprove = useSettingsStore((s) => s.autoApprove)
   const clarifyAutoAcceptRecommended = useSettingsStore((s) => s.clarifyAutoAcceptRecommended)
-  const clarifyPlanModeAutoSwitchTarget = useSettingsStore(
-    (s) => s.clarifyPlanModeAutoSwitchTarget
-  )
+  const clarifyPlanModeAutoSwitchTarget = useSettingsStore((s) => s.clarifyPlanModeAutoSwitchTarget)
   const pendingApprovals = useAgentStore((s) => s.pendingToolCalls.length)
   const errorCount = useAgentStore((s) =>
     s.executedToolCalls.reduce(
@@ -72,7 +70,12 @@ export function TopBar(): React.JSX.Element {
       0
     )
   )
-  const runningSubAgentNamesSig = useAgentStore((s) => s.runningSubAgentNamesSig)
+  const runningSubAgentNamesSig = useAgentStore((s) =>
+    Object.values(s.activeSubAgents)
+      .filter((subAgent) => subAgent.isRunning)
+      .map((subAgent) => subAgent.name)
+      .join('\u0000')
+  )
   const runningBackgroundCommandIdsSig = useAgentStore((s) =>
     Object.values(s.backgroundProcesses)
       .filter(
@@ -89,7 +92,7 @@ export function TopBar(): React.JSX.Element {
   const activeTeamSummary = useTeamStore(
     useShallow((s) => {
       const team = s.activeTeam
-      if (!team) return null
+      if (!team || team.sessionId !== activeSessionId) return null
       return {
         name: team.name,
         total: team.tasks.length,
@@ -221,8 +224,6 @@ export function TopBar(): React.JSX.Element {
             </Select>
           </>
         )}
-
-        <RunningAgentSessionsPopover />
 
         {/* Auto-approve toggle */}
         <Tooltip>
@@ -368,6 +369,10 @@ export function TopBar(): React.JSX.Element {
             </PopoverContent>
           </Popover>
         )}
+
+        <PendingInboxPopover />
+
+        <PendingInboxPopover />
 
         {/* Theme Toggle */}
         <Tooltip>

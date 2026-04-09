@@ -402,6 +402,10 @@ function serializeMessageContent(content: ContentBlock[]): string {
           return i18n.t('contextCompression.imageAttachment', { ns: 'agent' })
         case 'image_error':
           return `[Image error: ${block.message}]`
+        case 'agent_error':
+          return `[Agent error: ${block.message}]`
+        default:
+          return ''
       }
     })
     .filter(Boolean)

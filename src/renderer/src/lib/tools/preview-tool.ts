@@ -1,4 +1,8 @@
+import { toast } from 'sonner'
 import { toolRegistry } from '../agent/tool-registry'
+import { useBackgroundSessionStore } from '@renderer/stores/background-session-store'
+import { useChatStore } from '@renderer/stores/chat-store'
+import { isSessionForeground } from '@renderer/lib/agent/session-runtime-router'
 import { resolveToolPath } from './fs-tool'
 import { encodeStructuredToolResult } from './tool-result-format'
 import type { ToolHandler } from './tool-types'
@@ -42,7 +46,31 @@ const openPreviewHandler: ToolHandler = {
     const viewMode = (input.view_mode as 'preview' | 'code' | undefined) ?? 'preview'
     const sshConnectionId = resolveSshConnectionId(filePath, ctx.sshConnectionId)
 
-    // Import dynamically to avoid circular deps at module level
+    if (ctx.sessionId && !isSessionForeground(ctx.sessionId)) {
+      const sessionTitle =
+        useChatStore.getState().sessions.find((session) => session.id === ctx.sessionId)?.title ??
+        '后台会话'
+      useBackgroundSessionStore.getState().addInboxItem({
+        sessionId: ctx.sessionId,
+        type: 'preview_ready',
+        title: '新预览',
+        description: `${sessionTitle} 有可查看的预览`,
+        toolUseId: ctx.currentToolUseId,
+        target: {
+          kind: 'file',
+          filePath,
+          viewMode,
+          ...(sshConnectionId ? { sshConnectionId } : {})
+        }
+      })
+      toast.warning('后台会话有新预览', { description: sessionTitle })
+
+      return encodeStructuredToolResult({
+        success: true,
+        message: `Queued preview for ${filePath}`
+      })
+    }
+
     const { useUIStore } = await import('@renderer/stores/ui-store')
     useUIStore.getState().openFilePreview(filePath, viewMode, sshConnectionId, ctx.sessionId)
 

@@ -1,5 +1,4 @@
 import * as React from 'react'
-import { VList } from 'virtua'
 import type { ToolResultContent, UnifiedMessage } from '@renderer/lib/api/types'
 import { cn } from '@renderer/lib/utils'
 import { MessageItem } from './MessageItem'
@@ -72,50 +71,32 @@ export function TranscriptMessageList({
     [messages, streamingMessageId]
   )
   const messageLookup = React.useMemo(() => getMessageLookup(messages), [messages])
-  const rowKeys = React.useMemo(
-    () => renderableMeta.map((item) => item.messageId),
-    [renderableMeta]
-  )
-  const metaByMessageId = React.useMemo(() => {
-    const next = new Map<string, (typeof renderableMeta)[number]>()
-    for (const item of renderableMeta) {
-      next.set(item.messageId, item)
-    }
-    return next
-  }, [renderableMeta])
 
-  if (rowKeys.length === 0) {
+  if (renderableMeta.length === 0) {
     return <div className="text-sm text-muted-foreground/70">暂无回放</div>
   }
 
   return (
-    <div className={cn('not-prose h-[min(60vh,40rem)] min-h-[20rem]', className)}>
-      <VList
-        bufferSize={typeof window !== 'undefined' ? window.innerHeight : 0}
-        data={rowKeys}
-        style={{ height: '100%', overflowAnchor: 'none' }}
-      >
-        {(rowKey, rowIndex): React.JSX.Element => {
-          const message = messageLookup.get(rowKey)
-          const meta = metaByMessageId.get(rowKey)
+    <div className={cn('not-prose h-[min(60vh,40rem)] min-h-[20rem] overflow-y-auto', className)}>
+      {renderableMeta.map((meta, rowIndex) => {
+        const message = messageLookup.get(meta.messageId)
 
-          if (!message || !meta) {
-            return <div key={rowKey} />
-          }
+        if (!message) {
+          return null
+        }
 
-          return (
-            <VirtualTranscriptMessageRow
-              key={rowKey}
-              rowIndex={rowIndex}
-              message={message}
-              isStreaming={streamingMessageId === message.id}
-              isLastUserMessage={meta.isLastUserMessage}
-              isLastAssistantMessage={meta.isLastAssistantMessage}
-              toolResults={toolResultsLookup.get(message.id)}
-            />
-          )
-        }}
-      </VList>
+        return (
+          <VirtualTranscriptMessageRow
+            key={meta.messageId}
+            rowIndex={rowIndex}
+            message={message}
+            isStreaming={streamingMessageId === message.id}
+            isLastUserMessage={meta.isLastUserMessage}
+            isLastAssistantMessage={meta.isLastAssistantMessage}
+            toolResults={toolResultsLookup.get(message.id)}
+          />
+        )
+      })}
     </div>
   )
 }

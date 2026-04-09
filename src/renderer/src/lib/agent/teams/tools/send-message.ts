@@ -130,7 +130,7 @@ export const sendMessageTool: ToolHandler = {
         teamName: team.name,
         message: msg
       })
-      teamEvents.emit({ type: 'team_message', message: msg })
+      teamEvents.emit({ type: 'team_message', sessionId: team.sessionId, message: msg })
 
       return encodeStructuredToolResult({
         success: true,

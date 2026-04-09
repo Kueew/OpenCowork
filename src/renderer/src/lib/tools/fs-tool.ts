@@ -22,15 +22,92 @@ function normalizeQuotes(value: string): string {
     .replaceAll(RIGHT_DOUBLE_CURLY_QUOTE, '"')
 }
 
+/**
+ * Build a mapping from positions in a normalized string back to positions in the original.
+ * Each entry maps a normalized-string index to the corresponding original-string index.
+ */
+function buildOffsetMap(original: string): number[] {
+  const map: number[] = []
+  let oi = 0
+  for (let i = 0; i < original.length; i++) {
+    if (original[i] === '\r' && original[i + 1] === '\n') {
+      map.push(oi)
+      oi++
+      i++ // skip \n — it was merged into one \n in normalized form
+      continue
+    }
+    map.push(oi)
+    oi++
+  }
+  return map
+}
+
+function findOriginalRange(
+  original: string,
+  normalizedIdx: number,
+  normalizedLen: number
+): { start: number; end: number } {
+  const map = buildOffsetMap(original)
+  // Find the original start: the first original index whose normalized position == normalizedIdx
+  let start = -1
+  for (let i = 0; i < map.length; i++) {
+    if (map[i] === normalizedIdx) {
+      start = i
+      break
+    }
+  }
+  if (start === -1) start = original.length
+
+  // Find the original end: first original index whose normalized position == normalizedIdx + normalizedLen
+  const endNorm = normalizedIdx + normalizedLen
+  let end = original.length
+  for (let i = start; i < map.length; i++) {
+    if (map[i] === endNorm) {
+      end = i
+      break
+    }
+  }
+  return { start, end }
+}
+
+function normalizeLineEndings(value: string): string {
+  return value.replace(/\r\n/g, '\n')
+}
+
+function normalizeTrailingWhitespace(value: string): string {
+  return value.replace(/[ \t]+$/gm, '')
+}
+
 function findActualString(content: string, search: string): string | null {
+  // 1. Exact match
   if (content.includes(search)) return search
 
-  const normalizedSearch = normalizeQuotes(search)
-  const normalizedContent = normalizeQuotes(content)
-  const searchIndex = normalizedContent.indexOf(normalizedSearch)
-  if (searchIndex === -1) return null
+  // 2. Curly-quote normalization only
+  const qSearch = normalizeQuotes(search)
+  const qContent = normalizeQuotes(content)
+  const qIdx = qContent.indexOf(qSearch)
+  if (qIdx !== -1) return content.substring(qIdx, qIdx + search.length)
 
-  return content.substring(searchIndex, searchIndex + search.length)
+  // 3. Line-ending normalization (\r\n → \n)
+  const lfSearch = normalizeLineEndings(qSearch)
+  const lfContent = normalizeLineEndings(qContent)
+  const lfIdx = lfContent.indexOf(lfSearch)
+  if (lfIdx !== -1) {
+    const { start, end } = findOriginalRange(content, lfIdx, lfSearch.length)
+    return content.substring(start, end)
+  }
+
+  // 4. Trailing-whitespace normalization (strip trailing spaces/tabs per line)
+  const twSearch = normalizeTrailingWhitespace(lfSearch)
+  const twContent = normalizeTrailingWhitespace(lfContent)
+  const twIdx = twContent.indexOf(twSearch)
+  if (twIdx !== -1) {
+    // Map back through LF-normalized content to original
+    const { start, end } = findOriginalRange(content, twIdx, twSearch.length)
+    return content.substring(start, end)
+  }
+
+  return null
 }
 
 function isOpeningQuoteContext(chars: string[], index: number): boolean {

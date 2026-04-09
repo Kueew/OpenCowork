@@ -18,10 +18,8 @@ import { spawnIsolatedTeamWorker } from '../teams/backend-client'
 import { updateTeamRuntimeManifest, updateTeamRuntimeMember } from '../teams/runtime-client'
 import type { TeamMember } from '../teams/types'
 
-/** Global concurrency limiter: at most 2 SubAgents run simultaneously. */
 const subAgentLimiter = new ConcurrencyLimiter(2)
 
-/** Legacy metadata shape kept only for parsing older stored Task outputs. */
 export interface SubAgentMeta {
   iterations: number
   elapsed: number
@@ -41,7 +39,6 @@ export interface SubAgentMeta {
 const META_PREFIX = '<!--subagent-meta:'
 const META_SUFFIX = '-->\n'
 
-/** Parse legacy embedded metadata from older SubAgent output strings. */
 export function parseSubAgentMeta(output: string): { meta: SubAgentMeta | null; text: string } {
   if (!output.startsWith(META_PREFIX)) return { meta: null, text: output }
   const endIdx = output.indexOf(META_SUFFIX)
@@ -56,18 +53,8 @@ export function parseSubAgentMeta(output: string): { meta: SubAgentMeta | null; 
   }
 }
 
-/** The unified Task tool name */
 export const TASK_TOOL_NAME = 'Task'
 
-/**
- * Build the description for the unified Task tool by embedding
- * all registered SubAgent names and descriptions.
- */
-/**
- * Per-team context: concurrency limiter + working folder.
- * Each team independently allows at most 2 teammates to run
- * their agent loops simultaneously.
- */
 interface TeamContext {
   limiter: ConcurrencyLimiter
   workingFolder?: string
@@ -85,7 +72,6 @@ function getTeamContext(teamName: string): TeamContext {
   return ctx
 }
 
-/** Clean up context when a team is deleted. */
 export function removeTeamLimiter(teamName: string): void {
   teamContexts.delete(teamName)
 }
@@ -106,11 +92,6 @@ async function syncRuntimeTaskPatch(
   })
 }
 
-/**
- * Framework-level task scheduler: when a concurrency slot frees up,
- * automatically find the next pending task and spawn a new teammate.
- * This replaces the old auto-claim loop inside runTeammate().
- */
 function scheduleNextTask(teamName: string): void {
   const team = useTeamStore.getState().activeTeam
   if (!team || team.name !== teamName) return
@@ -118,8 +99,6 @@ function scheduleNextTask(teamName: string): void {
   const ctx = teamContexts.get(teamName)
   if (!ctx) return
   const limiter = ctx.limiter
-
-  // Only proceed if a slot is immediately available
   if (limiter.activeCount >= 2) return
 
   const nextTask = findNextClaimableTask()
@@ -130,7 +109,7 @@ function scheduleNextTask(teamName: string): void {
     id: nanoid(),
     name: memberName,
     model: 'default',
-    backendType: 'in-process',
+    backendType: ctx.defaultBackend ?? 'in-process',
     role: 'worker',
     status: 'idle',
     currentTaskId: nextTask.id,
@@ -141,10 +120,10 @@ function scheduleNextTask(teamName: string): void {
     completedAt: null
   }
 
-  // Claim task synchronously before async acquire to prevent races
-  teamEvents.emit({ type: 'team_member_add', member })
+  teamEvents.emit({ type: 'team_member_add', sessionId: team.sessionId, member })
   teamEvents.emit({
     type: 'team_task_update',
+    sessionId: team.sessionId,
     taskId: nextTask.id,
     patch: { status: 'in_progress', owner: memberName }
   })
@@ -162,7 +141,6 @@ function scheduleNextTask(teamName: string): void {
         workingFolder: ctx.workingFolder
       }).finally(() => {
         limiter.release()
-        // Recursively schedule next pending task
         scheduleNextTask(teamName)
       })
     })
@@ -201,10 +179,6 @@ Usage notes:
 7. Optional: set backend_type to choose between in-process and isolated-renderer teammate backends.`
 }
 
-/**
- * Execute a background teammate: spawn an independent agent loop
- * that runs in parallel. Returns immediately with spawn confirmation.
- */
 async function executeBackgroundTeammate(
   input: Record<string, unknown>,
   ctx: ToolContext
@@ -255,8 +229,6 @@ async function executeBackgroundTeammate(
   const willQueue = limiter.activeCount >= 2
 
   const assignedTaskId = input.task_id ? String(input.task_id) : null
-
-  // Guard: don't re-assign completed tasks
   if (assignedTaskId) {
     const task = team.tasks.find((t) => t.id === assignedTaskId)
     if (task?.status === 'completed') {
@@ -282,7 +254,7 @@ async function executeBackgroundTeammate(
     completedAt: null
   }
 
-  teamEvents.emit({ type: 'team_member_add', member })
+  teamEvents.emit({ type: 'team_member_add', sessionId: team.sessionId, member })
   void updateTeamRuntimeMember({
     teamName,
     memberId: member.id,
@@ -294,19 +266,16 @@ async function executeBackgroundTeammate(
       model: member.model,
       agentType: agentDefinition?.name,
       status: willQueue ? 'waiting' : 'idle',
-      currentTaskId: assignedTaskId,
-      isActive: true,
-      startedAt: member.startedAt,
-      completedAt: null
+      currentTaskId: assignedTaskId
     }
   }).catch((error) => {
     console.error('[TeamRuntime] Failed to sync teammate member record:', error)
   })
 
-  // If a task was assigned, mark it in_progress immediately
   if (assignedTaskId) {
     teamEvents.emit({
       type: 'team_task_update',
+      sessionId: team.sessionId,
       taskId: assignedTaskId,
       patch: { status: 'in_progress', owner: memberName }
     })
@@ -318,55 +287,54 @@ async function executeBackgroundTeammate(
     })
   }
 
-  // Fire-and-forget: start the independent agent loop for this teammate.
-  // Concurrency-gated: at most 2 teammates per team run simultaneously.
-  // After completion, the framework scheduler auto-starts next pending task.
   limiter
     .acquire()
     .then(() => {
+      const markWorking = async (): Promise<void> => {
+        teamEvents.emit({
+          type: 'team_member_update',
+          sessionId: team.sessionId,
+          memberId: member.id,
+          patch: { status: 'working' }
+        })
+        await updateTeamRuntimeMember({
+          teamName,
+          memberId: member.id,
+          patch: { status: 'working' }
+        })
+      }
+
       const runPromise =
         backendType === 'isolated-renderer'
           ? spawnIsolatedTeamWorker({
               teamName,
               memberId: member.id,
               memberName,
-              prompt: String(input.prompt),
+              prompt: String(input.prompt ?? ''),
               taskId: assignedTaskId,
               model: input.model ? String(input.model) : null,
               agentName: agentDefinition?.name ?? null,
               workingFolder: ctx.workingFolder
-            }).then(async () => {
-              teamEvents.emit({
-                type: 'team_member_update',
+            }).then(markWorking)
+          : markWorking().then(() =>
+              runTeammate({
                 memberId: member.id,
-                patch: { status: 'working' }
+                memberName,
+                prompt: String(input.prompt ?? ''),
+                taskId: assignedTaskId,
+                model: input.model ? String(input.model) : null,
+                agentName: agentDefinition?.name ?? null,
+                workingFolder: ctx.workingFolder
               })
-              await updateTeamRuntimeMember({
-                teamName,
-                memberId: member.id,
-                patch: { status: 'working' }
-              })
-            })
-          : runTeammate({
-              memberId: member.id,
-              memberName,
-              prompt: String(input.prompt),
-              taskId: assignedTaskId,
-              model: input.model ? String(input.model) : null,
-              agentName: agentDefinition?.name ?? null,
-              workingFolder: ctx.workingFolder
-            })
+            )
 
       return runPromise.finally(() => {
         limiter.release()
-        // Framework scheduler: auto-dispatch next pending task
         scheduleNextTask(teamName)
       })
     })
     .catch((err) => {
       console.error(`[Task/background] Failed to start teammate "${memberName}":`, err)
-      // NOTE: Don't release here — if acquire() rejected, no slot was acquired.
-      // If runTeammate() failed after acquire(), .finally() already released.
     })
 
   return encodeStructuredToolResult({
@@ -381,18 +349,6 @@ async function executeBackgroundTeammate(
   })
 }
 
-/**
- * Creates a single unified "Task" ToolHandler that dispatches to
- * the appropriate SubAgent based on the "subagent_type" parameter.
- *
- * When run_in_background=true, spawns a teammate agent instead.
- *
- * The providerGetter is called at execution time to get the current
- * provider config (API key, model, etc.) from the settings store.
- *
- * SubAgent events are emitted to the global subAgentEvents bus
- * so the UI layer can track inner progress.
- */
 export function createTaskTool(providerGetter: () => ProviderConfig): ToolHandler {
   const agents = subAgentRegistry.getAll()
   const subTypeEnum = agents.map((a) => a.name)
@@ -405,7 +361,6 @@ export function createTaskTool(providerGetter: () => ProviderConfig): ToolHandle
         type: 'object',
         oneOf: [
           {
-            // Synchronous sub-agent mode
             type: 'object',
             properties: {
               subagent_type: {
@@ -430,7 +385,6 @@ export function createTaskTool(providerGetter: () => ProviderConfig): ToolHandle
             additionalProperties: false
           },
           {
-            // Background teammate mode
             type: 'object',
             properties: {
               description: {
@@ -481,12 +435,10 @@ export function createTaskTool(providerGetter: () => ProviderConfig): ToolHandle
       }
     },
     execute: async (input, ctx) => {
-      // --- Background teammate mode ---
       if (input.run_in_background) {
         return executeBackgroundTeammate(input, ctx)
       }
 
-      // --- Synchronous sub-agent mode ---
       const subType = String(input.subagent_type ?? '')
       if (!subType) {
         return encodeToolError(
@@ -500,7 +452,6 @@ export function createTaskTool(providerGetter: () => ProviderConfig): ToolHandle
         )
       }
 
-      // Acquire concurrency slot (blocks if 2 SubAgents are already running)
       await subAgentLimiter.acquire(ctx.signal)
 
       try {
@@ -520,7 +471,6 @@ export function createTaskTool(providerGetter: () => ProviderConfig): ToolHandle
             if (autoApprove) return true
             const approved = useAgentStore.getState().approvedToolNames
             if (approved.includes(tc.name)) return true
-            // Show in PermissionDialog
             useAgentStore.getState().addToolCall(tc)
             const result = await useAgentStore.getState().requestApproval(tc.id)
             if (result) useAgentStore.getState().addApprovedTool(tc.name)

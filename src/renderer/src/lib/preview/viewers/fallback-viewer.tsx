@@ -13,8 +13,7 @@ export function FallbackViewer({
   filePath,
   content,
   onContentChange,
-  sshConnectionId,
-  editorRef
+  sshConnectionId
 }: ViewerProps): React.JSX.Element {
   const openFilePreview = useUIStore((state) => state.openFilePreview)
   const workingFolder = useChatStore((state) => {

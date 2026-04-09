@@ -15,6 +15,7 @@ import { useTeamStore } from './team-store'
 import { useTaskStore } from './task-store'
 import { usePlanStore } from './plan-store'
 import { useUIStore } from './ui-store'
+import { useBackgroundSessionStore } from './background-session-store'
 import { useProviderStore } from './provider-store'
 import { useSettingsStore } from './settings-store'
 import { useInputDraftStore } from './input-draft-store'
@@ -437,7 +438,9 @@ function trimSessionMessageWindow(session: Session): void {
   session.loadedRangeStart = Math.min(session.messageCount, session.loadedRangeStart + trimCount)
 }
 
-function getResidentSessionIds(state: Pick<ChatStore, 'activeSessionId' | 'streamingMessages'>): Set<string> {
+function getResidentSessionIds(
+  state: Pick<ChatStore, 'activeSessionId' | 'streamingMessages'>
+): Set<string> {
   const residentSessionIds = new Set<string>()
   if (state.activeSessionId) {
     residentSessionIds.add(state.activeSessionId)
@@ -456,7 +459,10 @@ function getResidentSessionIds(state: Pick<ChatStore, 'activeSessionId' | 'strea
 }
 
 function releaseDormantSessionMemory(
-  state: Pick<ChatStore, 'sessions' | 'activeSessionId' | 'streamingMessages' | 'generatingImageMessages'>
+  state: Pick<
+    ChatStore,
+    'sessions' | 'activeSessionId' | 'streamingMessages' | 'generatingImageMessages'
+  >
 ): void {
   const residentSessionIds = getResidentSessionIds(state)
   const releasedMessageIds = new Set<string>()
@@ -849,6 +855,7 @@ export const useChatStore = create<ChatStore>()(
       for (const sessionId of deletedSessionIds) {
         agentState.setSessionStatus(sessionId, null)
         agentState.clearSessionData(sessionId)
+        useBackgroundSessionStore.getState().clearSession(sessionId)
         teamState.clearSessionTeam(sessionId)
         const plan = planState.getPlanBySession(sessionId)
         if (plan) {
@@ -858,7 +865,11 @@ export const useChatStore = create<ChatStore>()(
         useInputDraftStore.getState().removeSessionDraft(sessionId)
       }
       clearPendingMessageFlushes(deletedMessageIds)
-      agentState.clearToolCalls()
+      const liveSessionId = agentState.liveSessionId
+      if (liveSessionId && deletedSessionIds.includes(liveSessionId)) {
+        agentState.resetLiveSessionExecution(liveSessionId)
+        agentState.switchToolCallSession(null, nextActiveSessionId)
+      }
 
       if (nextActiveSessionId) {
         await get().loadSessionMessages(nextActiveSessionId)
@@ -964,7 +975,10 @@ export const useChatStore = create<ChatStore>()(
       const knownCount = session.messageCount ?? session.messages.length
       const requestedLimit = Math.max(
         MIN_INITIAL_SESSION_MESSAGE_PAGE_SIZE,
-        Math.min(limit ?? MIN_INITIAL_SESSION_MESSAGE_PAGE_SIZE, knownCount || MIN_INITIAL_SESSION_MESSAGE_PAGE_SIZE)
+        Math.min(
+          limit ?? MIN_INITIAL_SESSION_MESSAGE_PAGE_SIZE,
+          knownCount || MIN_INITIAL_SESSION_MESSAGE_PAGE_SIZE
+        )
       )
       if (!force && session.messagesLoaded && session.messages.length > 0) {
         const loadedAtTail = session.loadedRangeEnd === knownCount
@@ -1054,7 +1068,10 @@ export const useChatStore = create<ChatStore>()(
       if (!session) return
       const knownCount = session.messageCount ?? session.messages.length
       const shouldSkip =
-        !force && session.messagesLoaded && session.loadedRangeStart === 0 && knownCount <= session.messages.length
+        !force &&
+        session.messagesLoaded &&
+        session.loadedRangeStart === 0 &&
+        knownCount <= session.messages.length
       if (shouldSkip) return
       try {
         const msgRows = (await ipcClient.invoke('db:messages:list', sessionId)) as MessageRow[]
@@ -1103,7 +1120,8 @@ export const useChatStore = create<ChatStore>()(
     getSessionMessagesForRequest: async (sessionId, options) => {
       const session = get().sessions.find((s) => s.id === sessionId)
       if (!session) return []
-      const includeTrailingAssistantPlaceholder = options?.includeTrailingAssistantPlaceholder ?? true
+      const includeTrailingAssistantPlaceholder =
+        options?.includeTrailingAssistantPlaceholder ?? true
       const hasFullHistory =
         session.messagesLoaded &&
         session.loadedRangeStart === 0 &&
@@ -1111,7 +1129,9 @@ export const useChatStore = create<ChatStore>()(
 
       let messages = hasFullHistory
         ? session.messages
-        : ((await ipcClient.invoke('db:messages:list', sessionId)) as MessageRow[]).map(rowToMessage)
+        : ((await ipcClient.invoke('db:messages:list', sessionId)) as MessageRow[]).map(
+            rowToMessage
+          )
 
       if (!includeTrailingAssistantPlaceholder) {
         messages = messages.filter((message, index) => {
@@ -1330,9 +1350,13 @@ export const useChatStore = create<ChatStore>()(
       })
 
       const agentState = useAgentStore.getState()
+      const wasLiveSession = agentState.liveSessionId === id
       agentState.setSessionStatus(id, null)
       agentState.clearSessionData(id)
-      agentState.clearToolCalls()
+      useBackgroundSessionStore.getState().clearSession(id)
+      if (wasLiveSession) {
+        agentState.resetLiveSessionExecution(id)
+      }
       useTeamStore.getState().clearSessionTeam(id)
       const plan = usePlanStore.getState().getPlanBySession(id)
       if (plan) usePlanStore.getState().deletePlan(plan.id)
@@ -1343,6 +1367,10 @@ export const useChatStore = create<ChatStore>()(
 
       if (shouldCreateReplacementSession) {
         nextActiveId = get().createSession(fallbackMode, fallbackProjectId ?? undefined)
+      }
+
+      if (wasLiveSession) {
+        agentState.switchToolCallSession(null, nextActiveId)
       }
 
       if (nextActiveId) {
@@ -1593,7 +1621,8 @@ export const useChatStore = create<ChatStore>()(
         messagesLoaded: session.messagesLoaded ?? true,
         loadedRangeStart: session.loadedRangeStart ?? 0,
         loadedRangeEnd: session.loadedRangeEnd ?? session.messages.length,
-        lastKnownMessageCount: session.lastKnownMessageCount ?? session.messageCount ?? session.messages.length
+        lastKnownMessageCount:
+          session.lastKnownMessageCount ?? session.messageCount ?? session.messages.length
       }
       set((state) => {
         state.sessions.push(normalizedSession)
@@ -1741,6 +1770,7 @@ export const useChatStore = create<ChatStore>()(
       for (const id of ids) {
         agentState.setSessionStatus(id, null)
         agentState.clearSessionData(id)
+        useBackgroundSessionStore.getState().clearSession(id)
         teamState.clearSessionTeam(id)
         const plan = planState.getPlanBySession(id)
         if (plan) planState.deletePlan(plan.id)
@@ -1771,7 +1801,8 @@ export const useChatStore = create<ChatStore>()(
       dbUpdateSession(sessionId, { updatedAt: now })
       useAgentStore.getState().setSessionStatus(sessionId, null)
       useAgentStore.getState().clearSessionData(sessionId)
-      useAgentStore.getState().clearToolCalls()
+      useBackgroundSessionStore.getState().clearSession(sessionId)
+      useAgentStore.getState().resetLiveSessionExecution(sessionId)
       useTeamStore.getState().clearSessionTeam(sessionId)
       const plan = usePlanStore.getState().getPlanBySession(sessionId)
       if (plan) usePlanStore.getState().deletePlan(plan.id)

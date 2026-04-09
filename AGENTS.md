@@ -12,19 +12,20 @@
 
 ## Architecture Snapshot
 
-The app is split into four layers: Electron main process, preload bridge, React renderer, and the .NET sidecar. Keep process boundaries explicit: system access stays in `src/main`, UI state stays in `src/renderer/src`, and shared types go through `src/shared`.
-
-## Build, Test, and Development Commands
+The app is split into four layers: Electron main process, preload bridge, React renderer, and the .NET sidecar. Keep process boundaries explicit: system access stays in `src/main`, UI state stays in `src/renderer/src`, and shared types go through `## Build, Test, and Development Commands
 
 - `npm install` — install root dependencies.
 - `npm run dev` — start Electron + Vite with hot reload.
 - `npm run start` — preview the built desktop app.
-- `npm run lint` / `npm run typecheck` — baseline validation for every change.
+- `npm run lint` — run ESLint with caching.
+- `npm run typecheck` — run both `typecheck:node` and `typecheck:web` (TypeScript strict checks for main/preload and renderer).
+- `npm run format` — auto-format with Prettier.
 - `npm run build` — typecheck, then build the app.
-- `npm run build:unpack` — create an unpacked app for local packaging checks.
-- `npm run build:sidecar[:win|:mac|:linux]` — build the .NET sidecar.
-- `npm run build:{win|mac|linux}` — package platform builds.
-- Docs: `npm --prefix docs run dev`, `npm --prefix docs run build`, `npm --prefix docs run types:check`.
+- `npm run build:unpack` — build + sidecar + unpacked app for local packaging checks.
+- `npm run build:sidecar[:win|:mac|:linux]` — build the .NET sidecar for a specific platform.
+- `npm run benchmark:sidecar` — run sidecar benchmark via `dotnet run`.
+- `npm run build:{win|mac|linux}` — full package for the target platform.
+- Docs: `npm --prefix docs run dev`, `npm --prefix docs run build`, `npm --prefix docs run types:check`.fix docs run types:check`.
 
 ## Coding Style & Naming Conventions
 

@@ -6,9 +6,13 @@ import type {
   TeamRuntimePermissionMode
 } from '../../../../../shared/team-runtime-types'
 
-// --- Team Member ---
-
-export type TeamMemberStatus = 'working' | 'idle' | 'waiting' | 'stopped'
+export type TeamMemberStatus =
+  | 'working'
+  | 'idle'
+  | 'waiting'
+  | 'stopped'
+  | 'completed'
+  | 'failed'
 
 export interface TeamMember {
   id: string
@@ -24,11 +28,8 @@ export interface TeamMember {
   streamingText: string
   startedAt: number
   completedAt: number | null
-  /** Accumulated token usage across all iterations of this teammate's agent loop */
   usage?: TokenUsage
 }
-
-// --- Team Task ---
 
 export type TeamTaskStatus = 'pending' | 'in_progress' | 'completed'
 
@@ -40,11 +41,8 @@ export interface TeamTask {
   owner: string | null
   dependsOn: string[]
   activeForm?: string
-  /** Final result text captured for the completed task */
   report?: string
 }
-
-// --- Team Message ---
 
 export type TeamMessageType = TeamRuntimeMessageType
 
@@ -58,11 +56,10 @@ export interface TeamMessage {
   timestamp: number
 }
 
-// --- Team Events (yielded to UI) ---
-
 export type TeamEvent =
   | {
       type: 'team_start'
+      sessionId?: string
       teamName: string
       description: string
       runtimePath?: string
@@ -72,10 +69,10 @@ export type TeamEvent =
       teamAllowedPaths?: string[]
       createdAt?: number
     }
-  | { type: 'team_member_add'; member: TeamMember }
-  | { type: 'team_member_update'; memberId: string; patch: Partial<TeamMember> }
-  | { type: 'team_member_remove'; memberId: string }
-  | { type: 'team_task_add'; task: TeamTask }
-  | { type: 'team_task_update'; taskId: string; patch: Partial<TeamTask> }
-  | { type: 'team_message'; message: TeamMessage }
-  | { type: 'team_end' }
+  | { type: 'team_member_add'; sessionId?: string; member: TeamMember }
+  | { type: 'team_member_update'; sessionId?: string; memberId: string; patch: Partial<TeamMember> }
+  | { type: 'team_member_remove'; sessionId?: string; memberId: string }
+  | { type: 'team_task_add'; sessionId?: string; task: TeamTask }
+  | { type: 'team_task_update'; sessionId?: string; taskId: string; patch: Partial<TeamTask> }
+  | { type: 'team_message'; sessionId?: string; message: TeamMessage }
+  | { type: 'team_end'; sessionId?: string }

@@ -2,6 +2,16 @@ import { ipcMain, BrowserWindow } from 'electron'
 import { safeSendToWindow } from '../window-ipc'
 import { spawn, type ChildProcess } from 'child_process'
 
+const PROCESS_OUTPUT_ENCODING = process.platform === 'win32' ? 'gb18030' : 'utf-8'
+
+function createOutputDecoder(): TextDecoder {
+  return new TextDecoder(PROCESS_OUTPUT_ENCODING)
+}
+
+function decodeOutputChunk(decoder: TextDecoder, data: Buffer): string {
+  return decoder.decode(data, { stream: true })
+}
+
 interface ProcessMetadata {
   source?: string
   sessionId?: string
@@ -35,14 +45,15 @@ export function registerProcessManagerHandlers(): void {
     'process:spawn',
     async (_event, args: { command: string; cwd?: string; metadata?: ProcessMetadata }) => {
       const id = `proc-${nextId++}`
-      const isWin = process.platform === 'win32'
-      const command = isWin ? `chcp 65001 >nul & ${args.command}` : args.command
-      const child = spawn(command, {
+      const child = spawn(args.command, {
         cwd: args.cwd || process.cwd(),
         shell: true,
         stdio: ['pipe', 'pipe', 'pipe'],
-        ...(isWin ? {} : { detached: true })
+        ...(process.platform === 'win32' ? {} : { detached: true })
       })
+
+      const stdoutDecoder = createOutputDecoder()
+      const stderrDecoder = createOutputDecoder()
 
       const managed: ManagedProcess = {
         id,
@@ -55,8 +66,9 @@ export function registerProcessManagerHandlers(): void {
       }
       processes.set(id, managed)
 
-      const handleData = (data: Buffer): void => {
-        const chunk = data.toString('utf8')
+      const handleData = (stream: 'stdout' | 'stderr', data: Buffer): void => {
+        const decoder = stream === 'stdout' ? stdoutDecoder : stderrDecoder
+        const chunk = decodeOutputChunk(decoder, data)
         managed.output.push(chunk)
         if (managed.output.length > 500) managed.output.shift()
 
@@ -76,11 +88,12 @@ export function registerProcessManagerHandlers(): void {
         }
       }
 
-      child.stdout?.on('data', handleData)
-      child.stderr?.on('data', handleData)
+      child.stdout?.on('data', (data: Buffer) => handleData('stdout', data))
+      child.stderr?.on('data', (data: Buffer) => handleData('stderr', data))
 
       child.on('exit', (code) => {
         managed.exitCode = code
+        managed.output.push(stdoutDecoder.decode(), stderrDecoder.decode())
         const win = BrowserWindow.getAllWindows()[0]
         if (win) {
           safeSendToWindow(win, 'process:output', {
@@ -97,6 +110,7 @@ export function registerProcessManagerHandlers(): void {
       })
 
       child.on('error', (err) => {
+        managed.output.push(stdoutDecoder.decode(), stderrDecoder.decode())
         const win = BrowserWindow.getAllWindows()[0]
         if (win) {
           safeSendToWindow(win, 'process:output', {
@@ -128,11 +142,13 @@ export function registerProcessManagerHandlers(): void {
             windowsHide: true
           })
           let stderr = ''
+          const stderrDecoder = createOutputDecoder()
           killer.stderr?.on('data', (data: Buffer) => {
-            stderr += data.toString('utf8')
+            stderr += decodeOutputChunk(stderrDecoder, data)
           })
           killer.on('error', (err) => resolve({ ok: false, err: err.message }))
           killer.on('close', (code) => {
+            stderr += stderrDecoder.decode()
             if (code === 0) resolve({ ok: true })
             else resolve({ ok: false, err: stderr.trim() || `taskkill exited with code ${code}` })
           })

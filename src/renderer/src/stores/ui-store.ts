@@ -3,6 +3,8 @@ import {
   LEFT_SIDEBAR_DEFAULT_WIDTH,
   clampLeftSidebarWidth
 } from '@renderer/components/layout/right-panel-defs'
+import { parseChatRoute, replaceChatRoute } from '@renderer/lib/chat-route'
+import { useChatStore } from '@renderer/stores/chat-store'
 
 export type AppMode = 'chat' | 'clarify' | 'cowork' | 'code' | 'acp'
 
@@ -20,7 +22,7 @@ export type ChatView = 'home' | 'project' | 'archive' | 'channels' | 'git' | 'se
 
 export type RightPanelTab =
   | 'steps'
-  | 'team'
+  | 'orchestration'
   | 'artifacts'
   | 'context'
   | 'files'
@@ -28,13 +30,12 @@ export type RightPanelTab =
   | 'preview'
   | 'terminal'
   | 'subagents'
+  | 'team'
   | 'acp'
 export type RightPanelSection = 'execution' | 'resources' | 'collaboration' | 'monitoring'
 
 export type PreviewSource = 'file' | 'dev-server' | 'markdown'
-
 export type AutoModelRoute = 'main' | 'fast'
-
 export type AutoModelTaskType =
   | 'rewrite'
   | 'summarize'
@@ -49,9 +50,7 @@ export type AutoModelTaskType =
   | 'implement'
   | 'analyze'
   | 'other'
-
 export type AutoModelConfidence = 'high' | 'medium' | 'low'
-
 export type AutoModelDecisionSource =
   | 'classifier'
   | 'legacy-classifier'
@@ -83,9 +82,7 @@ export interface PreviewPanelState {
   sshConnectionId?: string
   port?: number
   projectDir?: string
-  /** In-memory markdown content (used when source is 'markdown') */
   markdownContent?: string
-  /** Title for markdown preview */
   markdownTitle?: string
 }
 
@@ -118,13 +115,139 @@ export type DetailPanelContent =
   | { type: 'document'; title: string; content: string }
   | { type: 'report'; title: string; data: unknown }
 
+interface UIStore {
+  mode: AppMode
+  miniSessionWindowSessionId: string | null
+  miniSessionWindowOpen: boolean
+  setMode: (mode: AppMode) => void
+  openMiniSessionWindow: (sessionId: string) => void
+  closeMiniSessionWindow: () => void
+  activeNavItem: NavItem
+  setActiveNavItem: (item: NavItem) => void
+  leftSidebarOpen: boolean
+  leftSidebarWidth: number
+  toggleLeftSidebar: () => void
+  setLeftSidebarOpen: (open: boolean) => void
+  setLeftSidebarWidth: (width: number) => void
+  rightPanelOpen: boolean
+  toggleRightPanel: () => void
+  setRightPanelOpen: (open: boolean) => void
+  rightPanelTab: RightPanelTab
+  setRightPanelTab: (tab: RightPanelTab) => void
+  rightPanelSection: RightPanelSection
+  setRightPanelSection: (section: RightPanelSection) => void
+  rightPanelWidth: number
+  setRightPanelWidth: (width: number) => void
+  isHoveringRightPanel: boolean
+  setIsHoveringRightPanel: (hovering: boolean) => void
+  settingsOpen: boolean
+  setSettingsOpen: (open: boolean) => void
+  settingsPageOpen: boolean
+  settingsTab: SettingsTab
+  openSettingsPage: (tab?: SettingsTab) => void
+  closeSettingsPage: () => void
+  setSettingsTab: (tab: SettingsTab) => void
+  skillsPageOpen: boolean
+  openSkillsPage: () => void
+  closeSkillsPage: () => void
+  resourcesPageOpen: boolean
+  openResourcesPage: () => void
+  closeResourcesPage: () => void
+  translatePageOpen: boolean
+  openTranslatePage: () => void
+  closeTranslatePage: () => void
+  drawPageOpen: boolean
+  openDrawPage: () => void
+  closeDrawPage: () => void
+  sshPageOpen: boolean
+  openSshPage: () => void
+  closeSshPage: () => void
+  tasksPageOpen: boolean
+  openTasksPage: () => void
+  closeTasksPage: () => void
+  shortcutsOpen: boolean
+  setShortcutsOpen: (open: boolean) => void
+  conversationGuideOpen: boolean
+  setConversationGuideOpen: (open: boolean) => void
+  pendingInsertText: string | null
+  setPendingInsertText: (text: string | null) => void
+  detailPanelOpen: boolean
+  detailPanelContent: DetailPanelContent | null
+  openDetailPanel: (content: DetailPanelContent) => void
+  closeDetailPanel: () => void
+  previewPanelOpen: boolean
+  previewPanelState: PreviewPanelState | null
+  openFilePreview: (
+    filePath: string,
+    viewMode?: 'preview' | 'code',
+    sshConnectionId?: string,
+    sessionId?: string | null
+  ) => void
+  openDevServerPreview: (projectDir: string, port: number, sessionId?: string | null) => void
+  openMarkdownPreview: (title: string, content: string, sessionId?: string | null) => void
+  closePreviewPanel: (sessionId?: string | null) => void
+  setPreviewViewMode: (mode: 'preview' | 'code', sessionId?: string | null) => void
+  activeScopedSessionId: string | null
+  syncSessionScopedState: (sessionId: string | null) => void
+  messageListViewStatesBySession: Record<string, MessageListViewState | undefined>
+  setMessageListViewState: (sessionId: string, state: MessageListViewState | null) => void
+  getMessageListViewState: (sessionId?: string | null) => MessageListViewState | null
+  releaseDormantSessionUiState: (sessionId?: string | null) => void
+  autoModelSelectionsBySession: Record<string, AutoModelSelectionStatus | null>
+  autoModelHighConfidenceSelectionsBySession: Record<string, AutoModelSelectionStatus | null>
+  autoModelRoutingStatesBySession: Record<string, AutoModelRoutingState>
+  setAutoModelSelection: (sessionId: string, status: AutoModelSelectionStatus | null) => void
+  getAutoModelSelection: (sessionId?: string | null) => AutoModelSelectionStatus | null
+  setAutoModelHighConfidenceSelection: (
+    sessionId: string,
+    status: AutoModelSelectionStatus | null
+  ) => void
+  getAutoModelHighConfidenceSelection: (sessionId?: string | null) => AutoModelSelectionStatus | null
+  setAutoModelRoutingState: (sessionId: string, status: AutoModelRoutingState) => void
+  getAutoModelRoutingState: (sessionId?: string | null) => AutoModelRoutingState
+  selectedFiles: string[]
+  setSelectedFiles: (files: string[]) => void
+  toggleFileSelection: (filePath: string) => void
+  clearSelectedFiles: () => void
+  selectedOrchestrationRunId: string | null
+  selectedOrchestrationMemberId: string | null
+  orchestrationConsoleOpen: boolean
+  orchestrationConsoleView: 'overview' | 'member' | 'tasks'
+  openOrchestrationPanel: (runId?: string | null, memberId?: string | null) => void
+  openOrchestrationMember: (runId: string, memberId?: string | null) => void
+  closeOrchestrationPanel: () => void
+  openSubAgentsPanel: (toolUseId?: string | null) => void
+  subAgentExecutionDetailOpen: boolean
+  subAgentExecutionDetailToolUseId: string | null
+  subAgentExecutionDetailInlineText: string | null
+  openSubAgentExecutionDetail: (toolUseId: string, inlineText?: string | null) => void
+  closeSubAgentExecutionDetail: () => void
+  selectedSubAgentToolUseId: string | null
+  setSelectedSubAgentToolUseId: (toolUseId: string | null) => void
+  setSelectedOrchestrationRunId: (runId: string | null) => void
+  setSelectedOrchestrationMemberId: (memberId: string | null) => void
+  setOrchestrationConsoleView: (view: 'overview' | 'member' | 'tasks') => void
+  planMode: boolean
+  enterPlanMode: (sessionId?: string | null) => void
+  exitPlanMode: (sessionId?: string | null) => void
+  planModesBySession: Record<string, boolean>
+  isPlanModeEnabled: (sessionId?: string | null) => boolean
+  chatView: ChatView
+  navigateToHome: () => void
+  navigateToProject: (projectId?: string | null) => void
+  navigateToArchive: (projectId?: string | null) => void
+  navigateToChannels: (projectId?: string | null) => void
+  navigateToGit: (projectId?: string | null) => void
+  navigateToSession: (sessionId?: string | null) => void
+  applyChatRouteFromLocation: () => void
+}
+
 function buildFilePreviewState(
   filePath: string,
   viewMode?: 'preview' | 'code',
   sshConnectionId?: string
 ): PreviewPanelState {
-  const ext =
-    filePath.lastIndexOf('.') >= 0 ? filePath.slice(filePath.lastIndexOf('.')).toLowerCase() : ''
+  const ext = filePath.lastIndexOf('.') >= 0 ? filePath.slice(filePath.lastIndexOf('.')).toLowerCase() : ''
   const previewExts = new Set(['.html', '.htm'])
   const spreadsheetExts = new Set(['.csv', '.tsv', '.xls', '.xlsx'])
   const markdownExts = new Set(['.md', '.mdx', '.markdown'])
@@ -150,311 +273,75 @@ function buildFilePreviewState(
   }
 }
 
-function resolveScopedSessionId(
-  explicitSessionId: string | null | undefined,
-  currentSessionId: string | null
-): string | null {
-  return explicitSessionId ?? currentSessionId
-}
-
-function getResidentSessionIds(
-  activeSessionId: string | null,
-  miniSessionWindowOpen: boolean,
-  miniSessionWindowSessionId: string | null
-): Set<string> {
-  const residentSessionIds = new Set<string>()
-  if (activeSessionId) {
-    residentSessionIds.add(activeSessionId)
-  }
-  if (miniSessionWindowOpen && miniSessionWindowSessionId) {
-    residentSessionIds.add(miniSessionWindowSessionId)
-  }
-  return residentSessionIds
-}
-
-interface UIStore {
-  mode: AppMode
-  miniSessionWindowSessionId: string | null
-  miniSessionWindowOpen: boolean
-
-  setMode: (mode: AppMode) => void
-  openMiniSessionWindow: (sessionId: string) => void
-  closeMiniSessionWindow: () => void
-
-  activeNavItem: NavItem
-  setActiveNavItem: (item: NavItem) => void
-
-  leftSidebarOpen: boolean
-  leftSidebarWidth: number
-
-  toggleLeftSidebar: () => void
-
-  setLeftSidebarOpen: (open: boolean) => void
-  setLeftSidebarWidth: (width: number) => void
-
-  rightPanelOpen: boolean
-
-  toggleRightPanel: () => void
-
-  setRightPanelOpen: (open: boolean) => void
-
-  rightPanelTab: RightPanelTab
-
-  setRightPanelTab: (tab: RightPanelTab) => void
-
-  rightPanelSection: RightPanelSection
-
-  setRightPanelSection: (section: RightPanelSection) => void
-
-  rightPanelWidth: number
-
-  setRightPanelWidth: (width: number) => void
-
-  isHoveringRightPanel: boolean
-  setIsHoveringRightPanel: (hovering: boolean) => void
-
-  settingsOpen: boolean
-
-  setSettingsOpen: (open: boolean) => void
-
-  settingsPageOpen: boolean
-  settingsTab: SettingsTab
-  openSettingsPage: (tab?: SettingsTab) => void
-  closeSettingsPage: () => void
-  setSettingsTab: (tab: SettingsTab) => void
-
-  skillsPageOpen: boolean
-  openSkillsPage: () => void
-  closeSkillsPage: () => void
-
-  resourcesPageOpen: boolean
-  openResourcesPage: () => void
-  closeResourcesPage: () => void
-
-  translatePageOpen: boolean
-  openTranslatePage: () => void
-  closeTranslatePage: () => void
-
-  drawPageOpen: boolean
-  openDrawPage: () => void
-  closeDrawPage: () => void
-
-  sshPageOpen: boolean
-  openSshPage: () => void
-  closeSshPage: () => void
-
-  tasksPageOpen: boolean
-  openTasksPage: () => void
-  closeTasksPage: () => void
-
-  shortcutsOpen: boolean
-
-  setShortcutsOpen: (open: boolean) => void
-
-  conversationGuideOpen: boolean
-  setConversationGuideOpen: (open: boolean) => void
-
-  /** Text to insert into chat input (consumed by InputArea) */
-
-  pendingInsertText: string | null
-
-  setPendingInsertText: (text: string | null) => void
-
-  /** Detail panel (between chat and right panel) */
-
-  detailPanelOpen: boolean
-
-  detailPanelContent: DetailPanelContent | null
-
-  openDetailPanel: (content: DetailPanelContent) => void
-
-  closeDetailPanel: () => void
-
-  /** Preview panel */
-  previewPanelOpen: boolean
-  previewPanelState: PreviewPanelState | null
-  previewPanelsBySession: Record<string, PreviewPanelState | null>
-  openFilePreview: (
-    filePath: string,
-    viewMode?: 'preview' | 'code',
-    sshConnectionId?: string,
-    sessionId?: string | null
-  ) => void
-  openDevServerPreview: (projectDir: string, port: number, sessionId?: string | null) => void
-  openMarkdownPreview: (title: string, content: string, sessionId?: string | null) => void
-  closePreviewPanel: (sessionId?: string | null) => void
-  setPreviewViewMode: (mode: 'preview' | 'code', sessionId?: string | null) => void
-
-  /** SubAgent panel */
-  openSubAgentsPanel: (toolUseId?: string | null) => void
-  subAgentExecutionDetailOpen: boolean
-  subAgentExecutionDetailToolUseId: string | null
-  subAgentExecutionDetailInlineText: string | null
-  openSubAgentExecutionDetail: (toolUseId: string, inlineText?: string | null) => void
-  closeSubAgentExecutionDetail: () => void
-
-  /** Session-scoped UI state */
-  activeScopedSessionId: string | null
-  syncSessionScopedState: (sessionId: string | null) => void
-  messageListViewStatesBySession: Record<string, MessageListViewState | undefined>
-  setMessageListViewState: (sessionId: string, state: MessageListViewState | null) => void
-  getMessageListViewState: (sessionId?: string | null) => MessageListViewState | null
-  releaseDormantSessionUiState: (sessionId?: string | null) => void
-  autoModelSelectionsBySession: Record<string, AutoModelSelectionStatus | null>
-  autoModelHighConfidenceSelectionsBySession: Record<string, AutoModelSelectionStatus | null>
-  autoModelRoutingStatesBySession: Record<string, AutoModelRoutingState>
-  setAutoModelSelection: (sessionId: string, status: AutoModelSelectionStatus | null) => void
-  getAutoModelSelection: (sessionId?: string | null) => AutoModelSelectionStatus | null
-  setAutoModelHighConfidenceSelection: (
-    sessionId: string,
-    status: AutoModelSelectionStatus | null
-  ) => void
-  getAutoModelHighConfidenceSelection: (
-    sessionId?: string | null
-  ) => AutoModelSelectionStatus | null
-  setAutoModelRoutingState: (sessionId: string, status: AutoModelRoutingState) => void
-  getAutoModelRoutingState: (sessionId?: string | null) => AutoModelRoutingState
-
-  /** Selected files in file tree panel */
-  selectedFiles: string[]
-  setSelectedFiles: (files: string[]) => void
-  toggleFileSelection: (filePath: string) => void
-  clearSelectedFiles: () => void
-
-  /** Focused SubAgent in right panel */
-  selectedSubAgentToolUseId: string | null
-  setSelectedSubAgentToolUseId: (toolUseId: string | null) => void
-
-  /** Plan mode state */
-  planMode: boolean
-  planModesBySession: Record<string, boolean>
-  isPlanModeEnabled: (sessionId?: string | null) => boolean
-  enterPlanMode: (sessionId?: string | null) => void
-  exitPlanMode: (sessionId?: string | null) => void
-
-  /** Chat view navigation */
-  chatView: ChatView
-  navigateToHome: () => void
-  navigateToProject: () => void
-  navigateToArchive: () => void
-  navigateToChannels: () => void
-  navigateToGit: () => void
-  navigateToSession: () => void
-}
-
 export const useUIStore = create<UIStore>((set, get) => ({
   mode: 'cowork',
   miniSessionWindowSessionId: null,
   miniSessionWindowOpen: false,
-  openMiniSessionWindow: (sessionId) =>
-    set({ miniSessionWindowSessionId: sessionId, miniSessionWindowOpen: true }),
-  closeMiniSessionWindow: () =>
-    set({ miniSessionWindowSessionId: null, miniSessionWindowOpen: false }),
-
   setMode: (mode) =>
     set((state) => ({
       mode,
       rightPanelOpen: mode === 'cowork' || mode === 'acp',
-      rightPanelTab:
-        mode === 'acp' ? 'acp' : state.rightPanelTab === 'acp' ? 'steps' : state.rightPanelTab,
+      rightPanelTab: mode === 'acp' ? 'acp' : state.rightPanelTab === 'acp' ? 'steps' : state.rightPanelTab,
       rightPanelSection: mode === 'acp' ? 'monitoring' : state.rightPanelSection,
       leftSidebarOpen: mode === 'cowork' || mode === 'acp' ? false : state.leftSidebarOpen
     })),
-
+  openMiniSessionWindow: (sessionId) => set({ miniSessionWindowSessionId: sessionId, miniSessionWindowOpen: true }),
+  closeMiniSessionWindow: () => set({ miniSessionWindowSessionId: null, miniSessionWindowOpen: false }),
   activeNavItem: 'chat',
-  setActiveNavItem: (item) =>
-    set({ activeNavItem: item, leftSidebarOpen: true, rightPanelOpen: false }),
-
+  setActiveNavItem: (item) => set({ activeNavItem: item, leftSidebarOpen: true, rightPanelOpen: false }),
   leftSidebarOpen: true,
   leftSidebarWidth: LEFT_SIDEBAR_DEFAULT_WIDTH,
-
   toggleLeftSidebar: () =>
-    set((state) => {
-      const nextOpen = !state.leftSidebarOpen
-      return {
-        leftSidebarOpen: nextOpen,
-        rightPanelOpen: nextOpen ? false : state.rightPanelOpen
-      }
-    }),
-
-  setLeftSidebarOpen: (open) =>
     set((state) => ({
-      leftSidebarOpen: open,
-      rightPanelOpen: open ? false : state.rightPanelOpen
+      leftSidebarOpen: !state.leftSidebarOpen,
+      rightPanelOpen: state.leftSidebarOpen ? state.rightPanelOpen : false
     })),
+  setLeftSidebarOpen: (open) => set((state) => ({ leftSidebarOpen: open, rightPanelOpen: open ? false : state.rightPanelOpen })),
   setLeftSidebarWidth: (width) => set({ leftSidebarWidth: clampLeftSidebarWidth(width) }),
-
   rightPanelOpen: false,
-
-  toggleRightPanel: () =>
-    set((state) => {
-      const nextOpen = !state.rightPanelOpen
-      return {
-        rightPanelOpen: nextOpen,
-        leftSidebarOpen: nextOpen ? false : state.leftSidebarOpen
-      }
-    }),
-
-  setRightPanelOpen: (open) =>
-    set((state) => ({
-      rightPanelOpen: open,
-      leftSidebarOpen: open ? false : state.leftSidebarOpen
-    })),
-
+  toggleRightPanel: () => set((state) => ({ rightPanelOpen: !state.rightPanelOpen, leftSidebarOpen: state.rightPanelOpen ? state.leftSidebarOpen : false })),
+  setRightPanelOpen: (open) => set((state) => ({ rightPanelOpen: open, leftSidebarOpen: open ? false : state.leftSidebarOpen })),
   rightPanelTab: 'steps',
-
   setRightPanelTab: (tab) => set({ rightPanelTab: tab }),
-
   rightPanelSection: 'execution',
-
   setRightPanelSection: (section) => set({ rightPanelSection: section }),
-
   rightPanelWidth: 384,
-
   setRightPanelWidth: (width) => set({ rightPanelWidth: width }),
-
   isHoveringRightPanel: false,
   setIsHoveringRightPanel: (hovering) => set({ isHoveringRightPanel: hovering }),
-
   settingsOpen: false,
-
   setSettingsOpen: (open) => set({ settingsOpen: open }),
-
   settingsPageOpen: false,
   settingsTab: 'general',
   openSettingsPage: (tab) =>
-    set((state) => ({
+    set({
       settingsPageOpen: true,
       settingsTab: tab ?? 'general',
-      leftSidebarOpen: state.leftSidebarOpen,
       skillsPageOpen: false,
       resourcesPageOpen: false,
       translatePageOpen: false,
       drawPageOpen: false,
       sshPageOpen: false,
       tasksPageOpen: false
-    })),
+    }),
   closeSettingsPage: () => set({ settingsPageOpen: false }),
   setSettingsTab: (tab) => set({ settingsTab: tab }),
-
   skillsPageOpen: false,
   openSkillsPage: () =>
-    set((state) => ({
+    set({
       activeNavItem: 'skills',
       skillsPageOpen: true,
-      resourcesPageOpen: false,
       settingsPageOpen: false,
+      resourcesPageOpen: false,
       translatePageOpen: false,
       drawPageOpen: false,
       sshPageOpen: false,
-      tasksPageOpen: false,
-      leftSidebarOpen: state.leftSidebarOpen
-    })),
+      tasksPageOpen: false
+    }),
   closeSkillsPage: () => set({ skillsPageOpen: false }),
-
   resourcesPageOpen: false,
   openResourcesPage: () =>
-    set((state) => ({
+    set({
       activeNavItem: 'resources',
       resourcesPageOpen: true,
       settingsPageOpen: false,
@@ -462,14 +349,12 @@ export const useUIStore = create<UIStore>((set, get) => ({
       translatePageOpen: false,
       drawPageOpen: false,
       sshPageOpen: false,
-      tasksPageOpen: false,
-      leftSidebarOpen: state.leftSidebarOpen
-    })),
+      tasksPageOpen: false
+    }),
   closeResourcesPage: () => set({ resourcesPageOpen: false }),
-
   translatePageOpen: false,
   openTranslatePage: () =>
-    set((state) => ({
+    set({
       activeNavItem: 'translate',
       translatePageOpen: true,
       settingsPageOpen: false,
@@ -477,14 +362,12 @@ export const useUIStore = create<UIStore>((set, get) => ({
       resourcesPageOpen: false,
       drawPageOpen: false,
       sshPageOpen: false,
-      tasksPageOpen: false,
-      leftSidebarOpen: state.leftSidebarOpen
-    })),
+      tasksPageOpen: false
+    }),
   closeTranslatePage: () => set({ translatePageOpen: false }),
-
   drawPageOpen: false,
   openDrawPage: () =>
-    set((state) => ({
+    set({
       activeNavItem: 'draw',
       drawPageOpen: true,
       settingsPageOpen: false,
@@ -492,14 +375,12 @@ export const useUIStore = create<UIStore>((set, get) => ({
       resourcesPageOpen: false,
       translatePageOpen: false,
       sshPageOpen: false,
-      tasksPageOpen: false,
-      leftSidebarOpen: state.leftSidebarOpen
-    })),
+      tasksPageOpen: false
+    }),
   closeDrawPage: () => set({ drawPageOpen: false }),
-
   sshPageOpen: false,
   openSshPage: () =>
-    set((state) => ({
+    set({
       activeNavItem: 'ssh',
       sshPageOpen: true,
       settingsPageOpen: false,
@@ -507,14 +388,12 @@ export const useUIStore = create<UIStore>((set, get) => ({
       resourcesPageOpen: false,
       translatePageOpen: false,
       drawPageOpen: false,
-      tasksPageOpen: false,
-      leftSidebarOpen: state.leftSidebarOpen
-    })),
+      tasksPageOpen: false
+    }),
   closeSshPage: () => set({ sshPageOpen: false }),
-
   tasksPageOpen: false,
   openTasksPage: () =>
-    set((state) => ({
+    set({
       activeNavItem: 'tasks',
       tasksPageOpen: true,
       settingsPageOpen: false,
@@ -522,564 +401,149 @@ export const useUIStore = create<UIStore>((set, get) => ({
       resourcesPageOpen: false,
       translatePageOpen: false,
       drawPageOpen: false,
-      sshPageOpen: false,
-      leftSidebarOpen: state.leftSidebarOpen
-    })),
+      sshPageOpen: false
+    }),
   closeTasksPage: () => set({ tasksPageOpen: false }),
-
   shortcutsOpen: false,
-
   setShortcutsOpen: (open) => set({ shortcutsOpen: open }),
-
   conversationGuideOpen: false,
   setConversationGuideOpen: (open) => set({ conversationGuideOpen: open }),
-
   pendingInsertText: null,
-
   setPendingInsertText: (text) => set({ pendingInsertText: text }),
-
   detailPanelOpen: false,
-
   detailPanelContent: null,
-
   openDetailPanel: (content) =>
-    set({
-      detailPanelOpen: true,
-      detailPanelContent: content,
-      rightPanelTab: 'preview',
-      rightPanelOpen: true,
-      leftSidebarOpen: false
-    }),
-
+    set({ detailPanelOpen: true, detailPanelContent: content, rightPanelTab: 'preview', rightPanelOpen: true, leftSidebarOpen: false }),
   closeDetailPanel: () => set({ detailPanelOpen: false, detailPanelContent: null }),
-
   previewPanelOpen: false,
   previewPanelState: null,
-  previewPanelsBySession: {},
+  openFilePreview: (filePath, viewMode, sshConnectionId) => set({ previewPanelOpen: true, previewPanelState: buildFilePreviewState(filePath, viewMode, sshConnectionId) }),
+  openDevServerPreview: (projectDir, port) =>
+    set({ previewPanelOpen: true, previewPanelState: { source: 'dev-server', filePath: '', viewMode: 'preview', viewerType: 'dev-server', port, projectDir }, rightPanelTab: 'preview', rightPanelOpen: true, leftSidebarOpen: false }),
+  openMarkdownPreview: (title, content) =>
+    set({ previewPanelOpen: true, previewPanelState: { source: 'markdown', filePath: '', viewMode: 'preview', viewerType: 'markdown', markdownContent: content, markdownTitle: title }, rightPanelTab: 'preview', rightPanelOpen: true, leftSidebarOpen: false }),
+  closePreviewPanel: () => set({ previewPanelOpen: false, previewPanelState: null }),
+  setPreviewViewMode: (mode) => set((state) => ({ previewPanelState: state.previewPanelState ? { ...state.previewPanelState, viewMode: mode } : null })),
   activeScopedSessionId: null,
+  syncSessionScopedState: (sessionId) => set({ activeScopedSessionId: sessionId }),
   messageListViewStatesBySession: {},
+  setMessageListViewState: (sessionId, state) =>
+    set((current) => ({
+      messageListViewStatesBySession: state
+        ? { ...current.messageListViewStatesBySession, [sessionId]: state }
+        : Object.fromEntries(Object.entries(current.messageListViewStatesBySession).filter(([key]) => key !== sessionId))
+    })),
+  getMessageListViewState: (sessionId) => (sessionId ? get().messageListViewStatesBySession[sessionId] ?? null : null),
+  releaseDormantSessionUiState: () => undefined,
   autoModelSelectionsBySession: {},
   autoModelHighConfidenceSelectionsBySession: {},
   autoModelRoutingStatesBySession: {},
-  syncSessionScopedState: (sessionId) =>
-    set((state) => {
-      const scopedPreviewState = sessionId
-        ? (state.previewPanelsBySession[sessionId] ?? null)
-        : null
-      const nextState = {
-        activeScopedSessionId: sessionId,
-        planMode: sessionId ? !!state.planModesBySession[sessionId] : false,
-        previewPanelOpen: !!scopedPreviewState,
-        previewPanelState: scopedPreviewState
-      }
-      const residentSessionIds = getResidentSessionIds(
-        sessionId,
-        state.miniSessionWindowOpen,
-        state.miniSessionWindowSessionId
-      )
-
-      for (const targetSessionId of Object.keys(state.previewPanelsBySession)) {
-        if (!residentSessionIds.has(targetSessionId)) {
-          delete state.previewPanelsBySession[targetSessionId]
-        }
-      }
-
-      for (const targetSessionId of Object.keys(state.messageListViewStatesBySession)) {
-        if (!residentSessionIds.has(targetSessionId)) {
-          delete state.messageListViewStatesBySession[targetSessionId]
-        }
-      }
-
-      for (const targetSessionId of Object.keys(state.autoModelSelectionsBySession)) {
-        if (!residentSessionIds.has(targetSessionId)) {
-          delete state.autoModelSelectionsBySession[targetSessionId]
-        }
-      }
-
-      for (const targetSessionId of Object.keys(state.autoModelHighConfidenceSelectionsBySession)) {
-        if (!residentSessionIds.has(targetSessionId)) {
-          delete state.autoModelHighConfidenceSelectionsBySession[targetSessionId]
-        }
-      }
-
-      for (const targetSessionId of Object.keys(state.autoModelRoutingStatesBySession)) {
-        if (!residentSessionIds.has(targetSessionId)) {
-          delete state.autoModelRoutingStatesBySession[targetSessionId]
-        }
-      }
-
-      for (const targetSessionId of Object.keys(state.planModesBySession)) {
-        if (!residentSessionIds.has(targetSessionId)) {
-          delete state.planModesBySession[targetSessionId]
-        }
-      }
-
-      return nextState
-    }),
-  setMessageListViewState: (sessionId, state) =>
-    set((currentState) => {
-      const nextMessageListViewStatesBySession = { ...currentState.messageListViewStatesBySession }
-      if (state) {
-        nextMessageListViewStatesBySession[sessionId] = state
-      } else {
-        delete nextMessageListViewStatesBySession[sessionId]
-      }
-
-      return { messageListViewStatesBySession: nextMessageListViewStatesBySession }
-    }),
-  getMessageListViewState: (sessionId) => {
-    const targetSessionId = resolveScopedSessionId(sessionId, get().activeScopedSessionId)
-    if (!targetSessionId) return null
-    return get().messageListViewStatesBySession[targetSessionId] ?? null
-  },
-  releaseDormantSessionUiState: (sessionId) =>
-    set((state) => {
-      const residentSessionIds = getResidentSessionIds(
-        sessionId ?? state.activeScopedSessionId,
-        state.miniSessionWindowOpen,
-        state.miniSessionWindowSessionId
-      )
-
-      const nextPreviewPanelsBySession = { ...state.previewPanelsBySession }
-      for (const targetSessionId of Object.keys(nextPreviewPanelsBySession)) {
-        if (!residentSessionIds.has(targetSessionId)) {
-          delete nextPreviewPanelsBySession[targetSessionId]
-        }
-      }
-
-      const nextMessageListViewStatesBySession = { ...state.messageListViewStatesBySession }
-      for (const targetSessionId of Object.keys(nextMessageListViewStatesBySession)) {
-        if (!residentSessionIds.has(targetSessionId)) {
-          delete nextMessageListViewStatesBySession[targetSessionId]
-        }
-      }
-
-      const nextAutoModelSelectionsBySession = { ...state.autoModelSelectionsBySession }
-      for (const targetSessionId of Object.keys(nextAutoModelSelectionsBySession)) {
-        if (!residentSessionIds.has(targetSessionId)) {
-          delete nextAutoModelSelectionsBySession[targetSessionId]
-        }
-      }
-
-      const nextAutoModelHighConfidenceSelectionsBySession = {
-        ...state.autoModelHighConfidenceSelectionsBySession
-      }
-      for (const targetSessionId of Object.keys(nextAutoModelHighConfidenceSelectionsBySession)) {
-        if (!residentSessionIds.has(targetSessionId)) {
-          delete nextAutoModelHighConfidenceSelectionsBySession[targetSessionId]
-        }
-      }
-
-      const nextAutoModelRoutingStatesBySession = { ...state.autoModelRoutingStatesBySession }
-      for (const targetSessionId of Object.keys(nextAutoModelRoutingStatesBySession)) {
-        if (!residentSessionIds.has(targetSessionId)) {
-          delete nextAutoModelRoutingStatesBySession[targetSessionId]
-        }
-      }
-
-      const nextPlanModesBySession = { ...state.planModesBySession }
-      for (const targetSessionId of Object.keys(nextPlanModesBySession)) {
-        if (!residentSessionIds.has(targetSessionId)) {
-          delete nextPlanModesBySession[targetSessionId]
-        }
-      }
-
-      const scopedPreviewState = state.activeScopedSessionId
-        ? (nextPreviewPanelsBySession[state.activeScopedSessionId] ?? null)
-        : null
-
-      return {
-        previewPanelsBySession: nextPreviewPanelsBySession,
-        messageListViewStatesBySession: nextMessageListViewStatesBySession,
-        autoModelSelectionsBySession: nextAutoModelSelectionsBySession,
-        autoModelHighConfidenceSelectionsBySession: nextAutoModelHighConfidenceSelectionsBySession,
-        autoModelRoutingStatesBySession: nextAutoModelRoutingStatesBySession,
-        planModesBySession: nextPlanModesBySession,
-        previewPanelOpen: !!scopedPreviewState,
-        previewPanelState: scopedPreviewState,
-        planMode: state.activeScopedSessionId
-          ? !!nextPlanModesBySession[state.activeScopedSessionId]
-          : false
-      }
-    }),
-  setAutoModelSelection: (sessionId, status) =>
-    set((state) => ({
-      autoModelSelectionsBySession: {
-        ...state.autoModelSelectionsBySession,
-        [sessionId]: status
-      }
-    })),
-  getAutoModelSelection: (sessionId) => {
-    const targetSessionId = resolveScopedSessionId(sessionId, get().activeScopedSessionId)
-    if (!targetSessionId) return null
-    return get().autoModelSelectionsBySession[targetSessionId] ?? null
-  },
-  setAutoModelHighConfidenceSelection: (sessionId, status) =>
-    set((state) => ({
-      autoModelHighConfidenceSelectionsBySession: {
-        ...state.autoModelHighConfidenceSelectionsBySession,
-        [sessionId]: status
-      }
-    })),
-  getAutoModelHighConfidenceSelection: (sessionId) => {
-    const targetSessionId = resolveScopedSessionId(sessionId, get().activeScopedSessionId)
-    if (!targetSessionId) return null
-    return get().autoModelHighConfidenceSelectionsBySession[targetSessionId] ?? null
-  },
-  setAutoModelRoutingState: (sessionId, status) =>
-    set((state) => ({
-      autoModelRoutingStatesBySession: {
-        ...state.autoModelRoutingStatesBySession,
-        [sessionId]: status
-      }
-    })),
-  getAutoModelRoutingState: (sessionId) => {
-    const targetSessionId = resolveScopedSessionId(sessionId, get().activeScopedSessionId)
-    if (!targetSessionId) return 'idle'
-    return get().autoModelRoutingStatesBySession[targetSessionId] ?? 'idle'
-  },
-  openFilePreview: (filePath, viewMode, sshConnectionId, sessionId) =>
-    set((state) => {
-      const targetSessionId = resolveScopedSessionId(sessionId, state.activeScopedSessionId)
-      const nextPreviewState = buildFilePreviewState(filePath, viewMode, sshConnectionId)
-
-      if (!targetSessionId) {
-        return {
-          previewPanelOpen: true,
-          previewPanelState: nextPreviewState
-        }
-      }
-
-      const nextPreviewPanelsBySession = {
-        ...state.previewPanelsBySession,
-        [targetSessionId]: nextPreviewState
-      }
-
-      if (state.activeScopedSessionId !== targetSessionId) {
-        return { previewPanelsBySession: nextPreviewPanelsBySession }
-      }
-
-      return {
-        previewPanelsBySession: nextPreviewPanelsBySession,
-        previewPanelOpen: true,
-        previewPanelState: nextPreviewState
-      }
-    }),
-  openDevServerPreview: (projectDir, port, sessionId) =>
-    set((state) => {
-      const targetSessionId = resolveScopedSessionId(sessionId, state.activeScopedSessionId)
-      const nextPreviewState: PreviewPanelState = {
-        source: 'dev-server',
-        filePath: '',
-        viewMode: 'preview',
-        viewerType: 'dev-server',
-        port,
-        projectDir
-      }
-
-      if (!targetSessionId) {
-        return {
-          previewPanelOpen: true,
-          previewPanelState: nextPreviewState,
-          leftSidebarOpen: false,
-          rightPanelTab: 'preview',
-          rightPanelOpen: true
-        }
-      }
-
-      const nextPreviewPanelsBySession = {
-        ...state.previewPanelsBySession,
-        [targetSessionId]: nextPreviewState
-      }
-
-      if (state.activeScopedSessionId !== targetSessionId) {
-        return { previewPanelsBySession: nextPreviewPanelsBySession }
-      }
-
-      return {
-        previewPanelsBySession: nextPreviewPanelsBySession,
-        previewPanelOpen: true,
-        previewPanelState: nextPreviewState,
-        leftSidebarOpen: false,
-        rightPanelTab: 'preview',
-        rightPanelOpen: true
-      }
-    }),
-  openMarkdownPreview: (title, content, sessionId) =>
-    set((state) => {
-      const targetSessionId = resolveScopedSessionId(sessionId, state.activeScopedSessionId)
-      const nextPreviewState: PreviewPanelState = {
-        source: 'markdown',
-        filePath: '',
-        viewMode: 'preview',
-        viewerType: 'markdown',
-        markdownContent: content,
-        markdownTitle: title
-      }
-
-      if (!targetSessionId) {
-        return {
-          previewPanelOpen: true,
-          previewPanelState: nextPreviewState,
-          leftSidebarOpen: false,
-          rightPanelTab: 'preview',
-          rightPanelOpen: true
-        }
-      }
-
-      const nextPreviewPanelsBySession = {
-        ...state.previewPanelsBySession,
-        [targetSessionId]: nextPreviewState
-      }
-
-      if (state.activeScopedSessionId !== targetSessionId) {
-        return { previewPanelsBySession: nextPreviewPanelsBySession }
-      }
-
-      return {
-        previewPanelsBySession: nextPreviewPanelsBySession,
-        previewPanelOpen: true,
-        previewPanelState: nextPreviewState,
-        leftSidebarOpen: false,
-        rightPanelTab: 'preview',
-        rightPanelOpen: true
-      }
-    }),
-  closePreviewPanel: (sessionId) =>
-    set((state) => {
-      const targetSessionId = resolveScopedSessionId(sessionId, state.activeScopedSessionId)
-      if (!targetSessionId) {
-        return {
-          previewPanelOpen: false,
-          previewPanelState: null,
-          rightPanelTab:
-            state.rightPanelTab === 'preview'
-              ? state.detailPanelOpen
-                ? 'preview'
-                : 'steps'
-              : state.rightPanelTab
-        }
-      }
-
-      const nextPreviewPanelsBySession = { ...state.previewPanelsBySession }
-      delete nextPreviewPanelsBySession[targetSessionId]
-
-      if (state.activeScopedSessionId !== targetSessionId) {
-        return { previewPanelsBySession: nextPreviewPanelsBySession }
-      }
-
-      return {
-        previewPanelsBySession: nextPreviewPanelsBySession,
-        previewPanelOpen: false,
-        previewPanelState: null,
-        rightPanelTab:
-          state.rightPanelTab === 'preview'
-            ? state.detailPanelOpen
-              ? 'preview'
-              : 'steps'
-            : state.rightPanelTab
-      }
-    }),
-  setPreviewViewMode: (mode, sessionId) =>
-    set((state) => {
-      const targetSessionId = resolveScopedSessionId(sessionId, state.activeScopedSessionId)
-      if (!targetSessionId) {
-        return {
-          previewPanelState: state.previewPanelState
-            ? { ...state.previewPanelState, viewMode: mode }
-            : null
-        }
-      }
-
-      const currentPreviewState = state.previewPanelsBySession[targetSessionId]
-      if (!currentPreviewState) return {}
-
-      const nextPreviewState = { ...currentPreviewState, viewMode: mode }
-      const nextPreviewPanelsBySession = {
-        ...state.previewPanelsBySession,
-        [targetSessionId]: nextPreviewState
-      }
-
-      if (state.activeScopedSessionId !== targetSessionId) {
-        return { previewPanelsBySession: nextPreviewPanelsBySession }
-      }
-
-      return {
-        previewPanelsBySession: nextPreviewPanelsBySession,
-        previewPanelState: nextPreviewState
-      }
-    }),
-
+  setAutoModelSelection: (sessionId, status) => set((state) => ({ autoModelSelectionsBySession: { ...state.autoModelSelectionsBySession, [sessionId]: status } })),
+  getAutoModelSelection: (sessionId) => (sessionId ? get().autoModelSelectionsBySession[sessionId] ?? null : null),
+  setAutoModelHighConfidenceSelection: (sessionId, status) => set((state) => ({ autoModelHighConfidenceSelectionsBySession: { ...state.autoModelHighConfidenceSelectionsBySession, [sessionId]: status } })),
+  getAutoModelHighConfidenceSelection: (sessionId) => (sessionId ? get().autoModelHighConfidenceSelectionsBySession[sessionId] ?? null : null),
+  setAutoModelRoutingState: (sessionId, status) => set((state) => ({ autoModelRoutingStatesBySession: { ...state.autoModelRoutingStatesBySession, [sessionId]: status } })),
+  getAutoModelRoutingState: (sessionId) => (sessionId ? get().autoModelRoutingStatesBySession[sessionId] ?? 'idle' : 'idle'),
   selectedFiles: [],
   setSelectedFiles: (files) => set({ selectedFiles: files }),
-  toggleFileSelection: (filePath) =>
-    set((s) => {
-      const isSelected = s.selectedFiles.includes(filePath)
-      return {
-        selectedFiles: isSelected
-          ? s.selectedFiles.filter((f) => f !== filePath)
-          : [...s.selectedFiles, filePath]
-      }
-    }),
+  toggleFileSelection: (filePath) => set((state) => ({ selectedFiles: state.selectedFiles.includes(filePath) ? state.selectedFiles.filter((file) => file !== filePath) : [...state.selectedFiles, filePath] })),
   clearSelectedFiles: () => set({ selectedFiles: [] }),
-
-  selectedSubAgentToolUseId: null,
-  setSelectedSubAgentToolUseId: (toolUseId) => set({ selectedSubAgentToolUseId: toolUseId }),
+  selectedOrchestrationRunId: null,
+  selectedOrchestrationMemberId: null,
+  orchestrationConsoleOpen: false,
+  orchestrationConsoleView: 'overview',
+  openOrchestrationPanel: (runId, memberId) => set({ selectedOrchestrationRunId: runId ?? null, selectedOrchestrationMemberId: memberId ?? null, orchestrationConsoleOpen: true, orchestrationConsoleView: memberId ? 'member' : 'overview', rightPanelTab: 'orchestration', rightPanelSection: 'collaboration', rightPanelOpen: true, leftSidebarOpen: false }),
+  openOrchestrationMember: (runId, memberId) => set({ selectedOrchestrationRunId: runId, selectedOrchestrationMemberId: memberId ?? null, orchestrationConsoleOpen: true, orchestrationConsoleView: memberId ? 'member' : 'overview', rightPanelTab: 'orchestration', rightPanelSection: 'collaboration', rightPanelOpen: true, leftSidebarOpen: false }),
+  closeOrchestrationPanel: () => set({ orchestrationConsoleOpen: false, selectedOrchestrationRunId: null, selectedOrchestrationMemberId: null }),
+  openSubAgentsPanel: (toolUseId) => set({ selectedSubAgentToolUseId: toolUseId ?? null, rightPanelTab: 'orchestration', rightPanelSection: 'collaboration', rightPanelOpen: true, leftSidebarOpen: false }),
   subAgentExecutionDetailOpen: false,
   subAgentExecutionDetailToolUseId: null,
   subAgentExecutionDetailInlineText: null,
-  openSubAgentsPanel: (toolUseId) =>
-    set({
-      selectedSubAgentToolUseId: toolUseId ?? null,
-      rightPanelTab: 'subagents',
-      rightPanelSection: 'collaboration',
-      rightPanelOpen: true,
-      leftSidebarOpen: false,
-      detailPanelOpen: false,
-      detailPanelContent: null,
-      subAgentExecutionDetailOpen: false,
-      subAgentExecutionDetailToolUseId: null,
-      subAgentExecutionDetailInlineText: null
-    }),
-  openSubAgentExecutionDetail: (toolUseId, inlineText) =>
-    set({
-      selectedSubAgentToolUseId: toolUseId,
-      subAgentExecutionDetailOpen: true,
-      subAgentExecutionDetailToolUseId: toolUseId,
-      subAgentExecutionDetailInlineText: inlineText?.trim() ? inlineText : null,
-      rightPanelTab: 'subagents',
-      rightPanelSection: 'collaboration',
-      rightPanelOpen: true,
-      leftSidebarOpen: false,
-      detailPanelOpen: false,
-      detailPanelContent: null
-    }),
-  closeSubAgentExecutionDetail: () =>
-    set({
-      subAgentExecutionDetailOpen: false,
-      subAgentExecutionDetailToolUseId: null,
-      subAgentExecutionDetailInlineText: null
-    }),
-
+  openSubAgentExecutionDetail: (toolUseId, inlineText) => set({ selectedSubAgentToolUseId: toolUseId, subAgentExecutionDetailOpen: true, subAgentExecutionDetailToolUseId: toolUseId, subAgentExecutionDetailInlineText: inlineText?.trim() ? inlineText : null, rightPanelTab: 'orchestration', rightPanelSection: 'collaboration', orchestrationConsoleOpen: true, rightPanelOpen: true, leftSidebarOpen: false }),
+  closeSubAgentExecutionDetail: () => set({ subAgentExecutionDetailOpen: false, subAgentExecutionDetailToolUseId: null, subAgentExecutionDetailInlineText: null }),
+  selectedSubAgentToolUseId: null,
+  setSelectedSubAgentToolUseId: (toolUseId) => set({ selectedSubAgentToolUseId: toolUseId }),
+  setSelectedOrchestrationRunId: (runId) => set({ selectedOrchestrationRunId: runId }),
+  setSelectedOrchestrationMemberId: (memberId) => set({ selectedOrchestrationMemberId: memberId, orchestrationConsoleView: memberId ? 'member' : 'overview' }),
+  setOrchestrationConsoleView: (view) => set({ orchestrationConsoleView: view }),
   planMode: false,
+  enterPlanMode: () => set({ planMode: true, rightPanelTab: 'plan', rightPanelOpen: true, leftSidebarOpen: false }),
+  exitPlanMode: () => set({ planMode: false }),
   planModesBySession: {},
-  isPlanModeEnabled: (sessionId) => {
-    const targetSessionId = resolveScopedSessionId(sessionId, get().activeScopedSessionId)
-    if (!targetSessionId) return get().planMode
-    return !!get().planModesBySession[targetSessionId]
-  },
-  enterPlanMode: (sessionId) =>
-    set((state) => {
-      const targetSessionId = resolveScopedSessionId(sessionId, state.activeScopedSessionId)
-      if (!targetSessionId) {
-        return {
-          planMode: true,
-          rightPanelTab: 'plan',
-          rightPanelOpen: true,
-          leftSidebarOpen: false
-        }
-      }
-
-      const nextPlanModesBySession = { ...state.planModesBySession, [targetSessionId]: true }
-      if (state.activeScopedSessionId !== targetSessionId) {
-        return { planModesBySession: nextPlanModesBySession }
-      }
-
-      return {
-        planModesBySession: nextPlanModesBySession,
-        planMode: true,
-        rightPanelTab: 'plan',
-        rightPanelOpen: true,
-        leftSidebarOpen: false
-      }
-    }),
-
+  isPlanModeEnabled: () => get().planMode,
   chatView: 'home',
-  navigateToHome: () =>
-    set({
-      activeNavItem: 'chat',
-      chatView: 'home',
-      settingsPageOpen: false,
-      skillsPageOpen: false,
-      resourcesPageOpen: false,
-      translatePageOpen: false,
-      drawPageOpen: false,
-      sshPageOpen: false,
-      tasksPageOpen: false
-    }),
-  navigateToProject: () =>
-    set({
-      activeNavItem: 'chat',
-      chatView: 'project',
-      settingsPageOpen: false,
-      skillsPageOpen: false,
-      resourcesPageOpen: false,
-      translatePageOpen: false,
-      sshPageOpen: false,
-      tasksPageOpen: false
-    }),
-  navigateToArchive: () =>
-    set({
-      activeNavItem: 'chat',
-      chatView: 'archive',
-      settingsPageOpen: false,
-      skillsPageOpen: false,
-      resourcesPageOpen: false,
-      translatePageOpen: false,
-      sshPageOpen: false,
-      tasksPageOpen: false
-    }),
-  navigateToChannels: () =>
-    set({
-      activeNavItem: 'chat',
-      chatView: 'channels',
-      settingsPageOpen: false,
-      skillsPageOpen: false,
-      resourcesPageOpen: false,
-      translatePageOpen: false,
-      sshPageOpen: false,
-      tasksPageOpen: false
-    }),
-  navigateToGit: () =>
-    set({
-      activeNavItem: 'chat',
-      chatView: 'git',
-      settingsPageOpen: false,
-      skillsPageOpen: false,
-      resourcesPageOpen: false,
-      translatePageOpen: false,
-      sshPageOpen: false,
-      tasksPageOpen: false
-    }),
-  navigateToSession: () =>
-    set({
-      activeNavItem: 'chat',
-      chatView: 'session',
-      settingsPageOpen: false,
-      skillsPageOpen: false,
-      resourcesPageOpen: false,
-      translatePageOpen: false,
-      drawPageOpen: false,
-      sshPageOpen: false,
-      tasksPageOpen: false
-    }),
-  exitPlanMode: (sessionId) =>
-    set((state) => {
-      const targetSessionId = resolveScopedSessionId(sessionId, state.activeScopedSessionId)
-      if (!targetSessionId) {
-        return { planMode: false }
-      }
-
-      const nextPlanModesBySession = { ...state.planModesBySession }
-      delete nextPlanModesBySession[targetSessionId]
-
-      if (state.activeScopedSessionId !== targetSessionId) {
-        return { planModesBySession: nextPlanModesBySession }
-      }
-
-      return {
-        planModesBySession: nextPlanModesBySession,
-        planMode: false
-      }
+  navigateToHome: () => {
+    set({ activeNavItem: 'chat', chatView: 'home' })
+    replaceChatRoute({ chatView: 'home', projectId: null, sessionId: null })
+  },
+  navigateToProject: (projectId) => {
+    const resolvedProjectId = projectId ?? useChatStore.getState().activeProjectId ?? null
+    set({ activeNavItem: 'chat', chatView: 'project' })
+    replaceChatRoute({ chatView: 'project', projectId: resolvedProjectId, sessionId: null })
+  },
+  navigateToArchive: (projectId) => {
+    const resolvedProjectId = projectId ?? useChatStore.getState().activeProjectId ?? null
+    set({ activeNavItem: 'chat', chatView: 'archive' })
+    replaceChatRoute({ chatView: 'archive', projectId: resolvedProjectId, sessionId: null })
+  },
+  navigateToChannels: (projectId) => {
+    const resolvedProjectId = projectId ?? useChatStore.getState().activeProjectId ?? null
+    set({ activeNavItem: 'chat', chatView: 'channels' })
+    replaceChatRoute({ chatView: 'channels', projectId: resolvedProjectId, sessionId: null })
+  },
+  navigateToGit: (projectId) => {
+    const resolvedProjectId = projectId ?? useChatStore.getState().activeProjectId ?? null
+    set({ activeNavItem: 'chat', chatView: 'git' })
+    replaceChatRoute({ chatView: 'git', projectId: resolvedProjectId, sessionId: null })
+  },
+  navigateToSession: (sessionId) => {
+    const store = useChatStore.getState()
+    const resolvedSessionId = sessionId ?? store.activeSessionId ?? null
+    const resolvedSession = resolvedSessionId
+      ? store.sessions.find((item) => item.id === resolvedSessionId)
+      : null
+    const resolvedProjectId = resolvedSession?.projectId ?? store.activeProjectId ?? null
+    set({ activeNavItem: 'chat', chatView: 'session' })
+    replaceChatRoute({
+      chatView: resolvedSessionId ? 'session' : resolvedProjectId ? 'project' : 'home',
+      projectId: resolvedProjectId,
+      sessionId: resolvedSessionId
     })
+  },
+  applyChatRouteFromLocation: () => {
+    const route = parseChatRoute(window.location.hash)
+    const chatStore = useChatStore.getState()
+
+    if (route.projectId) {
+      const hasProject = chatStore.projects.some((project) => project.id === route.projectId)
+      if (hasProject) {
+        chatStore.setActiveProject(route.projectId)
+      }
+    }
+
+    if (route.sessionId) {
+      const session = chatStore.sessions.find((item) => item.id === route.sessionId)
+      if (session) {
+        chatStore.setActiveSession(session.id)
+        set({ activeNavItem: 'chat', chatView: 'session' })
+        return
+      }
+    }
+
+    if (route.chatView !== 'home') {
+      const resolvedProjectId = route.projectId ?? chatStore.activeProjectId ?? null
+      if (!resolvedProjectId) {
+        set({ activeNavItem: 'chat', chatView: 'home' })
+        replaceChatRoute({ chatView: 'home', projectId: null, sessionId: null })
+        return
+      }
+    }
+
+    set({ activeNavItem: 'chat', chatView: route.chatView })
+    replaceChatRoute({
+      chatView: route.chatView,
+      projectId: route.projectId ?? chatStore.activeProjectId ?? null,
+      sessionId: null
+    })
+  }
 }))

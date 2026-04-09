@@ -45,6 +45,7 @@ export const teamCreateTool: ToolHandler = {
 
       teamEvents.emit({
         type: 'team_start',
+        sessionId: ctx.sessionId,
         teamName: runtime.teamName,
         description,
         runtimePath: runtime.runtimePath,

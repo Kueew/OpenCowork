@@ -2,11 +2,6 @@ import * as React from 'react'
 import { type VListHandle, VList } from 'virtua'
 import { useTranslation } from 'react-i18next'
 import { useShallow } from 'zustand/react/shallow'
-import { useChatStore } from '@renderer/stores/chat-store'
-import { useUIStore } from '@renderer/stores/ui-store'
-import { useAgentStore } from '@renderer/stores/agent-store'
-import { MessageItem } from './MessageItem'
-import { getTailToolExecutionState } from './transcript-utils'
 import {
   MessageSquare,
   CircleHelp,
@@ -16,8 +11,14 @@ import {
   ArrowDown,
   Loader2
 } from 'lucide-react'
-
 import type { ContentBlock, ToolResultContent, UnifiedMessage } from '@renderer/lib/api/types'
+import { useChatStore } from '@renderer/stores/chat-store'
+import { useUIStore } from '@renderer/stores/ui-store'
+import { useAgentStore } from '@renderer/stores/agent-store'
+import { useTeamStore } from '@renderer/stores/team-store'
+import { MessageItem } from './MessageItem'
+import { getTailToolExecutionState } from './transcript-utils'
+import { buildOrchestrationRuns } from '@renderer/lib/orchestration/build-runs'
 import {
   isEditableUserMessage,
   type EditableUserMessageDraft
@@ -66,16 +67,6 @@ interface RenderableMessage {
   showContinue: boolean
 }
 
-interface RenderableMessageMeta {
-  messageId: string
-  isLastUserMessage: boolean
-  isLastAssistantMessage: boolean
-}
-
-interface RenderableMetaBuildResult {
-  items: RenderableMessageMeta[]
-}
-
 type ToolResultsLookup = Map<string, { content: ToolResultContent; isError?: boolean }>
 
 type VirtualRow =
@@ -93,6 +84,8 @@ interface VirtualMessageRowProps {
   showContinue: boolean
   disableAnimation: boolean
   toolResults?: ToolResultsLookup
+  orchestrationRun?: import('@renderer/lib/orchestration/types').OrchestrationRun | null
+  hiddenToolUseIds?: Set<string>
   anchorMessageId?: string | null
   onRetry?: () => void
   onContinue?: () => void
@@ -100,17 +93,35 @@ interface VirtualMessageRowProps {
   onDeleteMessage?: (messageId: string) => void
 }
 
-const messageLookupCache = new WeakMap<UnifiedMessage[], Map<string, UnifiedMessage>>()
+const EMPTY_MESSAGES: UnifiedMessage[] = []
+const LOAD_MORE_MESSAGE_STEP = 160
+const AUTO_SCROLL_BOTTOM_THRESHOLD = 24
+const STREAMING_AUTO_SCROLL_BOTTOM_THRESHOLD = 40
+const LOAD_MORE_ROW_KEY = '__load_more__'
+const TAIL_STATIC_MESSAGE_COUNT = 4
+const INITIAL_SCROLL_SETTLE_FRAMES = 1
+const FOLLOW_BOTTOM_SETTLE_FRAMES = 1
+const BOTTOM_SCROLL_CORRECTION_EPSILON = 2
+const INITIAL_MESSAGE_ESTIMATED_HEIGHT = 120
+const PROGRAMMATIC_SCROLL_GUARD_MS = 160
 
-function getMessageLookup(messages: UnifiedMessage[]): Map<string, UnifiedMessage> {
-  const cached = messageLookupCache.get(messages)
-  if (cached) return cached
-  const next = new Map<string, UnifiedMessage>()
-  for (const message of messages) {
-    next.set(message.id, message)
+function isToolResultOnlyUserMessage(message: UnifiedMessage): boolean {
+  return (
+    message.role === 'user' &&
+    Array.isArray(message.content) &&
+    message.content.every((block) => block.type === 'tool_result')
+  )
+}
+
+function collectToolResults(
+  blocks: ContentBlock[],
+  target: Map<string, { content: ToolResultContent; isError?: boolean }>
+): void {
+  for (const block of blocks) {
+    if (block.type === 'tool_result') {
+      target.set(block.toolUseId, { content: block.content, isError: block.isError })
+    }
   }
-  messageLookupCache.set(messages, next)
-  return next
 }
 
 function getToolResultsLookup(
@@ -141,96 +152,46 @@ function getToolResultsLookup(
   return next
 }
 
-function areStringArraysEqual(left: string[], right: string[]): boolean {
-  if (left === right) return true
-  if (left.length !== right.length) return false
-  for (let i = 0; i < left.length; i += 1) {
-    if (left[i] !== right[i]) return false
-  }
-  return true
-}
-
-const EMPTY_MESSAGES: UnifiedMessage[] = []
-const LOAD_MORE_MESSAGE_STEP = 160
-const AUTO_SCROLL_BOTTOM_THRESHOLD = 24
-const STREAMING_AUTO_SCROLL_BOTTOM_THRESHOLD = 40
-const LOAD_MORE_ROW_KEY = '__load_more__'
-const TAIL_STATIC_MESSAGE_COUNT = 4
-const INITIAL_SCROLL_SETTLE_FRAMES = 1
-const FOLLOW_BOTTOM_SETTLE_FRAMES = 1
-const BOTTOM_SCROLL_CORRECTION_EPSILON = 2
-const TOP_AUTO_LOAD_THRESHOLD = 24
-const INITIAL_MESSAGE_ESTIMATED_HEIGHT = 120
-const PROGRAMMATIC_SCROLL_GUARD_MS = 160
-
-function isToolResultOnlyUserMessage(message: UnifiedMessage): boolean {
-  return (
-    message.role === 'user' &&
-    Array.isArray(message.content) &&
-    message.content.every((block) => block.type === 'tool_result')
-  )
-}
-
-function isRealUserMessage(message: UnifiedMessage): boolean {
-  return isEditableUserMessage(message)
-}
-
-function collectToolResults(
-  blocks: ContentBlock[],
-  target: Map<string, { content: ToolResultContent; isError?: boolean }>
-): void {
-  for (const block of blocks) {
-    if (block.type === 'tool_result') {
-      target.set(block.toolUseId, { content: block.content, isError: block.isError })
-    }
-  }
-}
-
-function buildRenderableMessageMeta(
+function buildRenderableMessages(
   messages: UnifiedMessage[],
-  streamingMessageId: string | null
-): RenderableMetaBuildResult {
+  streamingMessageId: string | null,
+  continueAssistantMessageId: string | null
+): RenderableMessage[] {
   let lastRealUserIndex = -1
   let lastAssistantIndex = -1
+
   if (!streamingMessageId) {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (isRealUserMessage(messages[i])) {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (isEditableUserMessage(messages[i])) {
         lastRealUserIndex = i
         break
       }
     }
   }
-  for (let i = messages.length - 1; i >= 0; i--) {
+
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i]
     if (isToolResultOnlyUserMessage(message)) continue
-    if (message.role === 'assistant') {
-      lastAssistantIndex = i
-    }
+    if (message.role === 'assistant') lastAssistantIndex = i
     break
   }
 
-  const result: RenderableMessageMeta[] = []
-  for (let i = 0; i < messages.length; i++) {
-    const message = messages[i]
-    if (isToolResultOnlyUserMessage(message)) continue
-
-    result.push({
-      messageId: message.id,
-      isLastUserMessage: i === lastRealUserIndex,
-      isLastAssistantMessage: i === lastAssistantIndex
+  return messages
+    .filter((message) => !isToolResultOnlyUserMessage(message))
+    .map((message, _index, filtered) => {
+      const originalIndex = messages.findIndex((item) => item.id === message.id)
+      void filtered
+      return {
+        messageId: message.id,
+        isLastUserMessage: originalIndex === lastRealUserIndex,
+        isLastAssistantMessage: originalIndex === lastAssistantIndex,
+        showContinue: message.id === continueAssistantMessageId
+      }
     })
-  }
-
-  return { items: result }
 }
 
-function getMessageTailSignal(message: UnifiedMessage | undefined): string {
-  if (!message) return ''
-  if (typeof message.content === 'string') {
-    return `s:${message.content.length}:${message.content.slice(-32)}`
-  }
-
-  return `a:${message.content.length}:${JSON.stringify(message.content[message.content.length - 1] ?? null)}`
+function getMessageLookup(messages: UnifiedMessage[]): Map<string, UnifiedMessage> {
+  return new Map(messages.map((message) => [message.id, message]))
 }
 
 function getDistanceToBottom(ref: VListHandle): number {
@@ -246,6 +207,8 @@ const VirtualMessageRow = React.memo(function VirtualMessageRow({
   showContinue,
   disableAnimation,
   toolResults,
+  orchestrationRun,
+  hiddenToolUseIds,
   anchorMessageId,
   onRetry,
   onContinue,
@@ -272,6 +235,8 @@ const VirtualMessageRow = React.memo(function VirtualMessageRow({
         onEditUserMessage={onEditUserMessage}
         onDeleteMessage={onDeleteMessage}
         toolResults={toolResults}
+        orchestrationRun={orchestrationRun}
+        hiddenToolUseIds={hiddenToolUseIds}
       />
     </div>
   )
@@ -285,38 +250,41 @@ export function MessageList({
   onDeleteMessage
 }: MessageListProps): React.JSX.Element {
   const { t } = useTranslation('chat')
-  const {
-    activeSessionId,
-    streamingMessageId,
-    activeSessionLoaded,
-    activeSessionMessageCount,
-    activeWorkingFolder,
-    loadedRangeStart,
-    messages
-  } = useChatStore(
-    useShallow((s) => {
-      const targetSessionId = sessionId ?? s.activeSessionId
-      const targetSession = s.sessions.find((session) => session.id === targetSessionId)
-      return {
-        activeSessionId: targetSessionId,
-        streamingMessageId: targetSessionId ? (s.streamingMessages[targetSessionId] ?? null) : null,
-        activeSessionLoaded: targetSession?.messagesLoaded ?? true,
-        activeSessionMessageCount: targetSession?.messageCount ?? 0,
-        activeWorkingFolder: targetSession?.workingFolder,
-        loadedRangeStart: targetSession?.loadedRangeStart ?? 0,
-        messages: targetSession?.messages ?? EMPTY_MESSAGES
-      }
-    })
-  )
+  const { activeSessionId, streamingMessageId, activeSessionLoaded, activeSessionMessageCount, activeWorkingFolder, loadedRangeStart, messages } =
+    useChatStore(
+      useShallow((s) => {
+        const targetSessionId = sessionId ?? s.activeSessionId
+        const targetSession = s.sessions.find((session) => session.id === targetSessionId)
+        return {
+          activeSessionId: targetSessionId,
+          streamingMessageId: targetSessionId ? (s.streamingMessages[targetSessionId] ?? null) : null,
+          activeSessionLoaded: targetSession?.messagesLoaded ?? true,
+          activeSessionMessageCount: targetSession?.messageCount ?? 0,
+          activeWorkingFolder: targetSession?.workingFolder,
+          loadedRangeStart: targetSession?.loadedRangeStart ?? 0,
+          messages: targetSession?.messages ?? EMPTY_MESSAGES
+        }
+      })
+    )
   const mode = useUIStore((s) => s.mode)
   const hasStreamingMessage = useChatStore((s) =>
     activeSessionId ? Boolean(s.streamingMessages[activeSessionId]) : false
   )
+  const { activeSubAgents, completedSubAgents, subAgentHistory } = useAgentStore(
+    useShallow((s) => ({
+      activeSubAgents: s.activeSubAgents,
+      completedSubAgents: s.completedSubAgents,
+      subAgentHistory: s.subAgentHistory
+    }))
+  )
+  const { activeTeam, teamHistory } = useTeamStore(
+    useShallow((s) => ({ activeTeam: s.activeTeam, teamHistory: s.teamHistory }))
+  )
   const isSessionRunning =
     useAgentStore((s) => s.isSessionActive(activeSessionId)) || hasStreamingMessage
+
   const listRef = React.useRef<VListHandle | null>(null)
   const containerRef = React.useRef<HTMLDivElement | null>(null)
-  const [isAtBottom, setIsAtBottom] = React.useState(true)
   const pendingInitialScrollSessionIdRef = React.useRef<string | null>(null)
   const autoScrollModeRef = React.useRef<AutoScrollMode>('off')
   const preserveScrollOnPrependRef = React.useRef<{
@@ -330,107 +298,62 @@ export function MessageList({
   const lastScrollOffsetRef = React.useRef(0)
   const programmaticScrollUntilRef = React.useRef(0)
   const wasSessionRunningRef = React.useRef(isSessionRunning)
-  const messageCount = messages.length
+  const [isAtBottom, setIsAtBottom] = React.useState(true)
 
-  const renderableMeta = React.useMemo(
-    () => buildRenderableMessageMeta(messages, streamingMessageId),
-    [messages, streamingMessageId]
-  )
   const messageLookup = React.useMemo(() => getMessageLookup(messages), [messages])
   const toolResultsLookup = React.useMemo(() => getToolResultsLookup(messages), [messages])
+  const orchestrationState = React.useMemo(
+    () =>
+      buildOrchestrationRuns({
+        sessionId: activeSessionId,
+        messages,
+        activeSubAgents,
+        completedSubAgents,
+        subAgentHistory,
+        activeTeam,
+        teamHistory
+      }),
+    [
+      activeSessionId,
+      messages,
+      activeSubAgents,
+      completedSubAgents,
+      subAgentHistory,
+      activeTeam,
+      teamHistory
+    ]
+  )
 
   const continueAssistantMessageId = React.useMemo(() => {
     if (streamingMessageId || isSessionRunning) return null
     return getTailToolExecutionState(messages)?.assistantMessageId ?? null
   }, [isSessionRunning, messages, streamingMessageId])
 
-  const renderableMessages = React.useMemo<RenderableMessage[]>(() => {
-    return renderableMeta.items.map((item) => ({
-      ...item,
-      showContinue: item.messageId === continueAssistantMessageId
-    }))
-  }, [continueAssistantMessageId, renderableMeta.items])
+  const renderableMessages = React.useMemo(
+    () => buildRenderableMessages(messages, streamingMessageId, continueAssistantMessageId),
+    [messages, streamingMessageId, continueAssistantMessageId]
+  )
 
   const olderUnloadedMessageCount = Math.max(0, loadedRangeStart)
   const hasLoadMoreRow = olderUnloadedMessageCount > 0
-
-  const loadOlderMessages = React.useCallback(async (): Promise<number> => {
-    if (!activeSessionId || olderUnloadedMessageCount === 0 || isAutoLoadingOlderRef.current) return 0
-    const ref = listRef.current
-    const anchorElement = containerRef.current?.querySelector<HTMLElement>('[data-message-id]') ?? null
-    preserveScrollOnPrependRef.current = ref
-      ? {
-          offset: ref.scrollOffset,
-          size: ref.scrollSize,
-          anchorMessageId: anchorElement?.dataset.messageId ?? null,
-          anchorTop: anchorElement?.getBoundingClientRect().top ?? null
-        }
-      : null
-    isAutoLoadingOlderRef.current = true
-    try {
-      const loaded = await useChatStore
-        .getState()
-        .loadOlderSessionMessages(activeSessionId, LOAD_MORE_MESSAGE_STEP)
-      if (loaded <= 0) {
-        preserveScrollOnPrependRef.current = null
-      }
-      return loaded
-    } catch {
-      preserveScrollOnPrependRef.current = null
-      return 0
-    } finally {
-      isAutoLoadingOlderRef.current = false
-    }
-  }, [activeSessionId, olderUnloadedMessageCount])
-
-  React.useEffect(() => {
-    if (!activeSessionId) return
-    const viewportHeight = containerRef.current?.clientHeight ?? window.innerHeight ?? 0
-    const estimatedLimit = Math.max(
-      5,
-      Math.ceil(viewportHeight / INITIAL_MESSAGE_ESTIMATED_HEIGHT) + 2
-    )
-    void useChatStore.getState().loadRecentSessionMessages(activeSessionId, false, estimatedLimit)
-  }, [activeSessionId])
-
   const virtualRows = React.useMemo<VirtualRow[]>(() => {
     const rows: VirtualRow[] = renderableMessages.map((message) => ({
       type: 'message',
       key: message.messageId,
       data: message
     }))
-    if (hasLoadMoreRow) {
-      rows.unshift({ type: 'load-more', key: LOAD_MORE_ROW_KEY })
-    }
+    if (hasLoadMoreRow) rows.unshift({ type: 'load-more', key: LOAD_MORE_ROW_KEY })
     return rows
   }, [hasLoadMoreRow, renderableMessages])
-  const nextVirtualRowKeys = React.useMemo(() => virtualRows.map((row) => row.key), [virtualRows])
-  const [stableVirtualRowKeys, setStableVirtualRowKeys] =
-    React.useState<string[]>(nextVirtualRowKeys)
-  React.useEffect(() => {
-    setStableVirtualRowKeys((prev) =>
-      areStringArraysEqual(prev, nextVirtualRowKeys) ? prev : nextVirtualRowKeys
-    )
-  }, [nextVirtualRowKeys])
-  const virtualRowKeys = areStringArraysEqual(stableVirtualRowKeys, nextVirtualRowKeys)
-    ? stableVirtualRowKeys
-    : nextVirtualRowKeys
-  const rowByKey = React.useMemo(() => {
-    const map = new Map<string, VirtualRow>()
-    for (const row of virtualRows) {
-      map.set(row.key, row)
-    }
-    return map
-  }, [virtualRows])
 
-  const lastMessageRowIndex = React.useMemo(() => {
-    return virtualRowKeys.length - 1
-  }, [virtualRowKeys.length])
+  const rowByKey = React.useMemo(() => new Map(virtualRows.map((row) => [row.key, row])), [virtualRows])
+  const virtualRowKeys = React.useMemo(() => virtualRows.map((row) => row.key), [virtualRows])
+  const lastMessageRowIndex = virtualRowKeys.length - 1
 
-  const streamingMessageSignal = React.useMemo(() => {
-    if (!streamingMessageId) return ''
-    return getMessageTailSignal(messageLookup.get(streamingMessageId))
-  }, [messageLookup, streamingMessageId])
+  const canAutoScroll = React.useCallback(() => {
+    const mode = autoScrollModeRef.current
+    return mode === 'user' || (mode === 'stream' && isSessionRunning)
+  }, [isSessionRunning])
 
   const markProgrammaticScroll = React.useCallback(() => {
     programmaticScrollUntilRef.current = window.performance.now() + PROGRAMMATIC_SCROLL_GUARD_MS
@@ -446,11 +369,6 @@ export function MessageList({
     },
     [markProgrammaticScroll, virtualRowKeys.length]
   )
-
-  const canAutoScroll = React.useCallback(() => {
-    const mode = autoScrollModeRef.current
-    return mode === 'user' || (mode === 'stream' && isSessionRunning)
-  }, [isSessionRunning])
 
   const syncBottomState = React.useCallback(() => {
     const ref = listRef.current
@@ -474,15 +392,7 @@ export function MessageList({
     }
 
     setIsAtBottom((prev) => (prev === nextAtBottom ? prev : nextAtBottom))
-
-    if (
-      ref.scrollOffset <= TOP_AUTO_LOAD_THRESHOLD &&
-      olderUnloadedMessageCount > 0 &&
-      !isAutoLoadingOlderRef.current
-    ) {
-      void loadOlderMessages()
-    }
-  }, [isSessionRunning, loadOlderMessages, olderUnloadedMessageCount])
+  }, [isSessionRunning])
 
   const requestScrollToBottom = React.useCallback(
     ({
@@ -496,11 +406,9 @@ export function MessageList({
     } = {}) => {
       if (scheduledScrollFrameRef.current !== null) {
         window.cancelAnimationFrame(scheduledScrollFrameRef.current)
-        scheduledScrollFrameRef.current = null
       }
 
       let framesLeft = Math.max(1, maxFrames)
-
       const run = (): void => {
         scheduledScrollFrameRef.current = null
         const ref = listRef.current
@@ -511,19 +419,10 @@ export function MessageList({
           scrollToBottomImmediate(behavior)
         }
         framesLeft -= 1
-
-        const nextRef = listRef.current
-        const needsAnotherFrame =
-          framesLeft > 0 &&
-          !!nextRef &&
-          getDistanceToBottom(nextRef) > BOTTOM_SCROLL_CORRECTION_EPSILON &&
-          (force || canAutoScroll())
-
-        if (needsAnotherFrame) {
+        if (framesLeft > 0) {
           scheduledScrollFrameRef.current = window.requestAnimationFrame(run)
           return
         }
-
         syncBottomState()
       }
 
@@ -532,27 +431,44 @@ export function MessageList({
     [canAutoScroll, scrollToBottomImmediate, syncBottomState]
   )
 
-  React.useEffect(() => {
-    return () => {
-      if (scheduledScrollFrameRef.current !== null) {
-        window.cancelAnimationFrame(scheduledScrollFrameRef.current)
-      }
+  const loadOlderMessages = React.useCallback(async (): Promise<void> => {
+    if (!activeSessionId || olderUnloadedMessageCount === 0 || isAutoLoadingOlderRef.current) return
+    const ref = listRef.current
+    const anchorElement = containerRef.current?.querySelector<HTMLElement>('[data-message-id]') ?? null
+    preserveScrollOnPrependRef.current = ref
+      ? {
+          offset: ref.scrollOffset,
+          size: ref.scrollSize,
+          anchorMessageId: anchorElement?.dataset.messageId ?? null,
+          anchorTop: anchorElement?.getBoundingClientRect().top ?? null
+        }
+      : null
+    isAutoLoadingOlderRef.current = true
+    try {
+      await useChatStore.getState().loadOlderSessionMessages(activeSessionId, LOAD_MORE_MESSAGE_STEP)
+    } finally {
+      isAutoLoadingOlderRef.current = false
     }
-  }, [])
+  }, [activeSessionId, olderUnloadedMessageCount])
 
-  React.useLayoutEffect(() => {
-    setIsAtBottom(true)
-    pendingInitialScrollSessionIdRef.current = activeSessionId ?? null
-    autoScrollModeRef.current = isSessionRunning ? 'stream' : 'off'
+  React.useEffect(() => {
+    if (!activeSessionId) return
+    const viewportHeight = containerRef.current?.clientHeight ?? window.innerHeight ?? 0
+    const estimatedLimit = Math.max(5, Math.ceil(viewportHeight / INITIAL_MESSAGE_ESTIMATED_HEIGHT) + 2)
+    void useChatStore.getState().loadRecentSessionMessages(activeSessionId, false, estimatedLimit)
+  }, [activeSessionId])
+
+  React.useEffect(() => {
+    pendingInitialScrollSessionIdRef.current = activeSessionId
     preserveScrollOnPrependRef.current = null
     lastScrollOffsetRef.current = 0
     programmaticScrollUntilRef.current = 0
-  }, [activeSessionId, isSessionRunning])
+  }, [activeSessionId])
 
   React.useLayoutEffect(() => {
     if (!activeSessionId) return
     if (pendingInitialScrollSessionIdRef.current !== activeSessionId) return
-    if (!(messageCount > 0 || streamingMessageId)) return
+    if (!(messages.length > 0 || streamingMessageId)) return
 
     if (isSessionRunning) {
       autoScrollModeRef.current = 'stream'
@@ -562,59 +478,41 @@ export function MessageList({
     }
 
     pendingInitialScrollSessionIdRef.current = null
-  }, [activeSessionId, isSessionRunning, messageCount, requestScrollToBottom, streamingMessageId, syncBottomState])
+  }, [activeSessionId, isSessionRunning, messages.length, requestScrollToBottom, streamingMessageId, syncBottomState])
 
   React.useLayoutEffect(() => {
     const pending = preserveScrollOnPrependRef.current
     if (!pending) return
 
-    const restoreScrollPosition = (): void => {
-      const ref = listRef.current
-      if (!ref) return
+    const ref = listRef.current
+    if (!ref) return
 
-      let restored = false
-      if (pending.anchorMessageId && pending.anchorTop !== null) {
-        const anchorElement = containerRef.current?.querySelector<HTMLElement>(
-          `[data-message-id="${pending.anchorMessageId}"]`
-        )
-        if (anchorElement) {
-          const nextTop = anchorElement.getBoundingClientRect().top
-          const delta = nextTop - pending.anchorTop
-          if (Math.abs(delta) > BOTTOM_SCROLL_CORRECTION_EPSILON) {
-            markProgrammaticScroll()
-            ref.scrollTo(ref.scrollOffset + delta)
-          }
-          restored = true
-        }
-      }
-
-      if (!restored) {
-        const delta = ref.scrollSize - pending.size
-        if (delta > 0) {
+    let restored = false
+    if (pending.anchorMessageId && pending.anchorTop !== null) {
+      const anchorElement = containerRef.current?.querySelector<HTMLElement>(
+        `[data-message-id="${pending.anchorMessageId}"]`
+      )
+      if (anchorElement) {
+        const nextTop = anchorElement.getBoundingClientRect().top
+        const delta = nextTop - pending.anchorTop
+        if (Math.abs(delta) > BOTTOM_SCROLL_CORRECTION_EPSILON) {
           markProgrammaticScroll()
-          ref.scrollTo(pending.offset + delta)
+          ref.scrollTo(ref.scrollOffset + delta)
         }
-      }
-
-      syncBottomState()
-    }
-
-    const firstFrame = window.requestAnimationFrame(() => {
-      restoreScrollPosition()
-      const secondFrame = window.requestAnimationFrame(() => {
-        restoreScrollPosition()
-        preserveScrollOnPrependRef.current = null
-      })
-      scheduledScrollFrameRef.current = secondFrame
-    })
-
-    return () => {
-      window.cancelAnimationFrame(firstFrame)
-      if (scheduledScrollFrameRef.current !== null) {
-        window.cancelAnimationFrame(scheduledScrollFrameRef.current)
-        scheduledScrollFrameRef.current = null
+        restored = true
       }
     }
+
+    if (!restored) {
+      const delta = ref.scrollSize - pending.size
+      if (delta > 0) {
+        markProgrammaticScroll()
+        ref.scrollTo(pending.offset + delta)
+      }
+    }
+
+    preserveScrollOnPrependRef.current = null
+    syncBottomState()
   }, [markProgrammaticScroll, syncBottomState, virtualRowKeys.length])
 
   React.useEffect(() => {
@@ -628,18 +526,17 @@ export function MessageList({
   }, [isAtBottom, isSessionRunning])
 
   React.useEffect(() => {
-    syncBottomState()
-  }, [syncBottomState, virtualRowKeys.length])
-
-  React.useEffect(() => {
     if (!canAutoScroll()) return
     requestScrollToBottom({ maxFrames: FOLLOW_BOTTOM_SETTLE_FRAMES })
   }, [canAutoScroll, requestScrollToBottom, virtualRowKeys.length])
 
   React.useEffect(() => {
-    if (!streamingMessageId || !canAutoScroll()) return
-    requestScrollToBottom({ maxFrames: FOLLOW_BOTTOM_SETTLE_FRAMES })
-  }, [canAutoScroll, requestScrollToBottom, streamingMessageId, streamingMessageSignal])
+    return () => {
+      if (scheduledScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(scheduledScrollFrameRef.current)
+      }
+    }
+  }, [])
 
   const scrollToBottom = React.useCallback(() => {
     autoScrollModeRef.current = 'user'
@@ -665,13 +562,6 @@ export function MessageList({
       editor.replaceChildren(document.createTextNode(prompt))
       editor.dispatchEvent(new Event('input', { bubbles: true }))
       editor.focus()
-      const selection = window.getSelection()
-      if (!selection) return
-      const range = document.createRange()
-      range.selectNodeContents(editor)
-      range.collapse(false)
-      selection.removeAllRanges()
-      selection.addRange(range)
     }
   }, [])
 
@@ -692,97 +582,28 @@ export function MessageList({
           <div className="rounded-2xl bg-muted/40 p-4">{hint.icon}</div>
           <div>
             <p className="text-base font-semibold text-foreground/80">{t(hint.titleKey)}</p>
-            <p className="mt-1.5 max-w-[320px] text-sm text-muted-foreground/60">
-              {t(hint.descKey)}
-            </p>
+            <p className="mt-1.5 max-w-[320px] text-sm text-muted-foreground/60">{t(hint.descKey)}</p>
           </div>
         </div>
-        {mode !== 'chat' && (
-          <p className="text-[11px] text-muted-foreground/40">{t('messageList.tipDropFiles')}</p>
-        )}
         <div className="flex max-w-[400px] flex-wrap justify-center gap-2">
           {(mode === 'chat'
-            ? [
-                t('messageList.explainAsync'),
-                t('messageList.compareRest'),
-                t('messageList.writeRegex')
-              ]
-            : mode === 'cowork'
-              ? activeWorkingFolder
-                ? [
-                    t('messageList.summarizeProject'),
-                    t('messageList.findBugs'),
-                    t('messageList.addErrorHandling'),
-                    t('messageList.useCommitCommand')
-                  ]
-                : [
-                    t('messageList.reviewCodebase'),
-                    t('messageList.addTests'),
-                    t('messageList.refactorError')
-                  ]
-              : activeWorkingFolder
-                ? [
-                    t('messageList.addFeature'),
-                    t('messageList.writeTestsExisting'),
-                    t('messageList.optimizePerformance'),
-                    t('messageList.useCommitCommand')
-                  ]
-                : [
-                    t('messageList.buildCli'),
-                    t('messageList.createRestApi'),
-                    t('messageList.writeScript')
-                  ]
+            ? [t('messageList.explainAsync'), t('messageList.compareRest'), t('messageList.writeRegex')]
+            : activeWorkingFolder
+              ? [
+                  t('messageList.summarizeProject'),
+                  t('messageList.findBugs'),
+                  t('messageList.addErrorHandling')
+                ]
+              : [t('messageList.reviewCodebase'), t('messageList.addTests'), t('messageList.refactorError')]
           ).map((prompt) => (
             <button
               key={prompt}
               className="rounded-lg border bg-muted/30 px-3 py-1.5 text-[11px] text-muted-foreground/60 transition-colors hover:bg-muted/60 hover:text-foreground"
-              onClick={() => {
-                applySuggestedPrompt(prompt)
-              }}
+              onClick={() => applySuggestedPrompt(prompt)}
             >
               {prompt}
             </button>
           ))}
-        </div>
-        <div className="mt-1 rounded-xl border bg-muted/30 px-5 py-3">
-          <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-[11px]">
-            <div className="flex items-center gap-2">
-              <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-                Ctrl+N
-              </kbd>
-              <span className="text-muted-foreground/60">{t('messageList.newChat')}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-                Ctrl+K
-              </kbd>
-              <span className="text-muted-foreground/60">{t('messageList.commands')}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-                Ctrl+B
-              </kbd>
-              <span className="text-muted-foreground/60">{t('messageList.sidebarShortcut')}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-                Ctrl+/
-              </kbd>
-              <span className="text-muted-foreground/60">{t('messageList.shortcutsShortcut')}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-                Ctrl+,
-              </kbd>
-              <span className="text-muted-foreground/60">{t('messageList.settingsShortcut')}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-                Ctrl+D
-              </kbd>
-              <span className="text-muted-foreground/60">{t('messageList.duplicateShortcut')}</span>
-            </div>
-          </div>
         </div>
       </div>
     )
@@ -807,16 +628,9 @@ export function MessageList({
                   <div className="flex justify-center pb-6 pt-4">
                     <button
                       className="rounded-md border px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
-                      onClick={() => {
-                        if (!activeSessionId || olderUnloadedMessageCount === 0) {
-                          preserveScrollOnPrependRef.current = null
-                          return
-                        }
-                        void loadOlderMessages()
-                      }}
+                      onClick={() => void loadOlderMessages()}
                     >
-                      {t('messageList.loadMoreMessages', { defaultValue: '加载更早消息' })} (
-                      {olderUnloadedMessageCount})
+                      {t('messageList.loadMoreMessages', { defaultValue: '加载更早消息' })} ({olderUnloadedMessageCount})
                     </button>
                   </div>
                 </div>
@@ -825,9 +639,8 @@ export function MessageList({
 
             const { messageId, isLastUserMessage, isLastAssistantMessage, showContinue } = row.data
             const message = messageLookup.get(messageId)
-            if (!message) {
-              return <div key={rowKey} />
-            }
+            if (!message) return <div key={rowKey} />
+
             const disableAnimation =
               lastMessageRowIndex >= 0
                 ? rowIndex >= Math.max(0, lastMessageRowIndex - (TAIL_STATIC_MESSAGE_COUNT - 1))
@@ -844,6 +657,8 @@ export function MessageList({
                 showContinue={showContinue}
                 disableAnimation={disableAnimation}
                 toolResults={toolResultsLookup.get(messageId)}
+                orchestrationRun={orchestrationState.byMessageId.get(messageId)?.primaryRun ?? null}
+                hiddenToolUseIds={orchestrationState.byMessageId.get(messageId)?.hiddenToolUseIds}
                 anchorMessageId={preserveScrollOnPrependRef.current?.anchorMessageId ?? null}
                 onRetry={onRetry}
                 onContinue={onContinue}
@@ -855,7 +670,7 @@ export function MessageList({
         </VList>
       </div>
 
-      {!isAtBottom && messageCount > 0 && (
+      {!isAtBottom && messages.length > 0 && (
         <button
           onClick={scrollToBottom}
           className="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border bg-background/90 px-3 py-1.5 text-xs text-muted-foreground shadow-lg backdrop-blur-sm transition-all duration-200 hover:-translate-y-0.5 hover:text-foreground hover:shadow-xl"

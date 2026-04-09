@@ -1,8 +1,8 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { useShallow } from 'zustand/react/shallow'
-import { Brain, Clock, Loader2, Maximize2, icons } from 'lucide-react'
-import { Badge } from '@renderer/components/ui/badge'
+import { Brain, ChevronRight, Clock, Maximize2, icons } from 'lucide-react'
+'
 import { useAgentStore } from '@renderer/stores/agent-store'
 import { decodeStructuredToolResult } from '@renderer/lib/tools/tool-result-format'
 import { useUIStore } from '@renderer/stores/ui-store'
@@ -112,11 +112,7 @@ function SubAgentCardInner({
   }, [tracked?.isRunning, tracked?.startedAt])
 
   const elapsed = tracked
-    ? (tracked.completedAt ?? now) - tracked.startedAt
-    : (histMeta?.elapsed ?? null)
-  const icon = getSubAgentIcon(displayName)
-
-  const descriptionText = input.description ? String(input.description) : ''
+    ? (tracked.completed  const descriptionText = input.description ? String(input.description) : ''
   const promptText = [
     input.prompt ? String(input.prompt) : '',
     input.query ? String(input.query) : '',
@@ -130,116 +126,121 @@ function SubAgentCardInner({
     useUIStore.getState().openSubAgentExecutionDetail(toolUseId, histText || undefined)
   }
 
+  const iterationCount = tracked?.iteration ?? histMeta?.iterations ?? 0
+
+    .filter(Boolean)
+    .join(' · ')
+
+  const  const iterationCount = tracked?.iteration ?? histMeta?.iterations ?? 0
+  const callCount = tracked?.toolCallCount ?? histMeta?.toolCalls.length ?? 0
+  const totalTokens = usage ? formatTokens(getBillableTotalTokens(usage)) : null
+  const statusText = isRunning
+    ? t('subAgent.working')
+    : isError
+      ? t('subAgent.failed')
+      : t('subAgent.done')
+  const previewText = descriptionText || promptText
+  const orderLabel = toolUseId.slice(-2).toUpperCase()
+  const meterCount = Math.max(10, Math.min(24, callCount > 0 ? callCount : iterationCount || 12))
+
   return (
     <div
       className={cn(
-        'my-2 overflow-hidden rounded-xl border bg-background/60 p-3 transition-colors',
-        isRunning && 'border-violet-500/25 bg-violet-500/[0.03]',
-        isCompleted && !isError && 'border-border/60',
-        isError && 'border-destructive/30 bg-destructive/5',
-        !isRunning && !isCompleted && 'border-border/60'
+        'my-2 overflow-hidden rounded-2xl border px-3 py-3 transition-colors',
+        'bg-[#171717] border-white/6 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]',
+        isCompleted && !isError && 'border-white/10',
+        isError && 'border-destructive/30 bg-[#1b1414]',
+        isRunning && 'border-emerald-500/20'
       )}
     >
       <div className="flex items-start gap-3">
         <div
           className={cn(
-            'mt-0.5 flex size-8 items-center justify-center rounded-xl border border-border/60 bg-muted/25',
-            isRunning ? 'text-violet-500' : 'text-foreground/80'
+            'mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-full border text-white/90',
+            isRunning ? 'border-emerald-400/35 bg-emerald-400/10' : 'border-white/10 bg-white/5'
           )}
         >
           {icon}
         </div>
 
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="min-w-0 truncate text-sm font-semibold text-foreground/92">
-              {displayName}
-            </span>
-            <Badge
-              variant={isRunning ? 'default' : isError ? 'destructive' : 'secondary'}
-              className={cn(
-                'h-4.5 rounded-full px-1.5 text-[9px] font-medium',
-                isRunning && 'bg-violet-500 animate-pulse'
-              )}
-            >
-              {isRunning
-                ? t('subAgent.working')
-                : isError
-                  ? t('subAgent.failed')
-                  : t('subAgent.done')}
-            </Badge>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="truncate text-[14px] font-semibold text-white/92">{displayName}</span>
+                <span
+                  className={cn(
+                    'rounded-full px-2 py-0.5 text-[10px] font-medium',
+                    isRunning && 'bg-emerald-400/12 text-emerald-300',
+                    !isRunning && !isError && 'bg-cyan-400/10 text-cyan-300',
+                    isError && 'bg-destructive/12 text-destructive'
+                  )}
+                >
+                  {statusText}
+                </span>
+              </div>
+              {previewText ? (
+                <p className="mt-1 line-clamp-2 whitespace-pre-wrap break-words text-[12px] leading-5 text-white/58">
+                  {previewText}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="flex shrink-0 items-start gap-2">
+              <span className="pt-0.5 text-xs font-semibold tabular-nums text-white/65">
+                {orderLabel}
+              </span>
+              <button
+                onClick={handleOpenPanel}
+                className="rounded-full p-1.5 text-white/45 transition-colors hover:bg-white/6 hover:text-white/85"
+                title={t('subAgent.viewDetails')}
+              >
+                <Maximize2 className="size-3.5" />
+              </button>
+            </div>
           </div>
 
-          {descriptionText ? (
-            <p className="mt-1 line-clamp-1 whitespace-pre-wrap break-words text-[11px] text-muted-foreground/60">
-              {descriptionText}
-            </p>
-          ) : null}
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-white/42">
+            {elapsed != null ? (
+              <span className="inline-flex items-center gap-1 tabular-nums">
+                <Clock className="size-3" />
+                {formatElapsed(elapsed)}
+              </span>
+            ) : null}
+            {iterationCount > 0 ? <span>{t('subAgent.iter', { count: iterationCount })}</span> : null}
+            {callCount > 0 ? <span>{t('subAgent.calls', { count: callCount })}</span> : null}
+            {totalTokens ? <span>{totalTokens} tok</span> : null}
+          </div>
 
-          {promptText ? (
-            <p className="mt-0.5 line-clamp-2 whitespace-pre-wrap break-words text-[11px] leading-4.5 text-muted-foreground/75">
-              {promptText}
-            </p>
-          ) : null}
-        </div>
-
-        <button
-          onClick={handleOpenPanel}
-          className="rounded-full border border-border/60 p-1.5 text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
-          title={t('subAgent.viewDetails')}
-        >
-          <Maximize2 className="size-3.5" />
-        </button>
-      </div>
-
-      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground/60">
-        {tracked || histMeta ? (
-          <>
-            <span className="rounded-full border border-border/60 bg-background/70 px-2.5 py-1">
-              {t('subAgent.iter', { count: tracked?.iteration ?? histMeta?.iterations ?? 0 })}
-            </span>
-            <span className="rounded-full border border-border/60 bg-background/70 px-2.5 py-1">
-              {t('subAgent.calls', {
-                count: tracked?.toolCallCount ?? histMeta?.toolCalls.length ?? 0
+          <div className="mt-2 flex items-center justify-between gap-3">
+            <div className="flex items-end gap-1.5">
+              {Array.from({ length: meterCount }).map((_, index) => {
+                const active = isRunning || index < meterCount - (isError ? 8 : 0)
+                return (
+                  <span
+                    key={index}
+                    className={cn(
+                      'block h-1.5 w-[4px] rounded-[2px] transition-colors',
+                      active
+                        ? isError
+                          ? 'bg-destructive/80'
+                          : 'bg-emerald-400/85'
+                        : 'bg-white/10'
+                    )}
+                  />
+                )
               })}
-            </span>
-          </>
-        ) : null}
-        {elapsed != null ? (
-          <span className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-background/70 px-2.5 py-1 tabular-nums">
-            <Clock className="size-3" />
-            {formatElapsed(elapsed)}
-          </span>
-        ) : null}
-        {usage ? (
-          <span className="rounded-full border border-border/60 bg-background/70 px-2.5 py-1 tabular-nums">
-            {formatTokens(getBillableTotalTokens(usage))} tok
-          </span>
-        ) : null}
-      </div>
+            </div>
 
-      <div className="mt-2 rounded-xl border border-border/60 bg-muted/20 px-2.5 py-2">
-        <div className="mb-1 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground/55">
-          {isRunning ? <Loader2 className="size-3 animate-spin" /> : <Brain className="size-3" />}
-          <span>{t('subAgent.statusLabel')}</span>
+            <button
+              onClick={handleOpenPanel}
+              className="inline-flex items-center gap-1 text-[11px] font-medium text-white/55 transition-colors hover:text-white/88"
+            >
+              {t('subAgent.viewDetails')}
+              <ChevronRight className="size-3.5" />
+            </button>
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-background/70 px-2.5 py-1 text-[10px] font-medium text-foreground/80">
-            {isRunning ? t('subAgent.working') : isError ? t('subAgent.failed') : t('subAgent.done')}
-          </span>
-          <span className="text-[11px] text-muted-foreground/70">
-            {isRunning ? t('subAgent.openInRunsRunning') : t('subAgent.openInRunsDone')}
-          </span>
-        </div>
-      </div>
-
-      <div className="mt-2 flex items-center justify-end gap-2">
-        <button
-          onClick={handleOpenPanel}
-          className="text-xs font-medium text-violet-600 transition-colors hover:text-violet-500 dark:text-violet-400"
-        >
-          {t('subAgent.viewDetails')}
-        </button>
       </div>
     </div>
   )

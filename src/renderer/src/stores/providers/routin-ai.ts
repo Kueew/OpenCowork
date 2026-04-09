@@ -69,8 +69,21 @@ export const routinAiPreset: BuiltinProviderPreset = {
       maxOutputTokens: 8_192,
       supportsVision: false,
       supportsFunctionCall: true,
-      inputPrice: 0.14,
-      outputPrice: 0.56
+      inputPrice: 0.72,
+      outputPrice: 2.30,
+      cacheHitPrice: 0.15,
+    }, {
+      id: 'glm-5.1',
+      name: 'GLM 5.1',
+      icon: 'chatglm',
+      enabled: true,
+      contextLength: 202_752,
+      maxOutputTokens: 8_192,
+      supportsVision: false,
+      supportsFunctionCall: true,
+      inputPrice: 1.395,
+      outputPrice: 4.40,
+      cacheHitPrice: 0.3,
     },
     {
       id: 'glm-4.5',

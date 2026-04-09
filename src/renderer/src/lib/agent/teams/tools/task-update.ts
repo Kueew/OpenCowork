@@ -51,7 +51,6 @@ export const taskUpdateTool: ToolHandler = {
 
     const patch: Record<string, unknown> = {}
     if (input.status && VALID_STATUSES.includes(input.status as TeamTaskStatus)) {
-      // Guard: never roll back a completed task
       if (task.status === 'completed' && input.status !== 'completed') {
         return encodeStructuredToolResult({
           error: `Task "${taskId}" is already completed and cannot be reverted to "${input.status}".`
@@ -69,13 +68,11 @@ export const taskUpdateTool: ToolHandler = {
     await updateTeamRuntimeManifest({
       teamName: team.name,
       patch: {
-        tasks: team.tasks.map((item) =>
-          item.id === taskId ? { ...item, ...patch } : item
-        )
+        tasks: team.tasks.map((item) => (item.id === taskId ? { ...item, ...patch } : item))
       }
     })
 
-    teamEvents.emit({ type: 'team_task_update', taskId, patch })
+    teamEvents.emit({ type: 'team_task_update', sessionId: team.sessionId, taskId, patch })
 
     return encodeStructuredToolResult({
       success: true,
