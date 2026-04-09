@@ -62,6 +62,7 @@ registerAllTools().catch((err) => console.error('[App] Failed to register tools:
 initChannelEventListener()
 
 const GLOBAL_MEMORY_REMINDER_MARKER = '[global-memory-update]'
+const RENDERER_OOM_RECOVERY_PARAM = 'ocRecoverRendererOom'
 const globalMemoryVersionBySession = new Map<string, number>()
 
 function normalizeVersion(version: string | null | undefined): string {
@@ -102,6 +103,16 @@ interface TeamWorkerParams {
    model: string | null
    agentName: string | null
    workingFolder?: string
+}
+
+function consumeRendererOomRecoveryFlag(): boolean {
+   const url = new URL(window.location.href)
+   const shouldRecover = url.searchParams.get(RENDERER_OOM_RECOVERY_PARAM) === '1'
+   if (!shouldRecover) return false
+
+   url.searchParams.delete(RENDERER_OOM_RECOVERY_PARAM)
+   window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
+   return true
 }
 
 function buildGlobalMemoryReminder(snapshot: GlobalMemorySnapshot): string {
@@ -179,6 +190,7 @@ function App(): React.JSX.Element {
    const workerBootStartedRef = useRef(false)
    const [workerBootError, setWorkerBootError] = useState<string | null>(null)
    const workerMemberName = teamWorkerParams?.memberName ?? ''
+   const rendererOomRecoveryRef = useRef(consumeRendererOomRecoveryFlag())
    const cronLogBufferRef = useRef<CronAgentLogEntry[]>([])
    const cronLogFlushTimerRef = useRef<number | null>(null)
 
@@ -256,6 +268,29 @@ function App(): React.JSX.Element {
                : undefined
             usePlanStore.getState().setActivePlan(activePlan?.id ?? null)
             useUIStore.getState().applyChatRouteFromLocation()
+
+            if (rendererOomRecoveryRef.current && !teamWorkerParams) {
+               const recoverySessionId = useChatStore.getState().activeSessionId
+               useSettingsStore.getState().updateSettings({ animationsEnabled: false })
+               useUIStore.setState({
+                  detailPanelOpen: false,
+                  detailPanelContent: null,
+                  previewPanelOpen: false,
+                  previewPanelState: null,
+                  orchestrationConsoleOpen: false,
+                  selectedOrchestrationRunId: null,
+                  selectedOrchestrationMemberId: null,
+                  subAgentExecutionDetailOpen: false,
+                  subAgentExecutionDetailToolUseId: null,
+                  subAgentExecutionDetailInlineText: null,
+                  selectedSubAgentToolUseId: null,
+                  miniSessionWindowOpen: false,
+                  miniSessionWindowSessionId: null,
+                  rightPanelOpen: false
+               })
+               await useChatStore.getState().recoverFromRendererOom(recoverySessionId)
+               toast.warning('Renderer recovered in reduced-memory mode')
+            }
          })
       window.electron.ipcRenderer
          .invoke('settings:get', 'apiKey')
@@ -267,7 +302,7 @@ function App(): React.JSX.Element {
          .catch(() => {
             // Ignore — main process may not have a stored key yet
          })
-   }, [])
+   }, [teamWorkerParams])
 
    useEffect(() => {
       const syncFromLocation = (): void => {

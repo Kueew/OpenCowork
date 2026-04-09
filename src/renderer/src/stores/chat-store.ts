@@ -306,6 +306,7 @@ interface ChatStore {
   // Helpers
   getActiveSession: () => Session | undefined
   getSessionMessages: (sessionId: string) => UnifiedMessage[]
+  recoverFromRendererOom: (sessionId?: string | null) => Promise<void>
   releaseDormantSessions: () => void
 }
 
@@ -353,6 +354,8 @@ const RECENT_SESSION_MESSAGE_PAGE_SIZE = 160
 const MIN_INITIAL_SESSION_MESSAGE_PAGE_SIZE = 5
 const MESSAGE_WINDOW_MAX_SIZE = 240
 const MESSAGE_WINDOW_TAIL_PRESERVE = 80
+const REQUEST_CONTEXT_MAX_MESSAGES = 160
+const REQUEST_CONTEXT_SAFE_BOUNDARY_SCAN = 12
 
 function rowToProject(row: ProjectRow): Project {
   return {
@@ -497,6 +500,140 @@ function releaseDormantSessionMemory(
       delete state.generatingImageMessages[messageId]
     }
   }
+}
+
+function estimateMessageWeight(message: UnifiedMessage): number {
+  if (typeof message.content === 'string') return message.content.length
+  if (!Array.isArray(message.content)) return 0
+
+  let total = 0
+  for (const block of message.content) {
+    switch (block.type) {
+      case 'text':
+        total += block.text.length
+        break
+      case 'thinking':
+        total += block.thinking.length
+        break
+      case 'tool_use':
+        total += JSON.stringify(block.input ?? {}).length + String(block.name ?? '').length
+        break
+      case 'tool_result':
+        total += JSON.stringify(block.content ?? '').length
+        break
+      default:
+        total += JSON.stringify(block).length
+        break
+    }
+  }
+
+  return total
+}
+
+function hasToolReferenceSplit(messages: UnifiedMessage[], boundary: number): boolean {
+  const compressedToolUseIds = new Set<string>()
+  for (let index = 0; index < boundary; index += 1) {
+    const message = messages[index]
+    if (!Array.isArray(message.content)) continue
+    for (const block of message.content) {
+      if (block.type === 'tool_use' && block.id) {
+        compressedToolUseIds.add(block.id)
+      }
+    }
+  }
+
+  if (compressedToolUseIds.size === 0) return false
+
+  for (let index = boundary; index < messages.length; index += 1) {
+    const message = messages[index]
+    if (!Array.isArray(message.content)) continue
+    for (const block of message.content) {
+      if (
+        block.type === 'tool_result' &&
+        block.toolUseId &&
+        compressedToolUseIds.has(block.toolUseId)
+      ) {
+        return true
+      }
+    }
+  }
+
+  return false
+}
+
+function clampRequestContext(messages: UnifiedMessage[]): UnifiedMessage[] {
+  if (messages.length <= REQUEST_CONTEXT_MAX_MESSAGES) return messages
+
+  let boundary = Math.max(1, messages.length - REQUEST_CONTEXT_MAX_MESSAGES)
+  for (let attempt = 0; attempt < REQUEST_CONTEXT_SAFE_BOUNDARY_SCAN; attempt += 1) {
+    if (!hasToolReferenceSplit(messages, boundary)) break
+    boundary = Math.max(1, boundary - 1)
+  }
+
+  return messages.slice(boundary)
+}
+
+function mergeResidentTailWithFetchedPrefix(
+  residentMessages: UnifiedMessage[],
+  fetchedMessages: UnifiedMessage[]
+): UnifiedMessage[] {
+  if (residentMessages.length === 0) return clampRequestContext(fetchedMessages)
+  if (fetchedMessages.length === 0) return clampRequestContext(residentMessages)
+
+  const merged = [...fetchedMessages]
+  const seenIds = new Set(fetchedMessages.map((message) => message.id))
+  for (const message of residentMessages) {
+    if (seenIds.has(message.id)) continue
+    merged.push(message)
+    seenIds.add(message.id)
+  }
+
+  return clampRequestContext(merged)
+}
+
+async function loadRequestContextMessages(session: Session): Promise<UnifiedMessage[]> {
+  const knownCount = session.messageCount ?? session.messages.length
+  if (knownCount <= 0) return []
+
+  const residentMessages = session.messages
+  const residentHasFullHistory =
+    session.messagesLoaded &&
+    session.loadedRangeStart === 0 &&
+    session.loadedRangeEnd >= knownCount
+
+  if (residentHasFullHistory) {
+    return clampRequestContext(residentMessages)
+  }
+
+  const residentTailStart =
+    session.messagesLoaded && residentMessages.length > 0
+      ? Math.max(0, Math.min(session.loadedRangeStart, session.loadedRangeEnd - residentMessages.length))
+      : knownCount
+  const residentWeight = residentMessages.reduce(
+    (total, message) => total + estimateMessageWeight(message),
+    0
+  )
+  const weightAdjustedLimit = residentWeight > 200_000 ? 96 : REQUEST_CONTEXT_MAX_MESSAGES
+  const targetLimit = Math.max(MIN_INITIAL_SESSION_MESSAGE_PAGE_SIZE, weightAdjustedLimit)
+  const tailCount = Math.min(targetLimit, knownCount)
+  const tailOffset = Math.max(0, knownCount - tailCount)
+
+  if (session.messagesLoaded && residentMessages.length > 0 && residentTailStart <= tailOffset) {
+    return clampRequestContext(residentMessages)
+  }
+
+  const fetchLimit = Math.max(0, residentTailStart - tailOffset)
+  if (fetchLimit <= 0) {
+    return clampRequestContext(residentMessages)
+  }
+
+  const msgRows = (await ipcClient.invoke('db:messages:list-page', {
+    sessionId: session.id,
+    limit: fetchLimit,
+    offset: tailOffset
+  })) as MessageRow[]
+  const fetchedMessages = msgRows.map(rowToMessage)
+  return mergeResidentTailWithFetchedPrefix(residentMessages, fetchedMessages)
 }
 
 function sanitizeToolBlocksForResend(messages: UnifiedMessage[]): {
@@ -1122,16 +1259,8 @@ export const useChatStore = create<ChatStore>()(
       if (!session) return []
       const includeTrailingAssistantPlaceholder =
         options?.includeTrailingAssistantPlaceholder ?? true
-      const hasFullHistory =
-        session.messagesLoaded &&
-        session.loadedRangeStart === 0 &&
-        session.loadedRangeEnd >= session.messageCount
 
-      let messages = hasFullHistory
-        ? session.messages
-        : ((await ipcClient.invoke('db:messages:list', sessionId)) as MessageRow[]).map(
-            rowToMessage
-          )
+      let messages = await loadRequestContextMessages(session)
 
       if (!includeTrailingAssistantPlaceholder) {
         messages = messages.filter((message, index) => {
@@ -2278,6 +2407,64 @@ export const useChatStore = create<ChatStore>()(
     getSessionMessages: (sessionId) => {
       const session = get().sessions.find((s) => s.id === sessionId)
       return session?.messages ?? []
+    },
+
+    recoverFromRendererOom: async (sessionId) => {
+      const targetSessionId = sessionId ?? get().activeSessionId
+
+      set((state) => {
+        state.sessions = state.sessions.map((session) => {
+          if (session.id === targetSessionId) {
+            return {
+              ...session,
+              messages: [],
+              messagesLoaded: session.messageCount === 0,
+              loadedRangeStart: session.messageCount,
+              loadedRangeEnd: session.messageCount,
+              lastKnownMessageCount: session.messageCount,
+              promptSnapshot: undefined
+            }
+          }
+
+          return {
+            ...session,
+            messages: [],
+            messagesLoaded: session.messageCount === 0,
+            loadedRangeStart: session.messageCount,
+            loadedRangeEnd: session.messageCount,
+            lastKnownMessageCount: session.messageCount,
+            promptSnapshot: undefined
+          }
+        })
+        state.streamingMessages = targetSessionId
+          ? Object.fromEntries(
+              Object.entries(state.streamingMessages).filter(([key]) => key === targetSessionId)
+            )
+          : {}
+        state.streamingMessageId = targetSessionId
+          ? (state.streamingMessages[targetSessionId] ?? null)
+          : null
+      })
+
+      useAgentStore.getState().releaseDormantSessionData(targetSessionId ? [targetSessionId] : [])
+      if (targetSessionId) {
+        useBackgroundSessionStore.getState().clearSession(targetSessionId)
+      }
+      useTaskStore.getState().releaseDormantSessionTasks(targetSessionId ? [targetSessionId] : [])
+      usePlanStore.getState().releaseDormantPlans(targetSessionId ?? null)
+
+      if (targetSessionId) {
+        await get().loadRecentSessionMessages(targetSessionId, true, 40)
+        await useTaskStore.getState().loadTasksForSession(targetSessionId)
+        const planStore = usePlanStore.getState()
+        const activePlan = await planStore.loadPlanForSession(targetSessionId)
+        planStore.setActivePlan(activePlan?.id ?? null)
+      } else {
+        useTaskStore.getState().clearTasks()
+        usePlanStore.getState().setActivePlan(null)
+      }
+
+      get().releaseDormantSessions()
     },
 
     releaseDormantSessions: () => {

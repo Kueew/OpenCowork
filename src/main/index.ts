@@ -309,9 +309,23 @@ function getWindowDiagnosticContext(window: BrowserWindow): Record<string, unkno
   }
 }
 
+function buildReducedMemoryRecoveryUrl(rawUrl: string): string | null {
+  if (!rawUrl) return null
+
+  try {
+    const nextUrl = new URL(rawUrl)
+    nextUrl.searchParams.set('ocRecoverRendererOom', '1')
+    return nextUrl.toString()
+  } catch (error) {
+    console.warn('[Main] Failed to build reduced-memory recovery URL:', error)
+    return null
+  }
+}
+
 function attachWindowCrashLogging(window: BrowserWindow): void {
   const webContents = window.webContents
   let attemptedOomReload = false
+  let lastOomReloadAt = 0
 
   webContents.on('render-process-gone', (_event, details) => {
     const crashInfo = {
@@ -321,17 +335,26 @@ function attachWindowCrashLogging(window: BrowserWindow): void {
     console.error('[Main] Window render process gone:', crashInfo)
     recordCrash('window_render_process_gone', crashInfo)
 
-    // One automatic reload after OOM may recover a white screen; avoid loops if memory stays tight.
-    if (details.reason === 'oom' && !attemptedOomReload) {
-      attemptedOomReload = true
-      setTimeout(() => {
-        try {
-          if (window.isDestroyed()) return
-          window.reload()
-        } catch (err) {
-          console.warn('[Main] Post-OOM window reload failed:', err)
-        }
-      }, 400)
+    if (details.reason === 'oom') {
+      const now = Date.now()
+      const elapsedSinceLastReload = now - lastOomReloadAt
+      if (!attemptedOomReload || elapsedSinceLastReload > 15_000) {
+        attemptedOomReload = true
+        lastOomReloadAt = now
+        setTimeout(() => {
+          try {
+            if (window.isDestroyed()) return
+            const recoveryUrl = buildReducedMemoryRecoveryUrl(webContents.getURL())
+            if (recoveryUrl) {
+              void webContents.loadURL(recoveryUrl)
+            } else {
+              window.reload()
+            }
+          } catch (err) {
+            console.warn('[Main] Post-OOM reduced-memory recovery failed:', err)
+          }
+        }, 400)
+      }
     }
   })
 
