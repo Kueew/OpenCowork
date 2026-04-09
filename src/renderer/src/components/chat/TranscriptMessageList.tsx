@@ -2,7 +2,7 @@ import * as React from 'react'
 import type { ToolResultContent, UnifiedMessage } from '@renderer/lib/api/types'
 import { cn } from '@renderer/lib/utils'
 import { MessageItem } from './MessageItem'
-import { buildRenderableMessageMeta, getToolResultsLookup } from './transcript-utils'
+import { buildRenderableMessageMeta, getMessageLookup, getToolResultsLookup } from './transcript-utils'
 
 interface TranscriptMessageListProps {
   messages: UnifiedMessage[]
@@ -19,21 +19,6 @@ interface VirtualTranscriptMessageRowProps {
   isLastUserMessage: boolean
   isLastAssistantMessage: boolean
   toolResults?: ToolResultsLookup
-}
-
-const messageLookupCache = new WeakMap<UnifiedMessage[], Map<string, UnifiedMessage>>()
-
-function getMessageLookup(messages: UnifiedMessage[]): Map<string, UnifiedMessage> {
-  const cached = messageLookupCache.get(messages)
-  if (cached) return cached
-
-  const next = new Map<string, UnifiedMessage>()
-  for (const message of messages) {
-    next.set(message.id, message)
-  }
-
-  messageLookupCache.set(messages, next)
-  return next
 }
 
 const VirtualTranscriptMessageRow = React.memo(function VirtualTranscriptMessageRow({

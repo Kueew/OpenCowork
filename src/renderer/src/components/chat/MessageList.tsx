@@ -11,18 +11,21 @@ import {
   ArrowDown,
   Loader2
 } from 'lucide-react'
-import type { ContentBlock, ToolResultContent, UnifiedMessage } from '@renderer/lib/api/types'
+import type { ToolResultContent, UnifiedMessage } from '@renderer/lib/api/types'
 import { useChatStore } from '@renderer/stores/chat-store'
 import { useUIStore } from '@renderer/stores/ui-store'
 import { useAgentStore } from '@renderer/stores/agent-store'
 import { useTeamStore } from '@renderer/stores/team-store'
 import { MessageItem } from './MessageItem'
-import { getTailToolExecutionState } from './transcript-utils'
-import { buildOrchestrationRuns } from '@renderer/lib/orchestration/build-runs'
 import {
-  isEditableUserMessage,
-  type EditableUserMessageDraft
-} from '@renderer/lib/image-attachments'
+  buildChatRenderableMessageMeta,
+  getMessageLookup,
+  getTailToolExecutionState,
+  getToolResultsLookup,
+  type ChatRenderableMessageMeta
+} from './transcript-utils'
+import { buildOrchestrationRuns } from '@renderer/lib/orchestration/build-runs'
+import { type EditableUserMessageDraft } from '@renderer/lib/image-attachments'
 
 const modeHints = {
   chat: {
@@ -60,12 +63,7 @@ interface MessageListProps {
   onDeleteMessage?: (messageId: string) => void
 }
 
-interface RenderableMessage {
-  messageId: string
-  isLastUserMessage: boolean
-  isLastAssistantMessage: boolean
-  showContinue: boolean
-}
+type RenderableMessage = ChatRenderableMessageMeta
 
 type ToolResultsLookup = Map<string, { content: ToolResultContent; isError?: boolean }>
 
@@ -104,95 +102,7 @@ const FOLLOW_BOTTOM_SETTLE_FRAMES = 1
 const BOTTOM_SCROLL_CORRECTION_EPSILON = 2
 const INITIAL_MESSAGE_ESTIMATED_HEIGHT = 120
 const PROGRAMMATIC_SCROLL_GUARD_MS = 160
-
-function isToolResultOnlyUserMessage(message: UnifiedMessage): boolean {
-  return (
-    message.role === 'user' &&
-    Array.isArray(message.content) &&
-    message.content.every((block) => block.type === 'tool_result')
-  )
-}
-
-function collectToolResults(
-  blocks: ContentBlock[],
-  target: Map<string, { content: ToolResultContent; isError?: boolean }>
-): void {
-  for (const block of blocks) {
-    if (block.type === 'tool_result') {
-      target.set(block.toolUseId, { content: block.content, isError: block.isError })
-    }
-  }
-}
-
-function getToolResultsLookup(
-  messages: UnifiedMessage[]
-): Map<string, Map<string, { content: ToolResultContent; isError?: boolean }>> {
-  const next = new Map<string, Map<string, { content: ToolResultContent; isError?: boolean }>>()
-  let currentAssistantMessageId: string | null = null
-
-  for (const message of messages) {
-    if (message.role === 'assistant') {
-      currentAssistantMessageId = message.id
-      continue
-    }
-
-    if (isToolResultOnlyUserMessage(message) && currentAssistantMessageId) {
-      let results = next.get(currentAssistantMessageId)
-      if (!results) {
-        results = new Map()
-        next.set(currentAssistantMessageId, results)
-      }
-      collectToolResults(message.content as ContentBlock[], results)
-      continue
-    }
-
-    currentAssistantMessageId = null
-  }
-
-  return next
-}
-
-function buildRenderableMessages(
-  messages: UnifiedMessage[],
-  streamingMessageId: string | null,
-  continueAssistantMessageId: string | null
-): RenderableMessage[] {
-  let lastRealUserIndex = -1
-  let lastAssistantIndex = -1
-
-  if (!streamingMessageId) {
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      if (isEditableUserMessage(messages[i])) {
-        lastRealUserIndex = i
-        break
-      }
-    }
-  }
-
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const message = messages[i]
-    if (isToolResultOnlyUserMessage(message)) continue
-    if (message.role === 'assistant') lastAssistantIndex = i
-    break
-  }
-
-  return messages
-    .filter((message) => !isToolResultOnlyUserMessage(message))
-    .map((message, _index, filtered) => {
-      const originalIndex = messages.findIndex((item) => item.id === message.id)
-      void filtered
-      return {
-        messageId: message.id,
-        isLastUserMessage: originalIndex === lastRealUserIndex,
-        isLastAssistantMessage: originalIndex === lastAssistantIndex,
-        showContinue: message.id === continueAssistantMessageId
-      }
-    })
-}
-
-function getMessageLookup(messages: UnifiedMessage[]): Map<string, UnifiedMessage> {
-  return new Map(messages.map((message) => [message.id, message]))
-}
+const EMPTY_ORCHESTRATION_STATE = { runs: [], byId: new Map(), byMessageId: new Map() }
 
 function getDistanceToBottom(ref: VListHandle): number {
   return Math.max(0, ref.scrollSize - ref.scrollOffset - ref.viewportSize)
@@ -302,24 +212,64 @@ export function MessageList({
 
   const messageLookup = React.useMemo(() => getMessageLookup(messages), [messages])
   const toolResultsLookup = React.useMemo(() => getToolResultsLookup(messages), [messages])
+  const hasSessionOrchestrationData = React.useMemo(() => {
+    if (
+      activeTeam &&
+      (!activeSessionId || !activeTeam.sessionId || activeTeam.sessionId === activeSessionId)
+    ) {
+      return true
+    }
+
+    if (teamHistory.some((team) => !activeSessionId || team.sessionId === activeSessionId)) {
+      return true
+    }
+
+    if (
+      Object.values(activeSubAgents).some(
+        (item) => !activeSessionId || item.sessionId === activeSessionId
+      )
+    ) {
+      return true
+    }
+
+    if (
+      Object.values(completedSubAgents).some(
+        (item) => !activeSessionId || item.sessionId === activeSessionId
+      )
+    ) {
+      return true
+    }
+
+    return subAgentHistory.some((item) => !activeSessionId || item.sessionId === activeSessionId)
+  }, [
+    activeSessionId,
+    activeSubAgents,
+    activeTeam,
+    completedSubAgents,
+    subAgentHistory,
+    teamHistory
+  ])
   const orchestrationState = React.useMemo(
     () =>
-      buildOrchestrationRuns({
-        sessionId: activeSessionId,
-        messages,
-        activeSubAgents,
-        completedSubAgents,
-        subAgentHistory,
-        activeTeam,
-        teamHistory
-      }),
+      hasSessionOrchestrationData
+        ? buildOrchestrationRuns({
+            sessionId: activeSessionId,
+            messages,
+            activeSubAgents,
+            completedSubAgents,
+            subAgentHistory,
+            activeTeam,
+            teamHistory
+          })
+        : EMPTY_ORCHESTRATION_STATE,
     [
       activeSessionId,
-      messages,
       activeSubAgents,
-      completedSubAgents,
-      subAgentHistory,
       activeTeam,
+      completedSubAgents,
+      hasSessionOrchestrationData,
+      messages,
+      subAgentHistory,
       teamHistory
     ]
   )
@@ -330,25 +280,31 @@ export function MessageList({
   }, [isSessionRunning, messages, streamingMessageId])
 
   const renderableMessages = React.useMemo(
-    () => buildRenderableMessages(messages, streamingMessageId, continueAssistantMessageId),
+    () => buildChatRenderableMessageMeta(messages, streamingMessageId, continueAssistantMessageId),
     [messages, streamingMessageId, continueAssistantMessageId]
   )
 
   const olderUnloadedMessageCount = Math.max(0, loadedRangeStart)
   const hasLoadMoreRow = olderUnloadedMessageCount > 0
-  const virtualRows = React.useMemo<VirtualRow[]>(() => {
+  const { virtualRows, virtualRowKeys } = React.useMemo(() => {
     const rows: VirtualRow[] = renderableMessages.map((message) => ({
       type: 'message',
       key: message.messageId,
       data: message
     }))
     if (hasLoadMoreRow) rows.unshift({ type: 'load-more', key: LOAD_MORE_ROW_KEY })
-    return rows
+    return {
+      virtualRows: rows,
+      virtualRowKeys: rows.map((row) => row.key)
+    }
   }, [hasLoadMoreRow, renderableMessages])
 
-  const rowByKey = React.useMemo(() => new Map(virtualRows.map((row) => [row.key, row])), [virtualRows])
-  const virtualRowKeys = React.useMemo(() => virtualRows.map((row) => row.key), [virtualRows])
-  const lastMessageRowIndex = virtualRowKeys.length - 1
+  const lastMessageRowIndex = virtualRows.length - 1
+
+  const getVirtualRowAt = React.useCallback(
+    (rowIndex: number): VirtualRow | undefined => virtualRows[rowIndex],
+    [virtualRows]
+  )
 
   const canAutoScroll = React.useCallback(() => {
     const mode = autoScrollModeRef.current
@@ -620,7 +576,7 @@ export function MessageList({
           onScroll={syncBottomState}
         >
           {(rowKey, rowIndex): React.JSX.Element => {
-            const row = rowByKey.get(rowKey)
+            const row = getVirtualRowAt(rowIndex)
             if (!row) return <div key={rowKey} />
             if (row.type === 'load-more') {
               return (

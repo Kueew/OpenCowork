@@ -12,6 +12,10 @@ export interface RenderableMessageMeta {
   isLastAssistantMessage: boolean
 }
 
+export interface ChatRenderableMessageMeta extends RenderableMessageMeta {
+  showContinue: boolean
+}
+
 export interface TailToolExecutionState {
   assistantIndex: number
   assistantMessageId: string
@@ -19,6 +23,8 @@ export interface TailToolExecutionState {
   toolResultMap: Map<string, { content: ToolResultContent; isError?: boolean }>
   trailingToolResultMessageCount: number
 }
+
+const messageLookupCache = new WeakMap<UnifiedMessage[], Map<string, UnifiedMessage>>()
 
 export function isToolResultOnlyUserMessage(message: UnifiedMessage): boolean {
   return (
@@ -71,6 +77,19 @@ export function getToolResultsLookup(
   return next
 }
 
+export function getMessageLookup(messages: UnifiedMessage[]): Map<string, UnifiedMessage> {
+  const cached = messageLookupCache.get(messages)
+  if (cached) return cached
+
+  const next = new Map<string, UnifiedMessage>()
+  for (const message of messages) {
+    next.set(message.id, message)
+  }
+
+  messageLookupCache.set(messages, next)
+  return next
+}
+
 export function getTailToolExecutionState(
   messages: UnifiedMessage[]
 ): TailToolExecutionState | null {
@@ -109,30 +128,39 @@ export function getTailToolExecutionState(
   }
 }
 
+function resolveLastRealUserIndex(
+  messages: UnifiedMessage[],
+  streamingMessageId: string | null
+): number {
+  if (streamingMessageId) return -1
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (isRealUserMessage(messages[index])) {
+      return index
+    }
+  }
+
+  return -1
+}
+
+function resolveLastAssistantIndex(messages: UnifiedMessage[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (isToolResultOnlyUserMessage(message)) continue
+    return message.role === 'assistant' ? index : -1
+  }
+
+  return -1
+}
+
 export function buildRenderableMessageMeta(
   messages: UnifiedMessage[],
   streamingMessageId: string | null
 ): RenderableMessageMeta[] {
-  let lastRealUserIndex = -1
-  let lastAssistantIndex = -1
-  if (!streamingMessageId) {
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      if (isRealUserMessage(messages[index])) {
-        lastRealUserIndex = index
-        break
-      }
-    }
-  }
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index]
-    if (isToolResultOnlyUserMessage(message)) continue
-    if (message.role === 'assistant') {
-      lastAssistantIndex = index
-    }
-    break
-  }
-
+  const lastRealUserIndex = resolveLastRealUserIndex(messages, streamingMessageId)
+  const lastAssistantIndex = resolveLastAssistantIndex(messages)
   const result: RenderableMessageMeta[] = []
+
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index]
     if (isToolResultOnlyUserMessage(message)) continue
@@ -145,4 +173,15 @@ export function buildRenderableMessageMeta(
   }
 
   return result
+}
+
+export function buildChatRenderableMessageMeta(
+  messages: UnifiedMessage[],
+  streamingMessageId: string | null,
+  continueAssistantMessageId: string | null
+): ChatRenderableMessageMeta[] {
+  return buildRenderableMessageMeta(messages, streamingMessageId).map((message) => ({
+    ...message,
+    showContinue: message.messageId === continueAssistantMessageId
+  }))
 }
