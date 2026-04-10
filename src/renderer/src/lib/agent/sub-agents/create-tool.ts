@@ -5,6 +5,7 @@ import type { ToolCallState } from '../types'
 import { runSubAgent } from './runner'
 import { subAgentEvents } from './events'
 import { subAgentRegistry } from './registry'
+import { buildDefaultSubAgentSystemPrompt } from './default-system-prompt'
 import type { ProviderConfig, TokenUsage, ToolResultContent } from '../../api/types'
 import type { TeamRuntimeTaskStatus } from '../../../../../shared/team-runtime-types'
 import { encodeStructuredToolResult, encodeToolError } from '../../tools/tool-result-format'
@@ -184,34 +185,66 @@ function scheduleNextTask(teamName: string): void {
     })
 }
 
+function formatAgentToolScope(agent: SubAgentDefinition): string {
+  const tools = agent.tools ?? []
+  if (tools.length === 0) return 'Read, Glob, Grep, LS, Skill'
+  if (tools.includes('*')) {
+    const denied = agent.disallowedTools ?? []
+    return denied.length > 0 ? `All tools except ${denied.join(', ')}` : '*'
+  }
+  return tools.join(', ')
+}
+
 function buildTaskDescription(agents: SubAgentDefinition[]): string {
-  const agentLines = agents.map((a) => `- ${a.name}: ${a.description}`).join('\n')
+  const agentLines = agents
+    .map((a) => `- ${a.name}: ${a.description} (Tools: ${formatAgentToolScope(a)})`)
+    .join('\n')
 
   return `Launch a new agent to handle complex, multi-step tasks autonomously.
 
-The Task tool launches specialized agents that autonomously handle complex tasks. Each agent type has specific capabilities and tools available to it.
+The Task tool launches specialized agents (sub-agents) that autonomously handle complex tasks. Each agent type has its own focused system prompt and tool allowlist.
 
-Available agent types (use the corresponding name as "subagent_type"):
+Available agent types and the tools they have access to:
 ${agentLines}
+- custom: General-purpose sub-agent with a built-in default system prompt and full tool access. Use this when none of the specialized agents above are a clean fit. You only supply the task via "prompt" — do NOT try to pass a system prompt, tools list, or permissions; those are fixed by the runtime. (Tools: *)
 
-When to use the Task tool:
-- Use the Task tool with specialized sub-agents when the task at hand matches the sub-agent's description. Select the most appropriate subagent_type based on the descriptions above.
-- For broader codebase exploration and deep research, prefer the Task tool over doing many sequential Glob/Grep/Read calls yourself.
-- When working with a Team, use Task with run_in_background=true to spawn teammate agents.
+When using the Task tool, you MUST specify a "subagent_type" parameter to select which agent type to use.
 
 When NOT to use the Task tool:
-- If you want to read a specific file path, use the Read or Glob tool instead.
+- If you want to read a specific file path, use the Read or Glob tool instead, to find the match more quickly.
 - If you are searching for a specific class definition like "class Foo", use the Glob tool instead.
 - If you are searching for code within a specific file or set of 2-3 files, use the Read tool instead.
+- For tasks that are not related to any of the agent descriptions above and cannot be expressed as a focused prompt, do the work yourself.
 
 Usage notes:
-1. Launch multiple tasks concurrently whenever possible.
-2. When the sub-agent is done, it will return a single message back to you. The result is not visible to the user — send a text summary.
-3. Each sub-agent invocation is stateless.
-4. The sub-agent's outputs should generally be trusted.
-5. Clearly tell the sub-agent whether you expect it to write code or just do research.
-6. Set run_in_background=true to spawn a teammate agent that runs independently. When done, the teammate sends its results to you via SendMessage. Your turn ends after spawning — you will be notified when teammates finish.
-7. Optional: set backend_type to choose between in-process and isolated-renderer teammate backends.`
+- Always include a short description (3-5 words) summarizing what the agent will do.
+- Launch multiple agents concurrently whenever possible, to maximize performance. To do that, send a single assistant message containing multiple Task tool_use blocks.
+- When the sub-agent is done, it will return a single message back to you. The result is not visible to the user — you must send a concise text summary back to the user after the agent returns.
+- Each sub-agent invocation is stateless: it does not see the current conversation history, so write self-contained prompts that include all context the sub-agent needs.
+- Clearly tell the sub-agent whether you expect it to write code or just do research (search, file reads, web fetches), since it does not see the user's intent.
+- The sub-agent's outputs should generally be trusted.
+- If a sub-agent's description says it should be used proactively for its domain, prefer launching it without waiting for the user to ask.
+- If the user explicitly asks for work to run "in parallel", you MUST send a single message with multiple Task tool_use blocks.
+- Set "run_in_background": true to spawn a teammate that runs independently. Your turn ends after spawning — you will be notified automatically when the teammate finishes. Background mode requires an active team (TeamCreate).
+
+Example usage:
+
+<example>
+user: "Please write a function that checks if a number is prime"
+assistant: (writes the function using the Edit tool)
+<commentary>
+A significant code change was just made, so delegate verification to a focused sub-agent.
+</commentary>
+assistant: (launches a Task with subagent_type="custom", description="verify prime function", prompt="Verify that isPrime() in <file> is correct, run any available tests, and report pass/fail with evidence.")
+</example>
+
+<example>
+user: "investigate why the sidecar deadlocks on startup"
+<commentary>
+Open-ended investigation across many files — exactly what Task is for.
+</commentary>
+assistant: (launches a Task with subagent_type="custom", description="investigate sidecar deadlock", prompt="Investigate why src/dotnet/OpenCowork.Agent deadlocks on startup. Trace the initialization path, identify the blocking await, and report the root cause with file:line evidence.")
+</example>`
 }
 
 async function executeBackgroundTeammate(
@@ -384,9 +417,11 @@ async function executeBackgroundTeammate(
   })
 }
 
+export const CUSTOM_SUBAGENT_TYPE = 'custom'
+
 export function createTaskTool(providerGetter: () => ProviderConfig): ToolHandler {
   const agents = subAgentRegistry.getAll()
-  const subTypeEnum = agents.map((a) => a.name)
+  const subTypeEnum = [...agents.map((a) => a.name), CUSTOM_SUBAGENT_TYPE]
 
   return {
     definition: {
@@ -398,11 +433,6 @@ export function createTaskTool(providerGetter: () => ProviderConfig): ToolHandle
           {
             type: 'object',
             properties: {
-              subagent_type: {
-                type: 'string',
-                enum: subTypeEnum,
-                description: 'The type of specialized agent to use for this task'
-              },
               description: {
                 type: 'string',
                 description: 'A short (3-5 word) description of the task'
@@ -411,12 +441,19 @@ export function createTaskTool(providerGetter: () => ProviderConfig): ToolHandle
                 type: 'string',
                 description: 'The task for the agent to perform'
               },
+              subagent_type: {
+                type: 'string',
+                enum: subTypeEnum,
+                description:
+                  'The type of specialized agent to use for this task. Use "custom" for a general-purpose sub-agent with full tool access and a built-in default system prompt — you only supply the task via "prompt".'
+              },
               model: {
                 type: 'string',
-                description: 'Optional model override for this agent.'
+                description:
+                  'Optional model override for this agent. If not specified, inherits from the parent. Prefer a faster/cheaper model for quick, straightforward tasks to minimize cost and latency.'
               }
             },
-            required: ['subagent_type', 'description', 'prompt'],
+            required: ['description', 'prompt', 'subagent_type'],
             additionalProperties: false
           },
           {
@@ -428,39 +465,45 @@ export function createTaskTool(providerGetter: () => ProviderConfig): ToolHandle
               },
               prompt: {
                 type: 'string',
-                description: 'The task for the agent to perform'
+                description:
+                  'The task for the teammate to perform. Write a self-contained brief — the teammate does not see the current conversation history.'
               },
               run_in_background: {
                 type: 'boolean',
                 const: true,
                 description:
-                  'Set to true to run this agent in the background as a teammate. Requires an active team (TeamCreate).'
+                  'Set to true to run this agent in the background as a teammate that runs independently. Your turn ends after spawning; you will be notified when the teammate finishes. Requires an active team (TeamCreate).'
               },
               name: {
                 type: 'string',
-                description: 'Name for the spawned teammate agent (required in background mode)'
+                description:
+                  'Name for the spawned teammate agent (required in background mode). Must be unique within the active team.'
               },
               team_name: {
                 type: 'string',
-                description: 'Team name for spawning. Uses current team context if omitted.'
+                description:
+                  'Optional team name for spawning. Uses the current active team if omitted.'
               },
               subagent_type: {
                 type: 'string',
                 enum: subTypeEnum,
-                description: 'Optional specialized background agent type to use for this teammate.'
+                description:
+                  'Optional specialized background agent type to use for this teammate. Use "custom" for a general-purpose teammate with full tool access.'
               },
               model: {
                 type: 'string',
-                description: 'Optional model override for this agent.'
+                description:
+                  'Optional model override for this agent. If not specified, inherits from the parent. Prefer a faster/cheaper model for quick, straightforward tasks.'
               },
               task_id: {
                 type: 'string',
-                description: 'Optional task ID to assign to the teammate immediately'
+                description: 'Optional task ID to assign to the teammate immediately.'
               },
               backend_type: {
                 type: 'string',
                 enum: ['in-process', 'isolated-renderer'],
-                description: 'Optional backend override for the teammate runtime.'
+                description:
+                  'Optional backend override for the teammate runtime: "in-process" shares the current renderer, "isolated-renderer" spawns a dedicated worker.'
               }
             },
             required: ['description', 'prompt', 'run_in_background', 'name'],
@@ -480,11 +523,31 @@ export function createTaskTool(providerGetter: () => ProviderConfig): ToolHandle
           `"subagent_type" is required for synchronous Task. Available: ${subTypeEnum.join(', ')}`
         )
       }
-      const def = subAgentRegistry.get(subType)
-      if (!def) {
-        return encodeToolError(
-          `Unknown subagent_type "${subType}". Available: ${subTypeEnum.join(', ')}`
-        )
+
+      const isCustom = subType === CUSTOM_SUBAGENT_TYPE
+      let def: SubAgentDefinition | undefined
+      if (isCustom) {
+        def = {
+          name: CUSTOM_SUBAGENT_TYPE,
+          description:
+            typeof input.description === 'string' ? input.description : 'Custom sub-agent',
+          systemPrompt: buildDefaultSubAgentSystemPrompt({
+            workingFolder: ctx.workingFolder,
+            language: useSettingsStore.getState().language
+          }),
+          tools: ['*'],
+          disallowedTools: [],
+          maxTurns: 0,
+          ...(typeof input.model === 'string' && input.model ? { model: input.model } : {}),
+          inputSchema: { type: 'object', properties: {} }
+        }
+      } else {
+        def = subAgentRegistry.get(subType)
+        if (!def) {
+          return encodeToolError(
+            `Unknown subagent_type "${subType}". Available: ${subTypeEnum.join(', ')}`
+          )
+        }
       }
 
       // Guard against back-to-back identical Task calls: if the parent just
@@ -526,6 +589,9 @@ export function createTaskTool(providerGetter: () => ProviderConfig): ToolHandle
           toolUseId: ctx.currentToolUseId ?? '',
           onEvent,
           onApprovalNeeded: async (tc: ToolCallState) => {
+            // Custom sub-agents are defined by the parent agent and run with all
+            // permissions by default — auto-approve every tool call they make.
+            if (isCustom) return true
             const autoApprove = useSettingsStore.getState().autoApprove
             if (autoApprove) return true
             const approved = useAgentStore.getState().approvedToolNames

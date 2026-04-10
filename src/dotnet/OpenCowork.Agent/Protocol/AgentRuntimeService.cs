@@ -697,8 +697,28 @@ public sealed class AgentRuntimeService
             Definition = new ToolDefinition
             {
                 Name = "Task",
-                Description = "Run a sub-agent task.",
-                InputSchema = ParseSchema("""{"type":"object","properties":{"subagent_type":{"type":"string"},"description":{"type":"string"},"prompt":{"type":"string"},"model":{"type":"string"},"resume":{"type":"string"},"readonly":{"type":"boolean"},"attachments":{"type":"array","items":{"type":"string"}},"run_in_background":{"type":"boolean"}},"required":["subagent_type","description","prompt"]}""")
+                Description = """
+Launch a new agent to handle complex, multi-step tasks autonomously.
+
+The Task tool launches specialized agents (sub-agents) that autonomously handle complex tasks. Each agent type has its own focused system prompt and tool allowlist. Use "custom" for a general-purpose sub-agent with full tool access and a built-in default system prompt — you only supply the task via "prompt".
+
+When using the Task tool, you MUST specify a "subagent_type" parameter to select which agent type to use.
+
+When NOT to use the Task tool:
+- If you want to read a specific file path, use the Read or Glob tool instead.
+- If you are searching for a specific class definition, use the Glob tool instead.
+- If you are searching for code within a specific file or set of 2-3 files, use the Read tool instead.
+
+Usage notes:
+- Always include a short description (3-5 words) summarizing what the agent will do.
+- Launch multiple agents concurrently whenever possible, by sending a single assistant message with multiple Task tool_use blocks.
+- When the sub-agent is done, it will return a single message back to you. The result is not visible to the user — send a concise text summary back to the user after the agent returns.
+- Each sub-agent invocation is stateless and does not see the current conversation history, so write self-contained prompts.
+- Clearly tell the sub-agent whether you expect it to write code or just do research.
+- The sub-agent's outputs should generally be trusted.
+- Set "run_in_background": true to spawn a teammate that runs independently. Your turn ends after spawning; you will be notified automatically when the teammate finishes. Background mode requires an active team (TeamCreate).
+""",
+                InputSchema = ParseSchema("""{"type":"object","properties":{"subagent_type":{"type":"string","description":"The sub-agent type to use. Use \"custom\" for a general-purpose sub-agent with full tool access and a built-in default system prompt — you only supply the task via prompt."},"description":{"type":"string","description":"A short (3-5 word) description of the task"},"prompt":{"type":"string","description":"The task for the agent to perform"},"model":{"type":"string","description":"Optional model override for this agent."},"resume":{"type":"string"},"readonly":{"type":"boolean"},"attachments":{"type":"array","items":{"type":"string"}},"run_in_background":{"type":"boolean","description":"Set to true to run this agent in the background as a teammate. Requires an active team (TeamCreate)."}},"required":["subagent_type","description","prompt"]}""")
             },
             Execute = ExecuteTaskToolAsync,
             RequiresApproval = (input, _) => GetOptionalBool(input, "run_in_background") == true
@@ -820,6 +840,74 @@ public sealed class AgentRuntimeService
             .Where(static item => !string.IsNullOrWhiteSpace(item))
             .Cast<string>()
             .ToArray();
+    }
+
+    private static string BuildDefaultCustomSubAgentSystemPrompt(string? workingFolder)
+    {
+        var os = OperatingSystem.IsWindows() ? "Windows"
+            : OperatingSystem.IsMacOS() ? "macOS"
+            : OperatingSystem.IsLinux() ? "Linux"
+            : "Unknown";
+        var shell = OperatingSystem.IsWindows() ? "PowerShell" : "bash";
+        var folderLine = string.IsNullOrWhiteSpace(workingFolder)
+            ? string.Empty
+            : $"- Working Folder: `{workingFolder}`\n  All relative paths resolve against this folder. Use it as the default cwd for Bash commands.\n";
+
+        return $"""
+You are a specialized **OpenCoWork sub-agent**, dispatched by a parent agent to autonomously complete a single focused task.
+OpenCoWork is developed by the **AIDotNet** team. You run with full tool access and full write permissions — the parent agent is responsible for deciding what to do; you are responsible for doing it correctly and terminating cleanly.
+You are stateless: you do not see earlier conversation history. Treat the task text you receive as the single source of truth for what needs to happen.
+
+## Environment
+- Execution Target: Local Machine
+- Operating System: {os}
+- Shell: {shell}
+{folderLine}
+<communication_style>
+Be terse and direct. Focus on the task. Do not narrate, do not ask the parent for confirmation, do not restate what the parent already knows.
+- Think before acting: understand intent, locate relevant files, plan minimal changes, then verify.
+- Make no ungrounded assertions; state uncertainty explicitly when stuck.
+- Do not start responses with praise or acknowledgment phrases. Start with substance.
+- Do not add or remove comments or documentation unless the task asks for it.
+</communication_style>
+
+<tool_calling>
+Use tools decisively. You have access to every tool the main agent has.
+- Follow tool schemas exactly and provide required parameters.
+- Batch independent tool calls in parallel; keep sequential only when dependent.
+- Use Glob/Grep/Read before assuming project structure.
+- Prefer the dedicated tool over Bash: Read for files, Edit for in-place changes, Glob for filename search, Grep for content search.
+- Do not use Bash for `cat`, `head`, `tail`, `grep`, or `find` — use Read/Grep/Glob instead.
+- Do not fabricate file contents or tool outputs.
+</tool_calling>
+
+<making_code_changes>
+- Always read a file before editing it.
+- Prefer minimal, surgical edits with Edit over rewriting with Write.
+- Match the codebase's naming, formatting, and conventions.
+- Ensure every change is complete: imports, types, error handling.
+- Avoid over-engineering; do only what the task asks.
+- Never introduce security vulnerabilities or hardcode secrets.
+- Never modify files you have not read.
+</making_code_changes>
+
+<running_commands>
+You can run terminal commands on the user's machine.
+- Use the Bash tool; never include `cd` in the command. Set `cwd` instead.
+- Check for existing dev servers before starting new ones.
+- Never delete unrelated files, install system packages, or expose secrets in output.
+</running_commands>
+
+<session_termination>
+When the task is complete you MUST call the `SubmitReport` tool exactly once to end this sub-agent session.
+- Do NOT stop by simply emitting an assistant message — plain-text endings are treated as "session ran out" and trigger a fallback synthesis you cannot control.
+- Do NOT call `SubmitReport` with an empty `report` argument; empty submissions are rejected.
+- After calling `SubmitReport`, do NOT call any other tools.
+- Even if the task turns out infeasible or nothing was found, submit a short report explaining why instead of leaving the session dangling.
+- Write the report in the same language as the task.
+- Structure the `report` argument with: ## Conclusion / ## Key Findings / ## Evidence / ## Risks & Unknowns / ## Next Steps
+</session_termination>
+""";
     }
 
     private static string ResolvePath(string rawPath, string workingFolder)
@@ -996,23 +1084,46 @@ public sealed class AgentRuntimeService
         }
 
         var subAgentName = GetString(input, "subagent_type", required: true);
-        var definition = await GetSubAgentDefinitionAsync(ctx, subAgentName, ct);
-        if (definition is null)
+        var isCustom = string.Equals(subAgentName, "custom", StringComparison.Ordinal);
+        SubAgentDefinition? definition;
+        if (isCustom)
         {
-            return new ToolResultContent
+            definition = new SubAgentDefinition
             {
-                Content = BuildJsonObject(new Dictionary<string, JsonNode?>
-                {
-                    ["error"] = JsonValue.Create($"Unknown subagent_type \"{subAgentName}\".")
-                })
+                Name = "custom",
+                Description = GetOptionalString(input, "description") ?? "Custom sub-agent",
+                SystemPrompt = BuildDefaultCustomSubAgentSystemPrompt(ctx.WorkingFolder),
+                Tools = new List<string> { "*" },
+                DisallowedTools = new List<string>(),
+                MaxTurns = 0,
+                Model = GetOptionalString(input, "model")
             };
+        }
+        else
+        {
+            definition = await GetSubAgentDefinitionAsync(ctx, subAgentName, ct);
+            if (definition is null)
+            {
+                return new ToolResultContent
+                {
+                    Content = BuildJsonObject(new Dictionary<string, JsonNode?>
+                    {
+                        ["error"] = JsonValue.Create($"Unknown subagent_type \"{subAgentName}\".")
+                    })
+                };
+            }
         }
 
         if (ctx.ProviderConfig is null)
             throw new InvalidOperationException("Provider config is unavailable for sub-agent execution.");
 
         var provider = CreateProvider(ctx.ProviderConfig, ctx.AgentRunId ?? ctx.SessionId);
-        var result = await _subAgentRunner.RunAsync(definition, input, provider, ctx.ProviderConfig, ctx, CreateApprovalHandler(ctx.AgentRunId ?? ctx.SessionId, ctx.SessionId, ct), ct);
+        // Custom sub-agents are defined inline by the parent agent and run with
+        // all permissions by default — auto-approve every tool call they make.
+        ApprovalHandler approvalHandler = isCustom
+            ? (_ => Task.FromResult(true))
+            : CreateApprovalHandler(ctx.AgentRunId ?? ctx.SessionId, ctx.SessionId, ct);
+        var result = await _subAgentRunner.RunAsync(definition, input, provider, ctx.ProviderConfig, ctx, approvalHandler, ct);
 
         if (!result.Result.Success)
         {

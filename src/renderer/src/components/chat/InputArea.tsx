@@ -2418,15 +2418,19 @@ export function InputArea({
                   <TooltipTrigger asChild>
                     <Button
                       variant="ghost"
-                      size="sm"
+                      size="icon"
                       className={cn(
-                        'h-8 rounded-lg px-2 gap-1 transition-colors hover:bg-muted/50',
-                        webSearchEnabled ? 'text-blue-600 dark:text-blue-400' : 'text-muted-foreground hover:text-foreground'
+                        'size-8 transition-colors hover:bg-muted/50',
+                        isHomeComposer ? 'rounded-full' : 'rounded-lg',
+                        webSearchEnabled
+                          ? 'text-blue-600 dark:text-blue-400'
+                          : 'text-muted-foreground hover:text-foreground',
+                        isHomeComposer && !webSearchEnabled && 'hover:bg-white/5'
                       )}
                       onClick={toggleWebSearch}
                       disabled={disabled || isStreaming}
                     >
-                      <Globe className="size-4" fill={webSearchEnabled ? 'currentColor' : 'none'} />
+                      <Globe className="size-4" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>
