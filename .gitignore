@@ -8,3 +8,4 @@ out
 bin/
 obj/
 resources/sidecar/
+.claude\worktrees/
