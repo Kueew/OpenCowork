@@ -3,6 +3,29 @@
 All notable changes to **OpenCowork** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com).
 
+## [0.7.18] - 2026-04-10
+
+### Added
+
+- Enhanced the Task tool and sub-agent execution flow.
+
+### Changed
+
+- Reworked agent/runtime IPC and sidecar protocol plumbing to keep renderer and backend paths aligned.
+- Refreshed orchestration and sub-agent card UI.
+- Optimized transcript row metadata and lookup.
+- Updated contributor guidance, build/development commands, README links, and repository housekeeping.
+- Bumped the app version to `v0.7.18`.
+
+### Fixed
+
+- Added reduced-memory recovery after OOM.
+- Added GIF background color handling to improve export consistency.
+
+### Notes
+
+- This release focuses on task/sub-agent workflow improvements, chat UI polish, runtime stability, and developer tooling/documentation updates.
+
 ## [0.7.17] - 2026-04-08
 
 ### Added

@@ -172,7 +172,7 @@ function DebugToggleButton({ debugInfo }: { debugInfo: RequestDebugInfo }): Reac
         <Bug className="size-3.5" />
       </button>
       <Dialog open={show} onOpenChange={setShow}>
-        <DialogContent className="max-h-[80vh] max-w-[90vw] gap-0 overflow-hidden p-0 sm:max-w-3xl">
+        <DialogContent className="flex max-h-[80vh] max-w-[90vw] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
           <DialogHeader className="border-b bg-muted/30 px-4 py-2.5 pr-10 text-left">
             <DialogTitle className="flex items-center gap-2 text-xs font-medium">
               <Bug className="size-3.5 text-orange-500" />
