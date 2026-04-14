@@ -475,7 +475,11 @@ export const useUIStore = create<UIStore>((set, get) => ({
         : null
     })),
   activeScopedSessionId: null,
-  syncSessionScopedState: (sessionId) => set({ activeScopedSessionId: sessionId }),
+  syncSessionScopedState: (sessionId) =>
+    set((state) => ({
+      activeScopedSessionId: sessionId,
+      planMode: sessionId ? (state.planModesBySession[sessionId] ?? false) : false
+    })),
   messageListViewStatesBySession: {},
   setMessageListViewState: (sessionId, state) =>
     set((current) => ({
@@ -598,11 +602,40 @@ export const useUIStore = create<UIStore>((set, get) => ({
     }),
   setOrchestrationConsoleView: (view) => set({ orchestrationConsoleView: view }),
   planMode: false,
-  enterPlanMode: () =>
-    set({ planMode: true, rightPanelTab: 'plan', rightPanelOpen: true, leftSidebarOpen: false }),
-  exitPlanMode: () => set({ planMode: false }),
+  enterPlanMode: (sessionId) =>
+    set((state) => {
+      const resolvedSessionId = sessionId ?? state.activeScopedSessionId ?? useChatStore.getState().activeSessionId
+      return {
+        planMode: true,
+        planModesBySession: resolvedSessionId
+          ? { ...state.planModesBySession, [resolvedSessionId]: true }
+          : state.planModesBySession,
+        rightPanelTab: 'plan',
+        rightPanelOpen: true,
+        leftSidebarOpen: false
+      }
+    }),
+  exitPlanMode: (sessionId) =>
+    set((state) => {
+      const resolvedSessionId = sessionId ?? state.activeScopedSessionId ?? useChatStore.getState().activeSessionId
+      const nextPlanModesBySession = { ...state.planModesBySession }
+      if (resolvedSessionId) {
+        delete nextPlanModesBySession[resolvedSessionId]
+      }
+      const nextPlanMode = resolvedSessionId
+        ? Boolean(nextPlanModesBySession[resolvedSessionId])
+        : false
+      return {
+        planMode: nextPlanMode,
+        planModesBySession: nextPlanModesBySession
+      }
+    }),
   planModesBySession: {},
-  isPlanModeEnabled: () => get().planMode,
+  isPlanModeEnabled: (sessionId) => {
+    const resolvedSessionId = sessionId ?? get().activeScopedSessionId ?? useChatStore.getState().activeSessionId
+    if (!resolvedSessionId) return false
+    return Boolean(get().planModesBySession[resolvedSessionId])
+  },
   chatView: 'home',
   navigateToHome: () => {
     set({ activeNavItem: 'chat', chatView: 'home', ...CHAT_SURFACE_NAV_RESET })

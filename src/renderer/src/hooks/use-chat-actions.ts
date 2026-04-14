@@ -2028,7 +2028,7 @@ export function useChatActions(): {
           : finalToolDefs.filter((t) => !TEAM_TOOL_NAMES.has(t.name))
 
         // Plan mode: restrict to read-only + planning tools
-        const isPlanMode = useUIStore.getState().planMode
+        const isPlanMode = useUIStore.getState().isPlanModeEnabled(sessionId)
         if (isPlanMode) {
           finalEffectiveToolDefs = finalEffectiveToolDefs.filter((t) =>
             PLAN_MODE_ALLOWED_TOOLS.has(t.name)

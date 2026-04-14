@@ -210,23 +210,6 @@ type ExportedProjectPayload = {
   sessions: Session[]
 }
 
-type VirtualListItem<T> =
-  | { type: 'header'; key: string; label: string }
-  | { type: 'item'; key: string; data: T }
-
-function buildVirtualListItems<T>(
-  sections: Array<{ key: string; label: string; items: T[] }>
-): VirtualListItem<T>[] {
-  return sections.flatMap((section) => [
-    { type: 'header' as const, key: `header-${section.key}`, label: section.label },
-    ...section.items.map((item, index) => ({
-      type: 'item' as const,
-      key: `${section.key}-${index}`,
-      data: item
-    }))
-  ])
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
@@ -326,8 +309,6 @@ export function WorkspaceSidebar(): React.JSX.Element {
   const projectScrollRef = useRef<HTMLDivElement>(null)
   const sessionScrollRef = useRef<HTMLDivElement>(null)
   const [search, setSearch] = useState('')
-  const [projectScrollTop, setProjectScrollTop] = useState(0)
-  const [sessionScrollTop, setSessionScrollTop] = useState(0)
   const [renameDialog, setRenameDialog] = useState<
     | { type: 'project'; id: string; currentName: string }
     | { type: 'session'; id: string; currentName: string }
@@ -364,9 +345,7 @@ export function WorkspaceSidebar(): React.JSX.Element {
         runningBackgroundSessionIds.has(session.id) ||
         streamingSessionIds.has(session.id) ||
         activeTeamSessionId === session.id
-      if (isRunning) {
-        projectIds.add(session.projectId)
-      }
+      if (isRunning) projectIds.add(session.projectId)
     }
     return projectIds
   }, [
@@ -453,6 +432,21 @@ export function WorkspaceSidebar(): React.JSX.Element {
     }
     return grouped
   }, [filteredProjectSessions])
+  const sessionSections = useMemo(
+    () =>
+      [
+        { key: 'today' as const, label: t('sidebar.today'), items: groupedSessions.today },
+        {
+          key: 'recentThreeDays' as const,
+          label: t('sidebar.recentThreeDays'),
+          items: groupedSessions.recentThreeDays
+        },
+        { key: 'recentWeek' as const, label: t('sidebar.recentWeek'), items: groupedSessions.recentWeek },
+        { key: 'oneMonth' as const, label: t('sidebar.oneMonth'), items: groupedSessions.oneMonth },
+        { key: 'older' as const, label: t('sidebar.older'), items: groupedSessions.older }
+      ].filter((section) => section.items.length > 0),
+    [groupedSessions, t]
+  )
 
   const currentSidebarWidth = clampLeftSidebarWidth(
     leftSidebarWidth || persistedLeftSidebarWidth || LEFT_SIDEBAR_DEFAULT_WIDTH
@@ -679,83 +673,6 @@ export function WorkspaceSidebar(): React.JSX.Element {
     setRenameValue(dialog.currentName)
   }, [])
 
-  const bucketDefs: Array<{ key: BucketKey; label: string }> = useMemo(
-    () => [
-      { key: 'today', label: t('sidebar.today') },
-      {
-        key: 'recentThreeDays',
-        label: t('sidebar.recentThreeDays')
-      },
-      {
-        key: 'recentWeek',
-        label: t('sidebar.recentWeek')
-      },
-      {
-        key: 'oneMonth',
-        label: t('sidebar.oneMonth')
-      },
-      { key: 'older', label: t('sidebar.older') }
-    ],
-    [t]
-  )
-  const projectSections = useMemo(
-    () => [{ key: 'projects', label: t('sidebar.projects'), items: filteredProjects }],
-    [filteredProjects, t]
-  )
-  const virtualProjectItems = useMemo(() => buildVirtualListItems(projectSections), [projectSections])
-  const sessionSections = useMemo(
-    () =>
-      bucketDefs
-        .map((bucket) => ({ key: bucket.key, label: bucket.label, items: groupedSessions[bucket.key] }))
-        .filter((section) => section.items.length > 0),
-    [bucketDefs, groupedSessions]
-  )
-  const virtualSessionItems = useMemo(() => buildVirtualListItems(sessionSections), [sessionSections])
-
-  const PROJECT_ROW_HEIGHT = 42
-  const SESSION_ROW_HEIGHT = 38
-  const HEADER_ROW_HEIGHT = 26
-  const OVERSCAN = 8
-
-  const projectVisibleRange = useMemo(() => {
-    const viewportHeight = projectScrollRef.current?.clientHeight ?? 400
-    const start = Math.max(0, Math.floor(projectScrollTop / PROJECT_ROW_HEIGHT) - OVERSCAN)
-    const end = Math.min(
-      virtualProjectItems.length,
-      Math.ceil((projectScrollTop + viewportHeight) / PROJECT_ROW_HEIGHT) + OVERSCAN
-    )
-    return { start, end }
-  }, [projectScrollTop, virtualProjectItems.length])
-
-  const sessionOffsets = useMemo(() => {
-    const offsets: number[] = []
-    let total = 0
-    for (const item of virtualSessionItems) {
-      offsets.push(total)
-      total += item.type === 'header' ? HEADER_ROW_HEIGHT : SESSION_ROW_HEIGHT
-    }
-    return { offsets, total }
-  }, [virtualSessionItems])
-
-  const sessionVisibleRange = useMemo(() => {
-    const viewportHeight = sessionScrollRef.current?.clientHeight ?? 400
-    let start = 0
-    while (
-      start < virtualSessionItems.length &&
-      sessionOffsets.offsets[start] + (virtualSessionItems[start]?.type === 'header' ? HEADER_ROW_HEIGHT : SESSION_ROW_HEIGHT) <
-        sessionScrollTop
-    ) {
-      start += 1
-    }
-    start = Math.max(0, start - OVERSCAN)
-    let end = start
-    while (end < virtualSessionItems.length && sessionOffsets.offsets[end] < sessionScrollTop + viewportHeight) {
-      end += 1
-    }
-    end = Math.min(virtualSessionItems.length, end + OVERSCAN)
-    return { start, end }
-  }, [sessionOffsets.offsets, sessionScrollTop, virtualSessionItems])
-
   const navItems = [
     {
       key: 'home',
@@ -910,108 +827,105 @@ export function WorkspaceSidebar(): React.JSX.Element {
               </div>
             </div>
 
-            <div
-              ref={sessionScrollRef}
-              className="min-h-0 flex-1 overflow-y-auto px-2 pb-2"
-              onScroll={(event) => setSessionScrollTop(event.currentTarget.scrollTop)}
-            >
+            <div ref={sessionScrollRef} className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
               {filteredProjectSessions.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-border/60 px-4 py-6 text-center text-sm text-muted-foreground">
-                  {searchQuery
-                    ? t('sidebar.noMatches')
-                    : t('sidebar.noProjectSessions')}
+                  {searchQuery ? t('sidebar.noMatches') : t('sidebar.noProjectSessions')}
                 </div>
               ) : (
-                <div style={{ height: sessionOffsets.total, position: 'relative' }}>
-                  {virtualSessionItems.slice(sessionVisibleRange.start, sessionVisibleRange.end).map((entry, index) => {
-                    const actualIndex = sessionVisibleRange.start + index
-                    const top = sessionOffsets.offsets[actualIndex] ?? 0
-                    if (entry.type === 'header') {
-                      return (
-                        <div
-                          key={entry.key}
-                          className="px-1 text-[11px] font-medium text-muted-foreground"
-                          style={{ position: 'absolute', top, left: 0, right: 0, height: HEADER_ROW_HEIGHT }}
-                        >
-                          {entry.label}
-                        </div>
-                      )
-                    }
-                    const session = entry.data
-                    const isActive = session.id === activeSessionId && chatView === 'session'
-                    const isRunning =
-                      runningSessions[session.id] === 'running' ||
-                      runningSubAgentSessionIds.has(session.id) ||
-                      runningBackgroundSessionIds.has(session.id) ||
-                      streamingSessionIds.has(session.id) ||
-                      activeTeamSessionId === session.id
-                    return (
-                      <div
-                        key={session.id}
-                        style={{ position: 'absolute', top, left: 0, right: 0, height: SESSION_ROW_HEIGHT }}
-                      >
-                        <ContextMenu>
-                          <ContextMenuTrigger asChild>
-                            <div
-                              className={cn(
-                                'group flex h-[34px] items-center gap-2 rounded-lg px-2 py-1.5 transition-colors',
-                                isActive
-                                  ? 'bg-accent text-accent-foreground'
-                                  : 'hover:bg-muted/50 text-foreground/85'
-                              )}
-                            >
-                              <button
-                                type="button"
-                                className="flex min-w-0 flex-1 items-center text-left"
-                                onClick={() => openSession(session.id)}
+                <div className="space-y-1">
+                  {sessionSections.map((section) => (
+                    <div key={section.key} className="space-y-1">
+                      <div className="px-1 text-[11px] font-medium text-muted-foreground">
+                        {section.label}
+                      </div>
+                      {section.items.map((session) => {
+                        const isActive = session.id === activeSessionId && chatView === 'session'
+                        const isRunning =
+                          runningSessions[session.id] === 'running' ||
+                          runningSubAgentSessionIds.has(session.id) ||
+                          runningBackgroundSessionIds.has(session.id) ||
+                          streamingSessionIds.has(session.id) ||
+                          activeTeamSessionId === session.id
+                        return (
+                          <ContextMenu key={session.id}>
+                            <ContextMenuTrigger asChild>
+                              <div
+                                className={cn(
+                                  'group flex h-[34px] items-center gap-2 rounded-lg px-2 py-1.5 transition-colors',
+                                  isActive
+                                    ? 'bg-accent text-accent-foreground'
+                                    : 'text-foreground/85 hover:bg-muted/50'
+                                )}
                               >
-                                <span className="line-clamp-1 min-w-0 flex-1 text-[13px] font-medium leading-5">
-                                  {session.title}
-                                </span>
-                              </button>
-                              {isRunning && (
-                                <Loader2 className="size-3.5 shrink-0 animate-spin text-primary" />
+                                <button
+                                  type="button"
+                                  className="flex min-w-0 flex-1 items-center text-left"
+                                  onClick={() => openSession(session.id)}
+                                >
+                                  <span className="line-clamp-1 min-w-0 flex-1 text-[13px] font-medium leading-5">
+                                    {session.title}
+                                  </span>
+                                </button>
+                                {isRunning && (
+                                  <Loader2 className="size-3.5 shrink-0 animate-spin text-primary" />
+                                )}
+                              </div>
+                            </ContextMenuTrigger>
+                            <ContextMenuContent className="w-52">
+                              <ContextMenuItem onClick={() => openSession(session.id)}>
+                                <MessageSquare className="size-4" />
+                                {t('topbar.openSession')}
+                              </ContextMenuItem>
+                              <ContextMenuItem
+                                onSelect={() =>
+                                  deferDropdownAction(() =>
+                                    startRename({ type: 'session', id: session.id, currentName: session.title })
+                                  )
+                                }
+                              >
+                                <Pencil className="size-4" />
+                                {tCommon('action.rename')}
+                              </ContextMenuItem>
+                              <ContextMenuItem
+                                onClick={() => {
+                                  togglePinSession(session.id)
+                                  toast.success(
+                                    session.pinned
+                                      ? t('sidebar_toast.unpinned')
+                                      : t('sidebar_toast.pinnedMsg')
+                                  )
+                                }}
+                              >
+                                {session.pinned ? <PinOff className="size-4" /> : <Pin className="size-4" />}
+                                {session.pinned ? tCommon('action.unpin') : t('sidebar.pinToTop')}
+                              </ContextMenuItem>
+                              <ContextMenuItem
+                                onClick={async () => {
+                                  await duplicateSession(session.id)
+                                  toast.success(t('sidebar_toast.sessionDuplicated'))
+                                }}
+                              >
+                                <Copy className="size-4" />
+                                {tCommon('action.duplicate')}
+                              </ContextMenuItem>
+                              {session.messageCount > 0 && (
+                                <ContextMenuItem
+                                  onClick={async () => {
+                                    await useChatStore.getState().loadSessionMessages(session.id)
+                                    const snapshot = useChatStore
+                                      .getState()
+                                      .sessions.find((item) => item.id === session.id)
+                                    if (!snapshot) return
+                                    const fileName = `${sanitizeExportFileName(snapshot.title)}.md`
+                                    downloadMarkdown(fileName, sessionToMarkdown(snapshot))
+                                    toast.success(t('sidebar_toast.exportedOne'))
+                                  }}
+                                >
+                                  <FileText className="size-4" />
+                                  {t('sidebar.exportAsMarkdown')}
+                                </ContextMenuItem>
                               )}
-                            </div>
-                          </ContextMenuTrigger>
-                          <ContextMenuContent className="w-52">
-                            <ContextMenuItem onClick={() => openSession(session.id)}>
-                              <MessageSquare className="size-4" />
-                              {t('topbar.openSession')}
-                            </ContextMenuItem>
-                            <ContextMenuItem
-                              onSelect={() =>
-                                deferDropdownAction(() =>
-                                  startRename({ type: 'session', id: session.id, currentName: session.title })
-                                )
-                              }
-                            >
-                              <Pencil className="size-4" />
-                              {tCommon('action.rename')}
-                            </ContextMenuItem>
-                            <ContextMenuItem
-                              onClick={() => {
-                                togglePinSession(session.id)
-                                toast.success(
-                                  session.pinned
-                                    ? t('sidebar_toast.unpinned')
-                                    : t('sidebar_toast.pinnedMsg')
-                                )
-                              }}
-                            >
-                              {session.pinned ? <PinOff className="size-4" /> : <Pin className="size-4" />}
-                              {session.pinned ? tCommon('action.unpin') : t('sidebar.pinToTop')}
-                            </ContextMenuItem>
-                            <ContextMenuItem
-                              onClick={async () => {
-                                await duplicateSession(session.id)
-                                toast.success(t('sidebar_toast.sessionDuplicated'))
-                              }}
-                            >
-                              <Copy className="size-4" />
-                              {tCommon('action.duplicate')}
-                            </ContextMenuItem>
-                            {session.messageCount > 0 && (
                               <ContextMenuItem
                                 onClick={async () => {
                                   await useChatStore.getState().loadSessionMessages(session.id)
@@ -1019,62 +933,47 @@ export function WorkspaceSidebar(): React.JSX.Element {
                                     .getState()
                                     .sessions.find((item) => item.id === session.id)
                                   if (!snapshot) return
-                                  const fileName = `${sanitizeExportFileName(snapshot.title)}.md`
-                                  downloadMarkdown(fileName, sessionToMarkdown(snapshot))
-                                  toast.success(t('sidebar_toast.exportedOne'))
+                                  downloadJson(`${sanitizeExportFileName(snapshot.title)}.json`, {
+                                    version: 1,
+                                    type: 'session',
+                                    session: snapshot
+                                  } satisfies ExportedSessionPayload)
+                                  toast.success(t('sidebar.exportedAsJson'))
                                 }}
                               >
-                                <FileText className="size-4" />
-                                {t('sidebar.exportAsMarkdown')}
+                                <Download className="size-4" />
+                                {t('sidebar.exportAsJson')}
                               </ContextMenuItem>
-                            )}
-                            <ContextMenuItem
-                              onClick={async () => {
-                                await useChatStore.getState().loadSessionMessages(session.id)
-                                const snapshot = useChatStore
-                                  .getState()
-                                  .sessions.find((item) => item.id === session.id)
-                                if (!snapshot) return
-                                downloadJson(`${sanitizeExportFileName(snapshot.title)}.json`, {
-                                  version: 1,
-                                  type: 'session',
-                                  session: snapshot
-                                } satisfies ExportedSessionPayload)
-                                toast.success(t('sidebar.exportedAsJson'))
-                              }}
-                            >
-                              <Download className="size-4" />
-                              {t('sidebar.exportAsJson')}
-                            </ContextMenuItem>
-                            {session.messageCount > 0 && (
+                              {session.messageCount > 0 && (
+                                <ContextMenuItem
+                                  onClick={() => {
+                                    clearSessionMessages(session.id)
+                                    clearPendingSessionMessages(session.id)
+                                    toast.success(t('sidebar_toast.messagesCleared'))
+                                  }}
+                                >
+                                  <Eraser className="size-4" />
+                                  {t('sidebar.clearMessages')}
+                                </ContextMenuItem>
+                              )}
+                              <ContextMenuSeparator />
                               <ContextMenuItem
-                                onClick={() => {
-                                  clearSessionMessages(session.id)
-                                  clearPendingSessionMessages(session.id)
-                                  toast.success(t('sidebar_toast.messagesCleared'))
-                                }}
+                                variant="destructive"
+                                onSelect={() =>
+                                  deferDropdownAction(() =>
+                                    setDeleteTarget({ type: 'session', id: session.id, title: session.title })
+                                  )
+                                }
                               >
-                                <Eraser className="size-4" />
-                                {t('sidebar.clearMessages')}
+                                <Trash2 className="size-4" />
+                                {tCommon('action.delete')}
                               </ContextMenuItem>
-                            )}
-                            <ContextMenuSeparator />
-                            <ContextMenuItem
-                              variant="destructive"
-                              onSelect={() =>
-                                deferDropdownAction(() =>
-                                  setDeleteTarget({ type: 'session', id: session.id, title: session.title })
-                                )
-                              }
-                            >
-                              <Trash2 className="size-4" />
-                              {tCommon('action.delete')}
-                            </ContextMenuItem>
-                          </ContextMenuContent>
-                        </ContextMenu>
-                      </div>
-                    )
-                  })}
+                            </ContextMenuContent>
+                          </ContextMenu>
+                        )
+                      })}
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
@@ -1106,21 +1005,15 @@ export function WorkspaceSidebar(): React.JSX.Element {
                     {userName || t('titleBar.defaultName', { defaultValue: 'OpenCoWork' })}
                   </DropdownMenuLabel>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onClick={() => useUIStore.getState().openSettingsPage('general')}
-                  >
+                  <DropdownMenuItem onClick={() => useUIStore.getState().openSettingsPage('general')}>
                     <Settings className="size-4" />
                     {t('sidebar.systemSettings')}
                   </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => useUIStore.getState().openSettingsPage('memory')}
-                  >
+                  <DropdownMenuItem onClick={() => useUIStore.getState().openSettingsPage('memory')}>
                     <BookOpen className="size-4" />
                     {t('sidebar.memoryLabel')}
                   </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => useUIStore.getState().openSettingsPage('analytics')}
-                  >
+                  <DropdownMenuItem onClick={() => useUIStore.getState().openSettingsPage('analytics')}>
                     <BarChart3 className="size-4" />
                     {t('sidebar.analyticsLabel')}
                   </DropdownMenuItem>
@@ -1167,9 +1060,7 @@ export function WorkspaceSidebar(): React.JSX.Element {
             </div>
 
             <div className="flex items-center justify-between px-2 pb-1 pt-1">
-              <div className="text-[10px] font-medium text-muted-foreground">
-                {t('sidebar.projects')}
-              </div>
+              <div className="text-[10px] font-medium text-muted-foreground">{t('sidebar.projects')}</div>
               <div className="flex items-center gap-1">
                 <Button
                   variant="ghost"
@@ -1202,43 +1093,20 @@ export function WorkspaceSidebar(): React.JSX.Element {
               />
             </div>
 
-            <div
-              ref={projectScrollRef}
-              className="min-h-0 flex-1 overflow-y-auto px-2.5 pb-2.5"
-              onScroll={(event) => setProjectScrollTop(event.currentTarget.scrollTop)}
-            >
+            <div ref={projectScrollRef} className="min-h-0 flex-1 overflow-y-auto px-2.5 pb-2.5">
               {filteredProjects.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-border/60 px-4 py-6 text-center text-sm text-muted-foreground">
-                  {searchQuery
-                    ? t('sidebar.noMatches')
-                    : t('sidebar.noProjects')}
+                  {searchQuery ? t('sidebar.noMatches') : t('sidebar.noProjects')}
                 </div>
               ) : (
-                <div style={{ height: virtualProjectItems.length * PROJECT_ROW_HEIGHT, position: 'relative' }}>
-                  {virtualProjectItems.slice(projectVisibleRange.start, projectVisibleRange.end).map((entry, index) => {
-                    const actualIndex = projectVisibleRange.start + index
-                    const top = actualIndex * PROJECT_ROW_HEIGHT
-                    if (entry.type === 'header') {
-                      return (
-                        <div
-                          key={entry.key}
-                          className="px-0.5 text-[10px] font-medium text-muted-foreground"
-                          style={{ position: 'absolute', top, left: 0, right: 0, height: PROJECT_ROW_HEIGHT }}
-                        >
-                          {entry.label}
-                        </div>
-                      )
-                    }
-                    const project = entry.data
+                <div className="space-y-1">
+                  {filteredProjects.map((project) => {
                     const icon = deriveProjectIcon(project.id, sessions)
                     const count = sessions.filter((session) => session.projectId === project.id).length
                     const isActive = activeProjectId === project.id && chatView !== 'home'
                     const isRunning = runningProjectIds.has(project.id)
                     return (
-                      <div
-                        key={project.id}
-                        style={{ position: 'absolute', top, left: 0, right: 0, height: PROJECT_ROW_HEIGHT }}
-                      >
+                      <div key={project.id}>
                         <div
                           className={cn(
                             'group flex h-[38px] items-center gap-2 rounded-lg px-2 py-1.5 transition-colors',
@@ -1400,9 +1268,7 @@ export function WorkspaceSidebar(): React.JSX.Element {
                 <Settings className="size-4 shrink-0" />
                 <span className="truncate">{t('sidebar.systemSettings')}</span>
               </span>
-              <span className="shrink-0 text-[11px] text-muted-foreground/70">
-                v{packageJson.version}
-              </span>
+              <span className="shrink-0 text-[11px] text-muted-foreground/70">v{packageJson.version}</span>
             </Button>
           </div>
         </div>
@@ -1450,9 +1316,7 @@ export function WorkspaceSidebar(): React.JSX.Element {
           </DialogHeader>
           <div className="space-y-3">
             <div className="space-y-1.5">
-              <div className="text-[12px] font-medium text-foreground">
-                {tChat('input.projectName')}
-              </div>
+              <div className="text-[12px] font-medium text-foreground">{tChat('input.projectName')}</div>
               <Input
                 value={newProjectName}
                 onChange={(event) => setNewProjectName(event.target.value)}
@@ -1463,12 +1327,9 @@ export function WorkspaceSidebar(): React.JSX.Element {
               />
             </div>
             <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground">
-              <div className="font-medium text-foreground/80">
-                {tChat('input.defaultProjectDirectory')}
-              </div>
+              <div className="font-medium text-foreground/80">{tChat('input.defaultProjectDirectory')}</div>
               <div className="mt-1 break-all">
-                {effectiveDefaultProjectDirectory ||
-                  tChat('input.defaultProjectDirectoryFallback')}
+                {effectiveDefaultProjectDirectory || tChat('input.defaultProjectDirectoryFallback')}
               </div>
             </div>
           </div>
@@ -1479,9 +1340,7 @@ export function WorkspaceSidebar(): React.JSX.Element {
             <Button variant="outline" onClick={() => void openCreateProjectFolderPicker()}>
               {tChat('input.selectFolder')}
             </Button>
-            <Button onClick={() => void confirmCreateProject()}>
-              {tChat('input.createProject')}
-            </Button>
+            <Button onClick={() => void confirmCreateProject()}>{tChat('input.createProject')}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1521,9 +1380,7 @@ export function WorkspaceSidebar(): React.JSX.Element {
             workingFolder: folderPath,
             sshConnectionId: null
           })
-          toast.success(
-            t('sidebar_toast.projectWorkingFolderUpdated')
-          )
+          toast.success(t('sidebar_toast.projectWorkingFolderUpdated'))
         }}
         onSelectSshFolder={async (folderPath, connectionId) => {
           if (folderPickerTarget?.type === 'create') {
@@ -1535,9 +1392,7 @@ export function WorkspaceSidebar(): React.JSX.Element {
             workingFolder: folderPath,
             sshConnectionId: connectionId
           })
-          toast.success(
-            t('sidebar_toast.projectWorkingFolderUpdated')
-          )
+          toast.success(t('sidebar_toast.projectWorkingFolderUpdated'))
         }}
       />
 

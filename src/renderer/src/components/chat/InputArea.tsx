@@ -1100,7 +1100,9 @@ export function InputArea({
   )
   const hasApiKey = !!activeProvider?.apiKey || activeProvider?.requiresApiKey === false
   const needsWorkingFolder = mode !== 'chat' && !workingFolder
-  const planMode = useUIStore((s) => s.planMode)
+  const planMode = useUIStore((s) =>
+    draftSessionId ? Boolean(s.planModesBySession[draftSessionId]) : false
+  )
 
   React.useEffect(() => {
     let cancelled = false
@@ -1779,7 +1781,7 @@ export function InputArea({
             variant="ghost"
             size="sm"
             className="h-5 px-1.5 text-[10px] text-violet-600 dark:text-violet-400 hover:bg-violet-500/10"
-            onClick={() => useUIStore.getState().exitPlanMode()}
+            onClick={() => useUIStore.getState().exitPlanMode(draftSessionId)}
           >
             {t('input.exitPlanMode', { defaultValue: 'Exit Plan Mode' })}
           </Button>
@@ -1795,7 +1797,7 @@ export function InputArea({
       )}
 
       <div className={isHomeComposer ? 'mx-auto max-w-4xl' : 'mx-auto max-w-3xl'}>
-        {mode !== 'chat' && <InlineStepsPanel sessionId={sessionId} />}
+        {mode !== 'chat' && draftSessionId && <InlineStepsPanel sessionId={draftSessionId} />}
         <div
           ref={containerRef}
           className={cn(

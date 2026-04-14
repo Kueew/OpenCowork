@@ -576,7 +576,6 @@ function PendingEditPreview({ input }: { input: Record<string, unknown> }): Reac
 
 function TrackedEditDiff({ change }: { change: AgentRunFileChange }): React.JSX.Element {
   const { t } = useTranslation('chat')
-  const [expanded, setExpanded] = React.useState(false)
   const [content, setContent] = React.useState<TrackedDiffContent | null>(null)
   const [isLoading, setIsLoading] = React.useState(false)
   const [loadError, setLoadError] = React.useState<string | null>(null)
@@ -585,18 +584,12 @@ function TrackedEditDiff({ change }: { change: AgentRunFileChange }): React.JSX.
     canRenderInlineSnapshot(change.before) && canRenderInlineSnapshot(change.after)
 
   React.useEffect(() => {
-    if (!expanded) {
-      setContent(null)
-      setIsLoading(false)
-      setLoadError(null)
-      return
-    }
-
     if (canRenderInline) {
       setContent({
         beforeText: snapshotText(change.before),
         afterText: snapshotText(change.after)
       })
+      setIsLoading(false)
       setLoadError(null)
       return
     }
@@ -647,40 +640,14 @@ function TrackedEditDiff({ change }: { change: AgentRunFileChange }): React.JSX.
     return () => {
       cancelled = true
     }
-  }, [canRenderInline, change, expanded])
-
-  const toolbar = (
-    <Button type="button" size="xs" variant="ghost" onClick={() => setExpanded((value) => !value)}>
-      {expanded
-        ? t('showLess', { ns: 'common', defaultValue: '收起' })
-        : t('layout:expand', { defaultValue: '展开' })}
-    </Button>
-  )
-
-  if (!expanded) {
-    if (canRenderInline) {
-      return (
-        <InlineDiff
-          oldStr={snapshotText(change.before)}
-          newStr={snapshotText(change.after)}
-          toolbarEnd={toolbar}
-        />
-      )
-    }
-
-    return (
-      <SnapshotSummaryNotice before={change.before} after={change.after}>
-        <div className="flex justify-end">{toolbar}</div>
-      </SnapshotSummaryNotice>
-    )
-  }
+  }, [canRenderInline, change])
 
   if (isLoading && !content) {
     return (
       <SnapshotSummaryNotice before={change.before} after={change.after}>
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Loader2 className="size-3.5 animate-spin" />
           <span>{t('thinking.thinkingEllipsis')}</span>
-          {toolbar}
         </div>
       </SnapshotSummaryNotice>
     )
@@ -689,23 +656,16 @@ function TrackedEditDiff({ change }: { change: AgentRunFileChange }): React.JSX.
   if (loadError && !content) {
     return (
       <SnapshotSummaryNotice before={change.before} after={change.after}>
-        <div className="space-y-2">
-          <div className="text-destructive/80">{loadError}</div>
-          <div className="flex justify-end">{toolbar}</div>
-        </div>
+        <div className="text-destructive/80">{loadError}</div>
       </SnapshotSummaryNotice>
     )
   }
 
   if (!content) {
-    return (
-      <SnapshotSummaryNotice before={change.before} after={change.after}>
-        <div className="flex justify-end">{toolbar}</div>
-      </SnapshotSummaryNotice>
-    )
+    return <SnapshotSummaryNotice before={change.before} after={change.after} />
   }
 
-  return <InlineDiff oldStr={content.beforeText} newStr={content.afterText} toolbarEnd={toolbar} />
+  return <InlineDiff oldStr={content.beforeText} newStr={content.afterText} />
 }
 
 function PendingWritePreview({

@@ -474,6 +474,23 @@ class OpenAIResponsesProvider implements APIProvider {
 
       if (m.role === 'user') {
         const parts: unknown[] = []
+        const toolResults = blocks.filter(
+          (block): block is Extract<ContentBlock, { type: 'tool_result' }> => block.type === 'tool_result'
+        )
+        let emittedToolResult = false
+
+        for (const toolResult of toolResults) {
+          if (this.isComputerUseToolResultBlock(toolResult, normalizedMessages, m.id)) {
+            continue
+          }
+          emittedToolResult = true
+          input.push({
+            type: 'function_call_output',
+            call_id: toolResult.toolUseId,
+            output: this.serializeToolResultOutput(toolResult.content)
+          })
+        }
+
         for (const b of blocks) {
           if (b.type === 'image') {
             const url =
@@ -487,6 +504,9 @@ class OpenAIResponsesProvider implements APIProvider {
         }
         if (parts.length > 0) {
           input.push({ type: 'message', role: 'user', content: parts })
+          continue
+        }
+        if (emittedToolResult) {
           continue
         }
       }
@@ -550,6 +570,18 @@ class OpenAIResponsesProvider implements APIProvider {
     }
 
     return input
+  }
+
+  private serializeToolResultOutput(content: Extract<ContentBlock, { type: 'tool_result' }>['content']): string {
+    if (Array.isArray(content)) {
+      const textParts = content
+        .filter((block): block is Extract<ContentBlock, { type: 'text' }> => block.type === 'text')
+        .map((block) => block.text)
+      const imageCount = content.filter((block) => block.type === 'image').length
+      return [...textParts, ...Array.from({ length: imageCount }, () => '[Image attached]')].join('\n') || '[Image]'
+    }
+
+    return content
   }
 
   private normalizeMessagesForOpenAI(messages: UnifiedMessage[]): UnifiedMessage[] {

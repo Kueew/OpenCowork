@@ -763,7 +763,7 @@ function hasMeaningfulAssistantContent(message: UnifiedMessage): boolean {
   })
 }
 
-function sanitizeToolBlocksForResend(messages: UnifiedMessage[]): {
+function stripTrailingAssistantAgentErrors(messages: UnifiedMessage[]): {
   messages: UnifiedMessage[]
   changed: boolean
 } {
@@ -772,7 +772,7 @@ function sanitizeToolBlocksForResend(messages: UnifiedMessage[]): {
   }
 
   const trimmedMessages = [...messages]
-  let trimmedChanged = false
+  let changed = false
   while (trimmedMessages.length > 0) {
     const lastMessage = trimmedMessages[trimmedMessages.length - 1]
     if (lastMessage.role !== 'assistant' || !Array.isArray(lastMessage.content)) break
@@ -780,143 +780,110 @@ function sanitizeToolBlocksForResend(messages: UnifiedMessage[]): {
     const filteredBlocks = lastMessage.content.filter((block) => block.type !== 'agent_error')
     if (filteredBlocks.length === lastMessage.content.length) break
 
-    trimmedChanged = true
+    changed = true
     if (filteredBlocks.length === 0) {
       trimmedMessages.pop()
-    } else {
-      trimmedMessages[trimmedMessages.length - 1] = { ...lastMessage, content: filteredBlocks }
-      break
-    }
-  }
-
-  messages = trimmedMessages
-
-  let tailStart = messages.length
-  while (tailStart > 0) {
-    const message = messages[tailStart - 1]
-    if (
-      message.role === 'user' &&
-      Array.isArray(message.content) &&
-      message.content.every((block) => block.type === 'tool_result')
-    ) {
-      tailStart -= 1
       continue
     }
+
+    trimmedMessages[trimmedMessages.length - 1] = { ...lastMessage, content: filteredBlocks }
     break
   }
 
-  if (tailStart === 0) {
+  return changed ? { messages: trimmedMessages, changed: true } : { messages, changed: false }
+}
+
+function sanitizeToolReplayConsistency(messages: UnifiedMessage[]): {
+  messages: UnifiedMessage[]
+  changed: boolean
+} {
+  if (messages.length === 0) {
     return { messages, changed: false }
   }
 
-  const assistantIndex = tailStart - 1
-  const assistantMessage = messages[assistantIndex]
-  if (assistantMessage.role !== 'assistant' || !Array.isArray(assistantMessage.content)) {
-    return { messages, changed: false }
-  }
+  const validToolUseIds = new Set<string>()
+  const pairedToolUseIdsByAssistantIndex = new Map<number, Set<string>>()
 
-  const toolUseIds = new Set<string>()
-  const toolResultIds = new Set<string>()
-
-  for (const block of assistantMessage.content as ContentBlock[]) {
-    if (block.type === 'tool_use') {
-      toolUseIds.add(block.id)
-    }
-  }
-
-  for (let index = assistantIndex + 1; index < messages.length; index += 1) {
+  for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index]
-    if (
-      message.role !== 'user' ||
-      !Array.isArray(message.content) ||
-      !message.content.every((block) => block.type === 'tool_result')
-    ) {
-      return { messages, changed: false }
-    }
+    if (message.role !== 'assistant' || !Array.isArray(message.content)) continue
 
-    for (const block of message.content as ContentBlock[]) {
-      if (block.type !== 'tool_result') continue
-      toolResultIds.add(block.toolUseId)
-    }
-  }
-
-  const stripIds = new Set<string>()
-  for (const id of toolUseIds) {
-    if (!toolResultIds.has(id)) stripIds.add(id)
-  }
-  for (const id of toolResultIds) {
-    if (!toolUseIds.has(id)) stripIds.add(id)
-  }
-
-  if (stripIds.size === 0) {
-    return { messages, changed: trimmedChanged }
-  }
-
-  const strippedWriteToolUseIds = [...stripIds].filter((id) => {
-    const block = (assistantMessage.content as ContentBlock[]).find(
-      (item) => item.type === 'tool_use' && item.id === id
+    const blocks = message.content as ContentBlock[]
+    const toolUseIds = new Set(
+      blocks
+        .filter((block): block is ToolUseBlock => block.type === 'tool_use')
+        .map((block) => block.id)
     )
-    return block?.type === 'tool_use' && block.name === 'Write'
-  })
-  if (strippedWriteToolUseIds.length > 0) {
-    console.log('[WriteTrace] sanitizeToolErrorsForResend stripping write tool blocks', {
-      assistantIndex,
-      stripIds: [...stripIds],
-      strippedWriteToolUseIds,
-      toolUseIds: [...toolUseIds],
-      toolResultIds: [...toolResultIds],
-      tailMessageCount: messages.length - assistantIndex
-    })
+    if (toolUseIds.size === 0) continue
+
+    const pairedToolUseIds = new Set<string>()
+    for (let candidateIndex = index + 1; candidateIndex < messages.length; candidateIndex += 1) {
+      const candidateMessage = messages[candidateIndex]
+      if (candidateMessage.role !== 'user' || !Array.isArray(candidateMessage.content)) break
+
+      const candidateBlocks = candidateMessage.content as ContentBlock[]
+      if (!candidateBlocks.some((block) => block.type === 'tool_result')) break
+
+      for (const block of candidateBlocks) {
+        if (block.type !== 'tool_result' || !toolUseIds.has(block.toolUseId)) continue
+        pairedToolUseIds.add(block.toolUseId)
+        validToolUseIds.add(block.toolUseId)
+      }
+    }
+
+    pairedToolUseIdsByAssistantIndex.set(index, pairedToolUseIds)
   }
 
   let changed = false
-  const nextMessages = [...messages]
-  const filteredAssistantBlocks = (assistantMessage.content as ContentBlock[]).filter((block) => {
-    if (block.type === 'tool_use') return !stripIds.has(block.id)
-    return true
-  })
+  const sanitizedMessages: UnifiedMessage[] = []
 
-  if (filteredAssistantBlocks.length !== assistantMessage.content.length) {
-    changed = true
-    if (filteredAssistantBlocks.length === 0) {
-      nextMessages.splice(assistantIndex, 1)
-    } else {
-      nextMessages[assistantIndex] = { ...assistantMessage, content: filteredAssistantBlocks }
-    }
-  }
-
-  const resultMessageIndexesToRemove: number[] = []
-  for (let index = assistantIndex + 1; index < nextMessages.length; index += 1) {
-    const message = nextMessages[index]
-    if (
-      message.role !== 'user' ||
-      !Array.isArray(message.content) ||
-      !message.content.every((block) => block.type === 'tool_result')
-    ) {
-      break
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index]
+    if (!Array.isArray(message.content)) {
+      sanitizedMessages.push(message)
+      continue
     }
 
-    const filteredBlocks = (message.content as ContentBlock[]).filter(
-      (block) => block.type !== 'tool_result' || !stripIds.has(block.toolUseId)
-    )
-
-    if (filteredBlocks.length !== message.content.length) {
-      changed = true
-      if (filteredBlocks.length === 0) {
-        resultMessageIndexesToRemove.push(index)
-      } else {
-        nextMessages[index] = { ...message, content: filteredBlocks }
+    const pairedToolUseIds = pairedToolUseIdsByAssistantIndex.get(index)
+    const filteredBlocks = (message.content as ContentBlock[]).filter((block) => {
+      if (block.type === 'tool_use') {
+        return pairedToolUseIds ? pairedToolUseIds.has(block.id) : true
       }
+      if (block.type === 'tool_result') {
+        return validToolUseIds.has(block.toolUseId)
+      }
+      return true
+    })
+
+    if (filteredBlocks.length === message.content.length) {
+      sanitizedMessages.push(message)
+      continue
     }
+
+    changed = true
+    if (filteredBlocks.length === 0) continue
+    sanitizedMessages.push({ ...message, content: filteredBlocks })
   }
 
-  for (let i = resultMessageIndexesToRemove.length - 1; i >= 0; i -= 1) {
-    nextMessages.splice(resultMessageIndexesToRemove[i], 1)
+  return changed ? { messages: sanitizedMessages, changed: true } : { messages, changed: false }
+}
+
+function sanitizeToolBlocksForResend(messages: UnifiedMessage[]): {
+  messages: UnifiedMessage[]
+  changed: boolean
+} {
+  if (messages.length === 0) {
+    return { messages, changed: false }
   }
 
-  return changed || trimmedChanged
-    ? { messages: nextMessages, changed: true }
-    : { messages, changed: false }
+  const trimmed = stripTrailingAssistantAgentErrors(messages)
+  const sanitized = sanitizeToolReplayConsistency(trimmed.messages)
+
+  if (!trimmed.changed && !sanitized.changed) {
+    return { messages, changed: false }
+  }
+
+  return { messages: sanitized.messages, changed: true }
 }
 
 export const useChatStore = create<ChatStore>()(
@@ -1428,6 +1395,8 @@ export const useChatStore = create<ChatStore>()(
         options?.includeTrailingAssistantPlaceholder ?? true
 
       let messages = await loadRequestContextMessages(session)
+      const sanitized = sanitizeToolBlocksForResend(messages)
+      messages = sanitized.messages
 
       // Always strip empty assistant messages — they cause API errors ("must not be empty").
       // When includeTrailingAssistantPlaceholder is true we still keep a trailing assistant

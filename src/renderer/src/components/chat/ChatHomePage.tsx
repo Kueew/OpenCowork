@@ -300,6 +300,7 @@ export function ChatHomePage(): React.JSX.Element {
         <div className="mt-auto">
           <div className="mx-auto w-full max-w-4xl">
             <InputArea
+              sessionId={null}
               onSend={handleSend}
               onSelectFolder={mode !== 'chat' ? handleOpenFolderDialog : undefined}
               workingFolder={workingFolder}

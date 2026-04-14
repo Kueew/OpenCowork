@@ -1,5 +1,4 @@
 import * as React from 'react'
-import { type VListHandle, VList } from 'virtua'
 import { useTranslation } from 'react-i18next'
 import { useShallow } from 'zustand/react/shallow'
 import { MessageSquare, CircleHelp, Briefcase, Code2, ShieldCheck, ArrowDown } from 'lucide-react'
@@ -60,13 +59,13 @@ type RenderableMessage = ChatRenderableMessageMeta
 
 type ToolResultsLookup = Map<string, { content: ToolResultContent; isError?: boolean }>
 
-type VirtualRow =
+type MessageListRow =
   | { type: 'load-more'; key: string }
   | { type: 'message'; key: string; data: RenderableMessage }
 
 type AutoScrollMode = 'off' | 'user' | 'stream'
 
-interface VirtualMessageRowProps {
+interface MessageRowProps {
   rowIndex: number
   message: UnifiedMessage
   isStreaming: boolean
@@ -88,7 +87,6 @@ interface VirtualMessageRowProps {
 
 const EMPTY_MESSAGES: UnifiedMessage[] = []
 const LOAD_MORE_MESSAGE_STEP = 40
-/** Pixel threshold from the top of the list at which we auto-trigger the next page. */
 const AUTO_LOAD_OLDER_TOP_THRESHOLD = 200
 const AUTO_SCROLL_BOTTOM_THRESHOLD = 24
 const STREAMING_AUTO_SCROLL_BOTTOM_THRESHOLD = 80
@@ -101,11 +99,11 @@ const INITIAL_MESSAGE_ESTIMATED_HEIGHT = 120
 const PROGRAMMATIC_SCROLL_GUARD_MS = 160
 const EMPTY_ORCHESTRATION_STATE = { runs: [], byId: new Map(), byMessageId: new Map() }
 
-function getDistanceToBottom(ref: VListHandle): number {
-  return Math.max(0, ref.scrollSize - ref.scrollOffset - ref.viewportSize)
+function getDistanceToBottom(ref: HTMLDivElement): number {
+  return Math.max(0, ref.scrollHeight - ref.scrollTop - ref.clientHeight)
 }
 
-const VirtualMessageRow = React.memo(function VirtualMessageRow({
+const MessageRow = React.memo(function MessageRow({
   rowIndex,
   message,
   isStreaming,
@@ -123,7 +121,7 @@ const VirtualMessageRow = React.memo(function VirtualMessageRow({
   onDeleteMessage,
   setLastMessageRowRef,
   isCurrentLastMessageRow
-}: VirtualMessageRowProps): React.JSX.Element {
+}: MessageRowProps): React.JSX.Element {
   return (
     <div
       data-index={rowIndex}
@@ -162,12 +160,6 @@ export function MessageList(props: MessageListProps): React.JSX.Element {
     exportAll = false
   } = props
   const { t } = useTranslation('chat')
-  // Split the monolithic `useShallow` selector into narrow per-field selectors. Each one
-  // compares with Object.is, so unrelated session mutations no longer rerun selectors on
-  // every RAF flush. The `messages` ref specifically only advances when THIS session's
-  // messages slice gets replaced in chat-store (which happens on any content mutation
-  // for the target session). This is what lets React.memo on MessageItem actually kick
-  // in when other sessions are streaming in parallel.
   const currentActiveSessionId = useChatStore((s) => s.activeSessionId)
   const targetSessionId = sessionId ?? currentActiveSessionId
   const targetSession = useChatStore((s) => {
@@ -204,16 +196,12 @@ export function MessageList(props: MessageListProps): React.JSX.Element {
     useAgentStore((s) => s.isSessionActive(activeSessionId)) || hasStreamingMessage
   const canSessionTriggerStreamingAutoScroll = isMainChatSession && isSessionRunning
 
-  // Keep a stable snapshot of messages that only advances when NOT streaming.
-  // orchestrationState depends on complete tool_use/tool_result blocks which only
-  // appear at non-streaming boundaries — using a stale ref during streaming avoids
-  // rebuilding the orchestration tree on every incoming text token.
   const stableMessagesRef = React.useRef(messages)
   if (!streamingMessageId) {
     stableMessagesRef.current = messages
   }
 
-  const listRef = React.useRef<VListHandle | null>(null)
+  const listRef = React.useRef<HTMLDivElement | null>(null)
   const containerRef = React.useRef<HTMLDivElement | null>(null)
   const lastMessageRowElementRef = React.useRef<HTMLDivElement | null>(null)
   const resizeObserverRef = React.useRef<ResizeObserver | null>(null)
@@ -284,8 +272,6 @@ export function MessageList(props: MessageListProps): React.JSX.Element {
             teamHistory
           })
         : EMPTY_ORCHESTRATION_STATE,
-    // `messages` intentionally excluded: orchestration only changes at tool
-    // boundaries (non-streaming), so stableMessagesRef.current is sufficient.
     [
       activeSessionId,
       activeSubAgents,
@@ -309,25 +295,17 @@ export function MessageList(props: MessageListProps): React.JSX.Element {
 
   const olderUnloadedMessageCount = Math.max(0, loadedRangeStart)
   const hasLoadMoreRow = olderUnloadedMessageCount > 0
-  const { virtualRows, virtualRowKeys } = React.useMemo(() => {
-    const rows: VirtualRow[] = renderableMessages.map((message) => ({
+  const rows = React.useMemo(() => {
+    const nextRows: MessageListRow[] = renderableMessages.map((message) => ({
       type: 'message',
       key: message.messageId,
       data: message
     }))
-    if (hasLoadMoreRow) rows.unshift({ type: 'load-more', key: LOAD_MORE_ROW_KEY })
-    return {
-      virtualRows: rows,
-      virtualRowKeys: rows.map((row) => row.key)
-    }
+    if (hasLoadMoreRow) nextRows.unshift({ type: 'load-more', key: LOAD_MORE_ROW_KEY })
+    return nextRows
   }, [hasLoadMoreRow, renderableMessages])
 
-  const lastMessageRowIndex = virtualRows.length - 1
-
-  const getVirtualRowAt = React.useCallback(
-    (rowIndex: number): VirtualRow | undefined => virtualRows[rowIndex],
-    [virtualRows]
-  )
+  const lastMessageRowIndex = rows.length - 1
 
   const canAutoScroll = React.useCallback(() => {
     const mode = autoScrollModeRef.current
@@ -347,9 +325,7 @@ export function MessageList(props: MessageListProps): React.JSX.Element {
 
   const setLastMessageRowRef = React.useCallback(
     (node: HTMLDivElement | null, isCurrentLastMessageRow: boolean) => {
-      if (!isCurrentLastMessageRow) {
-        return
-      }
+      if (!isCurrentLastMessageRow) return
       if (node === null) {
         lastMessageRowElementRef.current = null
         updateResizeObserver()
@@ -369,12 +345,11 @@ export function MessageList(props: MessageListProps): React.JSX.Element {
   const scrollToBottomImmediate = React.useCallback(
     (behavior: ScrollBehavior = 'auto') => {
       const ref = listRef.current
-      const lastIndex = virtualRowKeys.length - 1
-      if (!ref || lastIndex < 0) return
+      if (!ref || rows.length === 0) return
       markProgrammaticScroll()
-      ref.scrollToIndex(lastIndex, { align: 'end', smooth: behavior === 'smooth' })
+      ref.scrollTo({ top: ref.scrollHeight, behavior })
     },
-    [markProgrammaticScroll, virtualRowKeys.length]
+    [markProgrammaticScroll, rows.length]
   )
 
   const syncBottomState = React.useCallback(() => {
@@ -386,7 +361,7 @@ export function MessageList(props: MessageListProps): React.JSX.Element {
       : AUTO_SCROLL_BOTTOM_THRESHOLD
     const nextAtBottom = getDistanceToBottom(ref) <= threshold
     const previousOffset = lastScrollOffsetRef.current
-    const currentOffset = ref.scrollOffset
+    const currentOffset = ref.scrollTop
     const scrolledUp = currentOffset < previousOffset - BOTTOM_SCROLL_CORRECTION_EPSILON
     const isProgrammaticScroll = window.performance.now() < programmaticScrollUntilRef.current
 
@@ -446,10 +421,6 @@ export function MessageList(props: MessageListProps): React.JSX.Element {
 
   React.useEffect(() => {
     if (typeof ResizeObserver === 'undefined') return
-    // Background sessions (mini window, search preview, non-active chats) don't need a
-    // ResizeObserver at all — they never perform streaming auto-scroll. Previously we
-    // still created one per mounted MessageList, so N background chats + main chat meant
-    // N ResizeObserver callbacks competing for the same RAF budget during streaming.
     if (!isMainChatSession) return
 
     const observer = new ResizeObserver(() => {
@@ -472,7 +443,7 @@ export function MessageList(props: MessageListProps): React.JSX.Element {
 
   React.useEffect(() => {
     updateResizeObserver()
-  }, [updateResizeObserver, activeSessionId, virtualRowKeys.length])
+  }, [updateResizeObserver, activeSessionId, rows.length])
 
   const loadOlderMessages = React.useCallback(async (): Promise<void> => {
     if (!activeSessionId || olderUnloadedMessageCount === 0 || isAutoLoadingOlderRef.current) return
@@ -481,8 +452,8 @@ export function MessageList(props: MessageListProps): React.JSX.Element {
       containerRef.current?.querySelector<HTMLElement>('[data-message-id]') ?? null
     preserveScrollOnPrependRef.current = ref
       ? {
-          offset: ref.scrollOffset,
-          size: ref.scrollSize,
+          offset: ref.scrollTop,
+          size: ref.scrollHeight,
           anchorMessageId: anchorElement?.dataset.messageId ?? null,
           anchorTop: anchorElement?.getBoundingClientRect().top ?? null
         }
@@ -497,15 +468,12 @@ export function MessageList(props: MessageListProps): React.JSX.Element {
     }
   }, [activeSessionId, olderUnloadedMessageCount])
 
-  // Combined scroll handler: keeps bottom-sticky state in sync AND auto-loads
-  // the next page of older messages when the user scrolls near the top of
-  // the resident window. Avoids forcing the user to click the load-more row.
   const handleListScroll = React.useCallback(() => {
     syncBottomState()
     const ref = listRef.current
     if (!ref) return
     if (olderUnloadedMessageCount === 0 || isAutoLoadingOlderRef.current) return
-    if (ref.scrollOffset > AUTO_LOAD_OLDER_TOP_THRESHOLD) return
+    if (ref.scrollTop > AUTO_LOAD_OLDER_TOP_THRESHOLD) return
     void loadOlderMessages()
   }, [loadOlderMessages, olderUnloadedMessageCount, syncBottomState])
 
@@ -539,14 +507,7 @@ export function MessageList(props: MessageListProps): React.JSX.Element {
     }
 
     pendingInitialScrollSessionIdRef.current = null
-  }, [
-    activeSessionId,
-    isSessionRunning,
-    messages.length,
-    requestScrollToBottom,
-    streamingMessageId,
-    syncBottomState
-  ])
+  }, [activeSessionId, isSessionRunning, messages.length, requestScrollToBottom, streamingMessageId])
 
   React.useLayoutEffect(() => {
     const pending = preserveScrollOnPrependRef.current
@@ -565,23 +526,23 @@ export function MessageList(props: MessageListProps): React.JSX.Element {
         const delta = nextTop - pending.anchorTop
         if (Math.abs(delta) > BOTTOM_SCROLL_CORRECTION_EPSILON) {
           markProgrammaticScroll()
-          ref.scrollTo(ref.scrollOffset + delta)
+          ref.scrollTo({ top: ref.scrollTop + delta })
         }
         restored = true
       }
     }
 
     if (!restored) {
-      const delta = ref.scrollSize - pending.size
+      const delta = ref.scrollHeight - pending.size
       if (delta > 0) {
         markProgrammaticScroll()
-        ref.scrollTo(pending.offset + delta)
+        ref.scrollTo({ top: pending.offset + delta })
       }
     }
 
     preserveScrollOnPrependRef.current = null
     syncBottomState()
-  }, [markProgrammaticScroll, syncBottomState, virtualRowKeys.length])
+  }, [markProgrammaticScroll, rows.length, syncBottomState])
 
   React.useEffect(() => {
     const wasRunning = wasSessionRunningRef.current
@@ -596,7 +557,7 @@ export function MessageList(props: MessageListProps): React.JSX.Element {
   React.useEffect(() => {
     if (!canAutoScroll()) return
     requestScrollToBottom({ maxFrames: FOLLOW_BOTTOM_SETTLE_FRAMES })
-  }, [canAutoScroll, requestScrollToBottom, virtualRowKeys.length])
+  }, [canAutoScroll, requestScrollToBottom, rows.length])
 
   React.useEffect(() => {
     return () => {
@@ -711,7 +672,7 @@ export function MessageList(props: MessageListProps): React.JSX.Element {
             if (!message) return null
 
             return (
-              <VirtualMessageRow
+              <MessageRow
                 key={row.messageId}
                 rowIndex={rowIndex}
                 message={message}
@@ -742,66 +703,62 @@ export function MessageList(props: MessageListProps): React.JSX.Element {
 
   return (
     <div ref={containerRef} className="relative flex-1" data-message-list>
-      <div className="absolute inset-0" data-message-content>
-        <VList
-          bufferSize={typeof window !== 'undefined' ? window.innerHeight : 0}
-          data={virtualRowKeys}
-          ref={listRef}
-          style={{ height: '100%', overflowAnchor: 'none' }}
-          onScroll={handleListScroll}
-        >
-          {(rowKey, rowIndex): React.JSX.Element => {
-            const row = getVirtualRowAt(rowIndex)
-            if (!row) return <div key={rowKey} />
-            if (row.type === 'load-more') {
-              return (
-                <div key={rowKey} data-index={rowIndex} className="mx-auto max-w-3xl px-4">
-                  <div className="flex justify-center pb-6 pt-4">
-                    <button
-                      className="rounded-md border px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
-                      onClick={() => void loadOlderMessages()}
-                    >
-                      {t('messageList.loadMoreMessages', { defaultValue: '加载更早消息' })} (
-                      {olderUnloadedMessageCount})
-                    </button>
-                  </div>
-                </div>
-              )
-            }
-
-            const { messageId, isLastUserMessage, isLastAssistantMessage, showContinue } = row.data
-            const message = messageLookup.get(messageId)
-            if (!message) return <div key={rowKey} />
-
-            const disableAnimation =
-              lastMessageRowIndex >= 0
-                ? rowIndex >= Math.max(0, lastMessageRowIndex - (TAIL_STATIC_MESSAGE_COUNT - 1))
-                : false
-
+      <div
+        ref={listRef}
+        className="absolute inset-0 overflow-y-auto"
+        data-message-content
+        style={{ overflowAnchor: 'none' }}
+        onScroll={handleListScroll}
+      >
+        {rows.map((row, rowIndex) => {
+          if (row.type === 'load-more') {
             return (
-              <VirtualMessageRow
-                key={rowKey}
-                rowIndex={rowIndex}
-                message={message}
-                isStreaming={streamingMessageId === messageId}
-                isLastUserMessage={isLastUserMessage}
-                isLastAssistantMessage={isLastAssistantMessage}
-                showContinue={showContinue}
-                disableAnimation={disableAnimation}
-                toolResults={toolResultsLookup.get(messageId)}
-                orchestrationRun={orchestrationState.byMessageId.get(messageId)?.primaryRun ?? null}
-                hiddenToolUseIds={orchestrationState.byMessageId.get(messageId)?.hiddenToolUseIds}
-                anchorMessageId={preserveScrollOnPrependRef.current?.anchorMessageId ?? null}
-                onRetry={onRetry}
-                onContinue={onContinue}
-                onEditUserMessage={onEditUserMessage}
-                onDeleteMessage={onDeleteMessage}
-                setLastMessageRowRef={setLastMessageRowRef}
-                isCurrentLastMessageRow={rowIndex === lastMessageRowIndex}
-              />
+              <div key={row.key} data-index={rowIndex} className="mx-auto max-w-3xl px-4">
+                <div className="flex justify-center pb-6 pt-4">
+                  <button
+                    className="rounded-md border px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+                    onClick={() => void loadOlderMessages()}
+                  >
+                    {t('messageList.loadMoreMessages', { defaultValue: '加载更早消息' })} (
+                    {olderUnloadedMessageCount})
+                  </button>
+                </div>
+              </div>
             )
-          }}
-        </VList>
+          }
+
+          const { messageId, isLastUserMessage, isLastAssistantMessage, showContinue } = row.data
+          const message = messageLookup.get(messageId)
+          if (!message) return null
+
+          const disableAnimation =
+            lastMessageRowIndex >= 0
+              ? rowIndex >= Math.max(0, lastMessageRowIndex - (TAIL_STATIC_MESSAGE_COUNT - 1))
+              : false
+
+          return (
+            <MessageRow
+              key={row.key}
+              rowIndex={rowIndex}
+              message={message}
+              isStreaming={streamingMessageId === messageId}
+              isLastUserMessage={isLastUserMessage}
+              isLastAssistantMessage={isLastAssistantMessage}
+              showContinue={showContinue}
+              disableAnimation={disableAnimation}
+              toolResults={toolResultsLookup.get(messageId)}
+              orchestrationRun={orchestrationState.byMessageId.get(messageId)?.primaryRun ?? null}
+              hiddenToolUseIds={orchestrationState.byMessageId.get(messageId)?.hiddenToolUseIds}
+              anchorMessageId={preserveScrollOnPrependRef.current?.anchorMessageId ?? null}
+              onRetry={onRetry}
+              onContinue={onContinue}
+              onEditUserMessage={onEditUserMessage}
+              onDeleteMessage={onDeleteMessage}
+              setLastMessageRowRef={setLastMessageRowRef}
+              isCurrentLastMessageRow={rowIndex === lastMessageRowIndex}
+            />
+          )
+        })}
       </div>
 
       {!isAtBottom && messages.length > 0 && (

@@ -3,6 +3,13 @@
 All notable changes to **OpenCowork** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com).
 
+## [0.8.3] - 2026-04-14
+
+### Changed
+
+- Update Routin AI preset models.
+- Refactor ProviderMessageFormatter; improve FileAwareEditor, InputArea, ToolCallCard, and routin-ai provider store.
+
 ## [0.8.2] - 2026-04-14
 
 ### Added

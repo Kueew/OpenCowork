@@ -48,36 +48,6 @@ export const routinAiPreset: BuiltinProviderPreset = {
         forceTemperature: 1
       }
     },
-    {
-      id: 'MiniMax-M2.1',
-      name: 'MiniMax M2.1',
-      icon: 'minimax',
-      enabled: true,
-      contextLength: 204_800,
-      maxOutputTokens: 64_000,
-      supportsVision: false,
-      supportsFunctionCall: true,
-      inputPrice: 0.3,
-      outputPrice: 1.1,
-      cacheHitPrice: 0.03,
-      cacheCreationPrice: 0.4,
-      type: 'anthropic'
-    },
-    {
-      id: 'MiniMax-M2.5',
-      name: 'MiniMax M2.5',
-      icon: 'minimax',
-      enabled: true,
-      contextLength: 204_800,
-      maxOutputTokens: 131_072,
-      supportsVision: false,
-      supportsFunctionCall: true,
-      inputPrice: 0.3,
-      outputPrice: 1.1,
-      cacheHitPrice: 0.03,
-      cacheCreationPrice: 0.4,
-      type: 'anthropic'
-    },
     // ── Z.AI / GLM (智谱) ──
     {
       id: 'glm-5',

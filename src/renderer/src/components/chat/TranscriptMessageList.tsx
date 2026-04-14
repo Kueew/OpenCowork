@@ -12,7 +12,7 @@ interface TranscriptMessageListProps {
 
 type ToolResultsLookup = Map<string, { content: ToolResultContent; isError?: boolean }>
 
-interface VirtualTranscriptMessageRowProps {
+interface TranscriptMessageRowProps {
   rowIndex: number
   message: UnifiedMessage
   isStreaming: boolean
@@ -21,14 +21,14 @@ interface VirtualTranscriptMessageRowProps {
   toolResults?: ToolResultsLookup
 }
 
-const VirtualTranscriptMessageRow = React.memo(function VirtualTranscriptMessageRow({
+const TranscriptMessageRow = React.memo(function TranscriptMessageRow({
   rowIndex,
   message,
   isStreaming,
   isLastUserMessage,
   isLastAssistantMessage,
   toolResults
-}: VirtualTranscriptMessageRowProps): React.JSX.Element {
+}: TranscriptMessageRowProps): React.JSX.Element {
   return (
     <div data-index={rowIndex} className="mx-auto max-w-3xl px-4 pb-6">
       <MessageItem
@@ -71,7 +71,7 @@ export function TranscriptMessageList({
         }
 
         return (
-          <VirtualTranscriptMessageRow
+          <TranscriptMessageRow
             key={meta.messageId}
             rowIndex={rowIndex}
             message={message}

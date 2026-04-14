@@ -50,12 +50,16 @@ interface AnsweredPair {
 
 const RECOMMENDED_OPTION_RE = /(?:\(|（)\s*(recommended|推荐)\s*(?:\)|）)/i
 
-function isRecommendedOptionLabel(label: string): boolean {
-  return RECOMMENDED_OPTION_RE.test(label)
+function getOptionLabel(label: string | undefined | null): string {
+  return typeof label === 'string' ? label : ''
 }
 
-function stripRecommendedMarker(label: string): string {
-  return label.replace(RECOMMENDED_OPTION_RE, '').trim()
+function isRecommendedOptionLabel(label: string | undefined | null): boolean {
+  return RECOMMENDED_OPTION_RE.test(getOptionLabel(label))
+}
+
+function stripRecommendedMarker(label: string | undefined | null): string {
+  return getOptionLabel(label).replace(RECOMMENDED_OPTION_RE, '').trim()
 }
 
 function outputAsText(output: ToolResultContent | undefined): string | null {
@@ -202,7 +206,10 @@ function buildRecommendedPayload(
     }
 
     const chosen = item.multiSelect ? recommended : [recommended[0]]
-    const labels = chosen.map((opt) => opt.label)
+    const labels = chosen.map((opt) => getOptionLabel(opt.label)).filter(Boolean)
+    if (labels.length === 0) {
+      return null
+    }
     selections.set(index, new Set(labels))
     answers[String(index)] = item.multiSelect ? labels : labels[0]
 
@@ -334,7 +341,9 @@ function QuestionBlock({
         {item.options && item.options.length > 0 && (
           <div className="space-y-1.5">
             {item.options.map((opt, oi) => {
-              const value = opt.label
+              const value = getOptionLabel(opt.label)
+              if (!value) return null
+
               const isSelected = selected.has(value)
               const isRecommended = isRecommendedOptionLabel(value)
               return (
