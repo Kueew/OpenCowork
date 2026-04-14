@@ -3,6 +3,27 @@
 All notable changes to **OpenCowork** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com).
 
+## [0.8.2] - 2026-04-14
+
+### Added
+
+- Added new VSCode tasks for building, publishing, and watching the .NET project.
+- Added SSH window management and IPC handlers for improved user experience.
+
+### Changed
+
+- Enhanced AgentLoop to summarize tool input for streaming.
+- Improved message handling in OpenAiResponsesProvider.
+- Updated TypeScript build info files for web and node configurations.
+
+### Fixed
+
+- Removed unused PNG file to reduce bundle size.
+
+### Notes
+
+- This release focuses on agent streaming improvements, SSH window management, and build configuration enhancements.
+
 ## [0.8.1] - 2026-04-13
 
 ### Added
