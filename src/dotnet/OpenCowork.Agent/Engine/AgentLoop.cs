@@ -682,8 +682,8 @@ public static class AgentLoop
                 {
                     var len = value.GetString()?.Length ?? 0;
                     var metaKey = $"{key}_chars";
-                    result[metaKey] = JsonSerializer.SerializeToElement(len);
-                    result[$"{key}_hidden_until_complete"] = JsonSerializer.SerializeToElement(true);
+                    result[metaKey] = JsonSerializer.SerializeToElement(len, AppJsonContext.Default.Int32);
+                    result[$"{key}_hidden_until_complete"] = JsonSerializer.SerializeToElement(true, AppJsonContext.Default.Boolean);
                 }
                 continue;
             }
