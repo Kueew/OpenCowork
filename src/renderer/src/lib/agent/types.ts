@@ -76,6 +76,10 @@ export interface AgentLoopConfig {
   systemPrompt: string
   workingFolder?: string
   signal: AbortSignal
+  /** Execute independent tool calls from the same provider turn in parallel. */
+  enableParallelToolExecution?: boolean
+  /** Max number of parallel tool executions allowed within a single provider turn. */
+  maxParallelTools?: number
   /** Optional message queue for injecting messages mid-loop (used by teammates). */
   messageQueue?: MessageQueue
   /** Context compression configuration */

@@ -7,6 +7,9 @@ export interface RequestDebugInfo {
   headers: Record<string, string>
   body?: string
   timestamp: number
+  transport?: 'http' | 'websocket'
+  fallbackReason?: string
+  reusedConnection?: boolean
 }
 
 export class ApiStreamError extends Error {
@@ -127,6 +130,11 @@ export async function* ipcStreamRequest(params: {
   providerId?: string
   providerBuiltinId?: string
   accountId?: string
+  providerType?: string
+  model?: string
+  sessionId?: string
+  websocketUrl?: string
+  websocketMode?: 'auto' | 'disabled'
 }): AsyncIterable<SSEEvent> {
   const requestId = nanoid()
   const {
@@ -139,7 +147,12 @@ export async function* ipcStreamRequest(params: {
     allowInsecureTls,
     providerId,
     providerBuiltinId,
-    accountId
+    accountId,
+    providerType,
+    model,
+    sessionId,
+    websocketUrl,
+    websocketMode
   } = params
 
   const queue: QueueItem[] = []
@@ -183,7 +196,12 @@ export async function* ipcStreamRequest(params: {
     allowInsecureTls,
     providerId,
     providerBuiltinId,
-    accountId
+    accountId,
+    providerType,
+    model,
+    sessionId,
+    websocketUrl,
+    websocketMode
   })
 
   let buffer = ''

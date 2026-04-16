@@ -130,6 +130,8 @@ export interface SidecarProviderConfig {
   organization?: string
   project?: string
   accountId?: string
+  websocketUrl?: string
+  websocketMode?: 'auto' | 'disabled'
 }
 
 export interface SidecarToolDefinition {
@@ -146,6 +148,7 @@ export interface SidecarAgentRunRequest {
   workingFolder?: string
   maxIterations: number
   forceApproval: boolean
+  maxParallelTools?: number
   compression?: CompressionConfig
   /**
    * Session mode: "agent" (default) runs the full tool loop, "chat" collapses
@@ -198,6 +201,11 @@ function readSidecarString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined
   const trimmed = value.trim()
   return trimmed ? trimmed : undefined
+}
+
+function normalizeMaxParallelTools(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value)) return undefined
+  return Math.min(16, Math.max(1, Math.floor(value)))
 }
 
 function createSidecarError(rawEvent: unknown): Error {
@@ -384,7 +392,9 @@ function mapSidecarProvider(provider: ProviderConfig): SidecarProviderConfig {
       : {}),
     ...(provider.organization ? { organization: provider.organization } : {}),
     ...(provider.project ? { project: provider.project } : {}),
-    ...(provider.accountId ? { accountId: provider.accountId } : {})
+    ...(provider.accountId ? { accountId: provider.accountId } : {}),
+    ...(provider.websocketUrl ? { websocketUrl: provider.websocketUrl } : {}),
+    ...(provider.websocketMode ? { websocketMode: provider.websocketMode } : {})
   }
 }
 
@@ -405,6 +415,7 @@ export function buildSidecarAgentRunRequest(args: {
   workingFolder?: string
   maxIterations: number
   forceApproval: boolean
+  maxParallelTools?: number
   compression?: CompressionConfig | null
   sessionMode?: 'agent' | 'chat'
   planMode?: boolean
@@ -425,6 +436,8 @@ export function buildSidecarAgentRunRequest(args: {
     messages.push(mapped)
   }
 
+  const maxParallelTools = normalizeMaxParallelTools(args.maxParallelTools)
+
   return {
     messages,
     provider,
@@ -435,6 +448,7 @@ export function buildSidecarAgentRunRequest(args: {
     ...(args.compression ? { compression: args.compression } : {}),
     maxIterations: args.maxIterations,
     forceApproval: args.forceApproval,
+    ...(maxParallelTools !== undefined ? { maxParallelTools } : {}),
     ...(args.sessionMode ? { sessionMode: args.sessionMode } : {}),
     ...(args.planMode ? { planMode: true } : {}),
     ...(args.planModeAllowedTools && args.planModeAllowedTools.length > 0
@@ -1053,6 +1067,26 @@ export function normalizeSidecarAgentEvent(rawEvent: unknown): AgentEvent | null
             ? { providerBuiltinId: debugInfo.providerBuiltinId }
             : {}),
           ...(typeof debugInfo.model === 'string' ? { model: debugInfo.model } : {}),
+          ...(debugInfo.transport === 'http' || debugInfo.transport === 'websocket'
+            ? { transport: debugInfo.transport }
+            : {}),
+          ...(typeof debugInfo.fallbackReason === 'string'
+            ? { fallbackReason: debugInfo.fallbackReason }
+            : {}),
+          ...(typeof debugInfo.reusedConnection === 'boolean'
+            ? { reusedConnection: debugInfo.reusedConnection }
+            : {}),
+          ...(debugInfo.websocketRequestKind === 'warmup' ||
+          debugInfo.websocketRequestKind === 'full' ||
+          debugInfo.websocketRequestKind === 'incremental'
+            ? { websocketRequestKind: debugInfo.websocketRequestKind }
+            : {}),
+          ...(typeof debugInfo.websocketIncrementalReason === 'string'
+            ? { websocketIncrementalReason: debugInfo.websocketIncrementalReason }
+            : {}),
+          ...(typeof debugInfo.previousResponseId === 'string'
+            ? { previousResponseId: debugInfo.previousResponseId }
+            : {}),
           ...(debugInfo.executionPath === 'node' || debugInfo.executionPath === 'sidecar'
             ? { executionPath: debugInfo.executionPath }
             : { executionPath: 'sidecar' })

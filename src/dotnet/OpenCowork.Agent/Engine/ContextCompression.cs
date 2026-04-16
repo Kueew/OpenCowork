@@ -195,7 +195,9 @@ public static class ContextCompression
                     BaseUrl = config.BaseUrl,
                     Model = config.Model,
                     MaxTokens = 8000,
-                    SystemPrompt = CompactSystemPrompt
+                    SystemPrompt = CompactSystemPrompt,
+                    WebsocketUrl = config.WebsocketUrl,
+                    WebsocketMode = config.WebsocketMode
                 };
 
                 var summaryBuilder = new System.Text.StringBuilder();

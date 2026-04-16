@@ -75,8 +75,9 @@ function toManagedModelConfig(model: AIModelConfig): ManagedModelConfig {
 }
 
 function toManagedModelBase(model: ManagedModelConfig): AIModelConfig {
-  const { normalizedKey: _normalizedKey, ...rest } = cloneManagedModelConfig(model)
-  return rest
+  const { normalizedKey, ...cloned } = cloneManagedModelConfig(model)
+  void normalizedKey
+  return cloned
 }
 
 function resolveModelIdByKey(models: AIModelConfig[], modelId: string): string | undefined {
@@ -118,7 +119,9 @@ function scoreManagedModelRichness(model: AIModelConfig | ManagedModelConfig): n
     'enablePromptCache',
     'enableSystemPromptCache',
     'requestOverrides',
-    'serviceTier'
+    'serviceTier',
+    'websocketUrl',
+    'websocketMode'
   ]
 
   let score = 0
@@ -266,7 +269,7 @@ function createProviderFromPreset(preset: BuiltinProviderPreset): AIProvider {
     })
   )
   const defaultModel = preset.defaultModel
-    ? resolveModelIdByKey(models, preset.defaultModel) ?? preset.defaultModel
+    ? (resolveModelIdByKey(models, preset.defaultModel) ?? preset.defaultModel)
     : undefined
 
   return {
@@ -288,7 +291,9 @@ function createProviderFromPreset(preset: BuiltinProviderPreset): AIProvider {
     ...(preset.channelConfig ? { channelConfig: { ...preset.channelConfig } } : {}),
     ...(preset.requestOverrides ? { requestOverrides: { ...preset.requestOverrides } } : {}),
     ...(preset.instructionsPrompt ? { instructionsPrompt: preset.instructionsPrompt } : {}),
-    ...(preset.ui ? { ui: { ...preset.ui } } : {})
+    ...(preset.ui ? { ui: { ...preset.ui } } : {}),
+    ...(preset.websocketUrl ? { websocketUrl: preset.websocketUrl } : {}),
+    ...(preset.websocketMode ? { websocketMode: preset.websocketMode } : {})
   }
 }
 
@@ -915,7 +920,9 @@ export const useProviderStore = create<ProviderStore>()(
       removeManagedModel: (modelId) =>
         set((state) => {
           const modelKey = normalizeModelKey(modelId)
-          const managedModels = state.managedModels.filter((model) => model.normalizedKey !== modelKey)
+          const managedModels = state.managedModels.filter(
+            (model) => model.normalizedKey !== modelKey
+          )
           if (managedModels.length === state.managedModels.length) {
             return state
           }
@@ -1168,6 +1175,8 @@ export const useProviderStore = create<ProviderStore>()(
           activeModel?.requestOverrides,
           activeModel?.id ?? activeModelId
         )
+        const websocketUrl = activeModel?.websocketUrl ?? provider.websocketUrl
+        const websocketMode = activeModel?.websocketMode ?? provider.websocketMode
         const serviceTier = resolveServiceTier(activeModel, provider.builtinId)
         const accountId = resolveProviderAccountId(provider)
         return {
@@ -1196,7 +1205,9 @@ export const useProviderStore = create<ProviderStore>()(
             ? { instructionsPrompt: provider.instructionsPrompt }
             : {}),
           ...(accountId ? { accountId } : {}),
-          ...(activeModel?.thinkingConfig ? { thinkingConfig: activeModel.thinkingConfig } : {})
+          ...(activeModel?.thinkingConfig ? { thinkingConfig: activeModel.thinkingConfig } : {}),
+          ...(websocketUrl ? { websocketUrl } : {}),
+          ...(websocketMode ? { websocketMode } : {})
         }
       },
 
@@ -1278,6 +1289,8 @@ export const useProviderStore = create<ProviderStore>()(
           model?.requestOverrides,
           model?.id ?? resolvedModelId
         )
+        const websocketUrl = model?.websocketUrl ?? provider.websocketUrl
+        const websocketMode = model?.websocketMode ?? provider.websocketMode
         const serviceTier = resolveServiceTier(model, provider.builtinId)
         const accountId = resolveProviderAccountId(provider)
         return {
@@ -1306,7 +1319,9 @@ export const useProviderStore = create<ProviderStore>()(
             ? { instructionsPrompt: provider.instructionsPrompt }
             : {}),
           ...(accountId ? { accountId } : {}),
-          ...(model?.thinkingConfig ? { thinkingConfig: model.thinkingConfig } : {})
+          ...(model?.thinkingConfig ? { thinkingConfig: model.thinkingConfig } : {}),
+          ...(websocketUrl ? { websocketUrl } : {}),
+          ...(websocketMode ? { websocketMode } : {})
         }
       },
 
@@ -1370,6 +1385,8 @@ export const useProviderStore = create<ProviderStore>()(
           fastModel?.requestOverrides,
           fastModel?.id ?? model
         )
+        const websocketUrl = fastModel?.websocketUrl ?? provider.websocketUrl
+        const websocketMode = fastModel?.websocketMode ?? provider.websocketMode
         const serviceTier = resolveServiceTier(fastModel, provider.builtinId)
         const accountId = resolveProviderAccountId(provider)
         return {
@@ -1396,7 +1413,9 @@ export const useProviderStore = create<ProviderStore>()(
           ...(provider.instructionsPrompt
             ? { instructionsPrompt: provider.instructionsPrompt }
             : {}),
-          ...(accountId ? { accountId } : {})
+          ...(accountId ? { accountId } : {}),
+          ...(websocketUrl ? { websocketUrl } : {}),
+          ...(websocketMode ? { websocketMode } : {})
         }
       },
 
@@ -1558,6 +1577,12 @@ function ensureBuiltinPresets(): void {
       }
       if (existing.userAgent !== preset.userAgent) {
         patch.userAgent = preset.userAgent
+      }
+      if (existing.websocketUrl !== preset.websocketUrl) {
+        patch.websocketUrl = preset.websocketUrl
+      }
+      if (existing.websocketMode !== preset.websocketMode) {
+        patch.websocketMode = preset.websocketMode
       }
       if (preset.instructionsPrompt && existing.instructionsPrompt !== preset.instructionsPrompt) {
         patch.instructionsPrompt = preset.instructionsPrompt
@@ -1816,7 +1841,7 @@ function ensureBuiltinPresets(): void {
         preset.deprecatedModelIds
       )
       const resolvedDefaultModel = preset.defaultModel
-        ? resolveModelIdByKey(updatedModels, preset.defaultModel) ?? preset.defaultModel
+        ? (resolveModelIdByKey(updatedModels, preset.defaultModel) ?? preset.defaultModel)
         : undefined
       if (existing.defaultModel !== resolvedDefaultModel) {
         patch.defaultModel = resolvedDefaultModel

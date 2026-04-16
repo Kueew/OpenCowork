@@ -11,16 +11,29 @@ import { createProvider } from '../api/provider'
 import { toolRegistry } from './tool-registry'
 import type { AgentEvent, AgentLoopConfig, ToolCallState } from './types'
 import type { ToolContext, ToolHandler } from '../tools/tool-types'
-import { encodeToolError } from '../tools/tool-result-format'
+import { decodeStructuredToolResult, encodeToolError } from '../tools/tool-result-format'
 import {
   summarizeToolInputForHistory,
   sanitizeMessagesForToolReplay
 } from '../tools/tool-input-sanitizer'
 import { shouldCompress, shouldPreCompress, preCompressMessages } from './context-compression'
 import { trySwitchProviderAccount } from '../auth/provider-auth'
+import { ConcurrencyLimiter } from './concurrency-limiter'
 
 const MAX_PROVIDER_RETRIES = 3
 const BASE_RETRY_DELAY_MS = 1_500
+const DEFAULT_MAX_PARALLEL_TOOLS = 8
+
+function isAwaitingUserReviewToolResult(output: ToolResultContent): boolean {
+  if (typeof output !== 'string') return false
+  const parsed = decodeStructuredToolResult(output)
+  return (
+    !!parsed &&
+    !Array.isArray(parsed) &&
+    parsed.awaiting_user_review === true &&
+    parsed.status === 'awaiting_review'
+  )
+}
 
 class ProviderRequestError extends Error {
   statusCode?: number
@@ -239,7 +252,11 @@ export async function* runAgentLoop(
                   // the full content is parsed once at tool_call_end.
                   // This avoids sending growing file content through the
                   // entire event→store→render pipeline on every delta.
-                  if ((targetToolName === 'Write' || targetToolName === 'Edit') && newLen > 200) {
+                  if (targetToolName === 'Edit') {
+                    break
+                  }
+
+                  if (targetToolName === 'Write' && newLen > 200) {
                     break
                   }
 
@@ -442,10 +459,46 @@ export async function* runAgentLoop(
       }
 
       // 3. Execute tool calls
-      const toolResults: ContentBlock[] = []
+      const toolResults: Array<ContentBlock | undefined> = new Array(toolCalls.length)
+      let shouldStopForUserReview = false
+      const runnableToolCalls: Array<{ tc: ToolCallState; index: number }> = []
+      const startedAtByToolId = new Map<string, number>()
 
-      for (const tc of toolCalls) {
-        // Approval check
+      const buildToolCallResult = (params: {
+        tc: ToolCallState
+        index: number
+        output: ToolResultContent
+        toolError?: string
+        startedAt: number
+        completedAt: number
+      }): {
+        resultEvent: ToolCallState
+        resultBlock: ContentBlock
+      } => {
+        const { tc, index, output, toolError, startedAt, completedAt } = params
+        const sanitizedInput = summarizeToolInputForHistory(tc.name, tc.input)
+        const resultEvent: ToolCallState = {
+          ...tc,
+          input: sanitizedInput,
+          status: toolError ? 'error' : 'completed',
+          output,
+          ...(toolError ? { error: toolError } : {}),
+          startedAt,
+          completedAt
+        }
+
+        const resultBlock: ContentBlock = {
+          type: 'tool_result',
+          toolUseId: tc.id,
+          content: output,
+          ...(toolError ? { isError: true } : {})
+        }
+        toolResults[index] = resultBlock
+        shouldStopForUserReview ||= isAwaitingUserReviewToolResult(output)
+        return { resultEvent, resultBlock }
+      }
+
+      for (const [index, tc] of toolCalls.entries()) {
         if (tc.requiresApproval && onApprovalNeeded) {
           yield {
             type: 'tool_call_approval_needed',
@@ -460,26 +513,25 @@ export async function* runAgentLoop(
               yield { type: 'loop_end', reason: 'aborted' }
               return
             }
+            const deniedAt = Date.now()
+            const deniedResult = buildToolCallResult({
+              tc,
+              index,
+              output: 'Permission denied by user',
+              toolError: 'User denied permission',
+              startedAt: deniedAt,
+              completedAt: deniedAt
+            })
             yield {
               type: 'tool_call_result',
-              toolCall: {
-                ...tc,
-                input: summarizeToolInputForHistory(tc.name, tc.input),
-                status: 'error',
-                error: 'User denied permission'
-              }
+              toolCall: deniedResult.resultEvent
             }
-            toolResults.push({
-              type: 'tool_result',
-              toolUseId: tc.id,
-              content: 'Permission denied by user',
-              isError: true
-            })
             continue
           }
         }
 
         const startedAt = Date.now()
+        startedAtByToolId.set(tc.id, startedAt)
         yield {
           type: 'tool_call_start',
           toolCall: {
@@ -489,58 +541,139 @@ export async function* runAgentLoop(
             startedAt
           }
         }
+        runnableToolCalls.push({ tc, index })
+      }
 
-        let output: ToolResultContent
-        let toolError: string | undefined
-        try {
-          output = await executeTool(tc.name, tc.input, {
-            ...toolCtx,
-            currentToolUseId: tc.id,
-            readFileHistory: toolCtx.readFileHistory
-          })
-        } catch (toolErr) {
+      const enableParallelToolExecution =
+        (config.enableParallelToolExecution ?? true) && runnableToolCalls.length > 1
+      const maxParallelTools = Math.max(
+        1,
+        Math.floor(config.maxParallelTools ?? DEFAULT_MAX_PARALLEL_TOOLS)
+      )
+
+      if (enableParallelToolExecution) {
+        const limiter = new ConcurrencyLimiter(maxParallelTools)
+        const completedExecutions: Array<{
+          tc: ToolCallState
+          index: number
+          output: ToolResultContent
+          toolError?: string
+          startedAt: number
+          completedAt: number
+        }> = []
+        let wakeExecutions: (() => void) | null = null
+        const wake = (): void => {
+          if (!wakeExecutions) return
+          const notify = wakeExecutions
+          wakeExecutions = null
+          notify()
+        }
+
+        const executionTasks = runnableToolCalls.map(({ tc, index }) =>
+          (async () => {
+            let output: ToolResultContent
+            let toolError: string | undefined
+            try {
+              await limiter.run(async () => {
+                output = await executeTool(tc.name, tc.input, {
+                  ...toolCtx,
+                  currentToolUseId: tc.id,
+                  readFileHistory: toolCtx.readFileHistory
+                })
+              }, config.signal)
+            } catch (toolErr) {
+              const errMsg = toolErr instanceof Error ? toolErr.message : String(toolErr)
+              toolError = errMsg
+              output = encodeToolError(errMsg)
+            }
+
+            completedExecutions.push({
+              tc,
+              index,
+              output: output!,
+              toolError,
+              startedAt: startedAtByToolId.get(tc.id) ?? Date.now(),
+              completedAt: Date.now()
+            })
+            wake()
+          })()
+        )
+
+        let completedCount = 0
+        while (completedCount < executionTasks.length) {
+          if (completedExecutions.length === 0) {
+            await new Promise<void>((resolve) => {
+              wakeExecutions = resolve
+              if (completedExecutions.length > 0) {
+                wake()
+              }
+            })
+            continue
+          }
+
+          while (completedExecutions.length > 0) {
+            const execution = completedExecutions.shift()
+            if (!execution) break
+            completedCount += 1
+            if (config.signal.aborted) {
+              yield { type: 'loop_end', reason: 'aborted' }
+              return
+            }
+            const completedResult = buildToolCallResult(execution)
+            yield {
+              type: 'tool_call_result',
+              toolCall: completedResult.resultEvent
+            }
+          }
+        }
+
+        await Promise.all(executionTasks)
+      } else {
+        for (const { tc, index } of runnableToolCalls) {
+          let output: ToolResultContent
+          let toolError: string | undefined
+          try {
+            output = await executeTool(tc.name, tc.input, {
+              ...toolCtx,
+              currentToolUseId: tc.id,
+              readFileHistory: toolCtx.readFileHistory
+            })
+          } catch (toolErr) {
+            if (config.signal.aborted) {
+              yield { type: 'loop_end', reason: 'aborted' }
+              return
+            }
+            const errMsg = toolErr instanceof Error ? toolErr.message : String(toolErr)
+            toolError = errMsg
+            output = encodeToolError(errMsg)
+          }
+
+          const completedAt = Date.now()
           if (config.signal.aborted) {
             yield { type: 'loop_end', reason: 'aborted' }
             return
           }
-          const errMsg = toolErr instanceof Error ? toolErr.message : String(toolErr)
-          toolError = errMsg
-          output = encodeToolError(errMsg)
-        }
 
-        const completedAt = Date.now()
-        const sanitizedInput = summarizeToolInputForHistory(tc.name, tc.input)
-        yield {
-          type: 'tool_call_result',
-          toolCall: {
-            ...tc,
-            input: sanitizedInput,
-            status: toolError ? 'error' : 'completed',
+          const completedResult = buildToolCallResult({
+            tc,
+            index,
             output,
-            ...(toolError ? { error: toolError } : {}),
-            startedAt,
+            toolError,
+            startedAt: startedAtByToolId.get(tc.id) ?? completedAt,
             completedAt
+          })
+          yield {
+            type: 'tool_call_result',
+            toolCall: completedResult.resultEvent
           }
         }
-
-        if (config.signal.aborted) {
-          yield { type: 'loop_end', reason: 'aborted' }
-          return
-        }
-
-        toolResults.push({
-          type: 'tool_result',
-          toolUseId: tc.id,
-          content: output,
-          ...(toolError ? { isError: true } : {})
-        })
       }
 
       // 4. Append tool results as user message and loop
       const toolResultMsg: UnifiedMessage = {
         id: nanoid(),
         role: 'user',
-        content: toolResults,
+        content: toolResults.filter((block): block is ContentBlock => Boolean(block)),
         createdAt: Date.now()
       }
       conversationMessages.push(toolResultMsg)
@@ -550,12 +683,22 @@ export async function* runAgentLoop(
         type: 'iteration_end',
         stopReason: 'tool_use',
         toolResults: toolResults
-          .filter((b) => b.type === 'tool_result')
-          .map((b) => ({
-            toolUseId: (b as { toolUseId: string }).toolUseId,
-            content: (b as { content: ToolResultContent }).content,
-            isError: (b as { isError?: boolean }).isError
+          .filter(
+            (
+              block
+            ): block is Extract<ContentBlock, { type: 'tool_result' }> =>
+              block !== undefined && block.type === 'tool_result'
+          )
+          .map((block) => ({
+            toolUseId: block.toolUseId,
+            content: block.content,
+            isError: block.isError
           }))
+      }
+
+      if (shouldStopForUserReview) {
+        yield { type: 'loop_end', reason: 'completed' }
+        return
       }
     }
 

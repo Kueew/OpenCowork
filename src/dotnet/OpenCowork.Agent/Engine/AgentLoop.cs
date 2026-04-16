@@ -26,7 +26,7 @@ public sealed class AgentLoopRunConfig
     public bool ForceApproval { get; init; }
     public CompressionConfig? Compression { get; init; }
     public bool EnableParallelToolExecution { get; init; } = true;
-    public int MaxParallelTools { get; init; } = 5;
+    public int MaxParallelTools { get; init; } = 8;
     /// <summary>
     /// "agent" (default) runs the full tool loop. "chat" runs a single
     /// provider turn and returns without executing any tool calls the model
@@ -235,14 +235,19 @@ public static class AgentLoop
                                 {
                                     var normalizedDelta = ProviderMessageFormatter.NormalizeToolInputObject(partialInput);
 
-                                    // For Write/Edit, strip large content from streaming
-                                    // deltas to avoid sending growing file content over
-                                    // JSON-RPC on every tick. The full input is sent once
-                                    // at tool_call_end.
                                     var tcForDelta = toolCalls.FirstOrDefault(t => t.Id == evt.ToolCallId);
                                     if (tcForDelta is not null &&
-                                        (string.Equals(tcForDelta.Name, "Write", StringComparison.Ordinal) ||
-                                         string.Equals(tcForDelta.Name, "Edit", StringComparison.Ordinal)))
+                                        string.Equals(tcForDelta.Name, "Edit", StringComparison.Ordinal))
+                                    {
+                                        break;
+                                    }
+
+                                    // For Write, strip large content from streaming deltas
+                                    // to avoid sending growing file content over JSON-RPC
+                                    // on every tick. The full input is sent once at
+                                    // tool_call_end.
+                                    if (tcForDelta is not null &&
+                                        string.Equals(tcForDelta.Name, "Write", StringComparison.Ordinal))
                                     {
                                         normalizedDelta = SummarizeToolInputForStreaming(normalizedDelta);
                                     }
@@ -304,7 +309,10 @@ public static class AgentLoop
                                     ProviderId = evt.DebugInfo.ProviderId,
                                     ProviderBuiltinId = evt.DebugInfo.ProviderBuiltinId,
                                     Model = evt.DebugInfo.Model,
-                                    ExecutionPath = "sidecar"
+                                    ExecutionPath = "sidecar",
+                                    Transport = evt.DebugInfo.Transport,
+                                    FallbackReason = evt.DebugInfo.FallbackReason,
+                                    ReusedConnection = evt.DebugInfo.ReusedConnection
                                 }
                             };
                         }
@@ -522,6 +530,14 @@ public static class AgentLoop
                     })
                     .ToList()
             };
+
+            if (toolResults
+                .OfType<ToolResultBlock>()
+                .Any(IsAwaitingUserReviewToolResult))
+            {
+                yield return new LoopEndEvent { Reason = "completed" };
+                yield break;
+            }
         }
 
         yield return new LoopEndEvent { Reason = "max_iterations" };
@@ -725,6 +741,34 @@ public static class AgentLoop
             }
             default:
                 return JsonSerializer.SerializeToElement(value.ToString() ?? string.Empty, AppJsonContext.Default.String);
+        }
+    }
+
+    private static bool IsAwaitingUserReviewToolResult(ToolResultBlock block)
+    {
+        var text = block.GetTextContent();
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(text);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return false;
+
+            if (!document.RootElement.TryGetProperty("awaiting_user_review", out var awaiting))
+                return false;
+
+            if (awaiting.ValueKind != JsonValueKind.True)
+                return false;
+
+            return document.RootElement.TryGetProperty("status", out var status)
+                && status.ValueKind == JsonValueKind.String
+                && string.Equals(status.GetString(), "awaiting_review", StringComparison.Ordinal);
+        }
+        catch
+        {
+            return false;
         }
     }
 }

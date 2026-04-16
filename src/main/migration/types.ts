@@ -22,6 +22,8 @@ export interface AIModelConfig {
   supportsVision?: boolean
   supportsFunctionCall?: boolean
   supportsThinking?: boolean
+  websocketUrl?: string
+  websocketMode?: 'auto' | 'disabled'
 }
 
 export interface AIProvider {
@@ -46,6 +48,8 @@ export interface AIProvider {
   requestOverrides?: RequestOverrides
   instructionsPrompt?: string
   ui?: Record<string, unknown>
+  websocketUrl?: string
+  websocketMode?: 'auto' | 'disabled'
 }
 
 export type McpTransportType = 'stdio' | 'sse' | 'streamable-http'

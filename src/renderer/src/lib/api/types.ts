@@ -163,6 +163,12 @@ export interface RequestDebugInfo {
   providerBuiltinId?: string
   model?: string
   executionPath?: 'node' | 'sidecar'
+  transport?: 'http' | 'websocket'
+  fallbackReason?: string
+  reusedConnection?: boolean
+  websocketRequestKind?: 'warmup' | 'full' | 'incremental'
+  websocketIncrementalReason?: string
+  previousResponseId?: string
 }
 
 export interface UnifiedMessage {
@@ -428,6 +434,10 @@ export interface AIModelConfig {
   requestOverrides?: RequestOverrides
   /** OpenAI-compatible service tier (e.g. priority). Effective when fast mode is enabled. */
   serviceTier?: 'priority'
+  /** OpenAI Responses WebSocket endpoint override for this model */
+  websocketUrl?: string
+  /** OpenAI Responses transport mode for this model */
+  websocketMode?: 'auto' | 'disabled'
 }
 
 export interface RequestOverrides {
@@ -488,6 +498,10 @@ export interface AIProvider {
   instructionsPrompt?: string
   /** Optional UI configuration for this provider */
   ui?: ProviderUiConfig
+  /** OpenAI Responses WebSocket endpoint override for this provider */
+  websocketUrl?: string
+  /** OpenAI Responses transport mode for this provider */
+  websocketMode?: 'auto' | 'disabled'
 }
 
 // --- Provider Config ---
@@ -541,6 +555,10 @@ export interface ProviderConfig {
   project?: string
   /** Account-backed OpenAI/Codex requests may require Chatgpt-Account-Id */
   accountId?: string
+  /** OpenAI Responses WebSocket endpoint override resolved for this request */
+  websocketUrl?: string
+  /** OpenAI Responses transport mode resolved for this request */
+  websocketMode?: 'auto' | 'disabled'
 }
 
 // --- Provider Interface ---

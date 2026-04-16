@@ -38,4 +38,8 @@ export interface BuiltinProviderPreset {
   instructionsPrompt?: string
   /** Optional UI configuration for this provider */
   ui?: ProviderUiConfig
+  /** OpenAI Responses WebSocket endpoint override for this provider preset */
+  websocketUrl?: string
+  /** OpenAI Responses transport mode for this provider preset */
+  websocketMode?: 'auto' | 'disabled'
 }

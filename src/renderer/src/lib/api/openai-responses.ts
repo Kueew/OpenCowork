@@ -15,7 +15,7 @@ import {
   DESKTOP_TYPE_TOOL_NAME,
   DESKTOP_WAIT_TOOL_NAME
 } from '../app-plugin/types'
-import { ipcStreamRequest, maskHeaders } from '../ipc/api-stream'
+import { ipcStreamRequest } from '../ipc/api-stream'
 import { useProviderStore } from '@renderer/stores/provider-store'
 import { ensureProviderAuthReady } from '@renderer/lib/auth/provider-auth'
 import { loadPrompt } from '../prompts/prompt-loader'
@@ -198,17 +198,6 @@ class OpenAIResponsesProvider implements APIProvider {
 
     console.log(`[OpenAI Responses] model=${runtimeConfig.model}`)
 
-    yield {
-      type: 'request_debug',
-      debugInfo: {
-        url,
-        method: 'POST',
-        headers: maskHeaders(headers),
-        body: httpBodyStr,
-        timestamp: Date.now()
-      }
-    }
-
     const argBuffers = new Map<string, string>()
     const emittedThinkingEncrypted = new Set<string>()
     const emittedComputerCallIds = new Set<string>()
@@ -257,7 +246,12 @@ class OpenAIResponsesProvider implements APIProvider {
         allowInsecureTls: runtimeConfig.allowInsecureTls ?? true,
         providerId: runtimeConfig.providerId,
         providerBuiltinId: runtimeConfig.providerBuiltinId,
-        accountId: activeAccountId
+        accountId: activeAccountId,
+        providerType: runtimeConfig.type,
+        model: runtimeConfig.model,
+        sessionId: runtimeConfig.sessionId,
+        websocketUrl: runtimeConfig.websocketUrl,
+        websocketMode: runtimeConfig.websocketMode
       })) {
         if (!sse.data || sse.data === '[DONE]') continue
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -269,6 +263,13 @@ class OpenAIResponsesProvider implements APIProvider {
         }
 
         switch (sse.event) {
+          case '__request_debug':
+            yield {
+              type: 'request_debug',
+              debugInfo: data
+            }
+            break
+
           case 'response.output_text.delta':
             if (firstTokenAt === null) firstTokenAt = Date.now()
             yield { type: 'text_delta', text: data.delta }
@@ -476,7 +477,8 @@ class OpenAIResponsesProvider implements APIProvider {
       if (m.role === 'user') {
         const parts: unknown[] = []
         const toolResults = blocks.filter(
-          (block): block is Extract<ContentBlock, { type: 'tool_result' }> => block.type === 'tool_result'
+          (block): block is Extract<ContentBlock, { type: 'tool_result' }> =>
+            block.type === 'tool_result'
         )
         let emittedToolResult = false
 
@@ -573,13 +575,19 @@ class OpenAIResponsesProvider implements APIProvider {
     return input
   }
 
-  private serializeToolResultOutput(content: Extract<ContentBlock, { type: 'tool_result' }>['content']): string {
+  private serializeToolResultOutput(
+    content: Extract<ContentBlock, { type: 'tool_result' }>['content']
+  ): string {
     if (Array.isArray(content)) {
       const textParts = content
         .filter((block): block is Extract<ContentBlock, { type: 'text' }> => block.type === 'text')
         .map((block) => block.text)
       const imageCount = content.filter((block) => block.type === 'image').length
-      return [...textParts, ...Array.from({ length: imageCount }, () => '[Image attached]')].join('\n') || '[Image]'
+      return (
+        [...textParts, ...Array.from({ length: imageCount }, () => '[Image attached]')].join(
+          '\n'
+        ) || '[Image]'
+      )
     }
 
     return content

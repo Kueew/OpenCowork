@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
@@ -13,6 +14,9 @@ namespace OpenCowork.Agent.Protocol;
 
 public sealed class AgentRuntimeService
 {
+    private const int DefaultMaxParallelTools = 8;
+    private const int MinMaxParallelTools = 1;
+    private const int MaxMaxParallelTools = 16;
     private const string DefaultFallbackReportPrompt =
         "Your previous turn ended without producing any visible text. Your caller has no way to see what you did. " +
         "Now, based on everything you executed in this conversation (tool calls, findings, analysis, attempts, and " +
@@ -33,6 +37,16 @@ public sealed class AgentRuntimeService
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _activeRuns = new();
     private readonly ConcurrentDictionary<string, DateTimeOffset> _readFileHistory = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, Channel<StreamEvent>> _bridgedProviderStreams = new();
+
+    private sealed record ShellCommandExecutionResult(
+        int ExitCode,
+        string Stdout,
+        string Stderr,
+        string Shell,
+        long TotalMs,
+        long SpawnMs,
+        bool TimedOut,
+        bool Aborted);
 
     private static readonly string[] SupportedCapabilities =
     [
@@ -92,6 +106,14 @@ public sealed class AgentRuntimeService
     public bool SupportsCapability(string capability) =>
         SupportedCapabilities.Contains(capability, StringComparer.OrdinalIgnoreCase);
 
+    private static int NormalizeMaxParallelTools(int value)
+    {
+        if (value <= 0)
+            return DefaultMaxParallelTools;
+
+        return Math.Clamp(value, MinMaxParallelTools, MaxMaxParallelTools);
+    }
+
     public async Task<AgentRunResult> StartRunAsync(AgentRunParams input, CancellationToken ct)
     {
         var runId = string.IsNullOrWhiteSpace(input.RunId)
@@ -132,6 +154,7 @@ public sealed class AgentRuntimeService
                 };
 
                 var isChatMode = string.Equals(input.SessionMode, "chat", StringComparison.OrdinalIgnoreCase);
+                var maxParallelTools = NormalizeMaxParallelTools(input.MaxParallelTools);
                 List<UnifiedMessage>? capturedFinalMessages = null;
                 var loopConfig = new AgentLoopRunConfig
                 {
@@ -145,7 +168,8 @@ public sealed class AgentRuntimeService
                     MaxIterations = isChatMode ? 1 : input.MaxIterations,
                     ForceApproval = input.ForceApproval,
                     Compression = input.Compression,
-                    EnableParallelToolExecution = true,
+                    EnableParallelToolExecution = maxParallelTools > 1,
+                    MaxParallelTools = maxParallelTools,
                     SessionMode = input.SessionMode,
                     PlanMode = input.PlanMode,
                     PlanModeAllowedTools = input.PlanModeAllowedTools is { Count: > 0 }
@@ -162,7 +186,7 @@ public sealed class AgentRuntimeService
 
                 await foreach (var evt in AgentLoop.RunAsync(input.Messages, loopConfig, approvalHandler, runCts.Token))
                 {
-                    Console.Error.WriteLine($"[{DateTimeOffset.Now:HH:mm:ss.fff}] [AgentRuntime] event produced runId={runId} type={evt.Type}");
+                    Console.Error.WriteLine($"[{DateTimeOffset.Now:HH:mm:ss.fff}] [AgentRuntime] event produced runId={runId} {DescribeAgentEvent(evt)}");
 
                     if (evt is TextDeltaEvent textEvt)
                     {
@@ -528,7 +552,16 @@ public sealed class AgentRuntimeService
                     {
                         ["stdout"] = JsonValue.Create(result.Stdout),
                         ["stderr"] = JsonValue.Create(result.Stderr),
-                        ["exitCode"] = JsonValue.Create(result.ExitCode)
+                        ["exitCode"] = JsonValue.Create(result.ExitCode),
+                        ["summary"] = BuildJsonObject(new Dictionary<string, JsonNode?>
+                        {
+                            ["totalMs"] = JsonValue.Create(result.TotalMs),
+                            ["spawnMs"] = JsonValue.Create(result.SpawnMs),
+                            ["shell"] = JsonValue.Create(result.Shell),
+                            ["executionEngine"] = JsonValue.Create("sidecar"),
+                            ["timedOut"] = JsonValue.Create(result.TimedOut),
+                            ["aborted"] = JsonValue.Create(result.Aborted)
+                        })
                     }),
                     IsError = result.ExitCode != 0
                 };
@@ -1148,53 +1181,126 @@ When the task is complete you MUST call the `SubmitReport` tool exactly once to 
         return "old_string not found in file";
     }
 
-    private static async Task<(int ExitCode, string Stdout, string Stderr)> ExecuteShellCommandAsync(
+    private static async Task<ShellCommandExecutionResult> ExecuteShellCommandAsync(
         string command,
         string? workingFolder,
         int timeoutMs,
         CancellationToken ct)
     {
         var isWindows = OperatingSystem.IsWindows();
+        var shell = isWindows ? (Environment.GetEnvironmentVariable("ComSpec")?.Trim() ?? "cmd.exe") : "/bin/sh";
         var startInfo = new System.Diagnostics.ProcessStartInfo
         {
-            FileName = isWindows ? "cmd.exe" : "/bin/sh",
-            Arguments = isWindows ? $"/c {command}" : $"-lc \"{command.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal)}\"",
+            FileName = shell,
             WorkingDirectory = string.IsNullOrWhiteSpace(workingFolder) ? Environment.CurrentDirectory : workingFolder,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
-            CreateNoWindow = true
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
         };
-
-        using var process = new System.Diagnostics.Process { StartInfo = startInfo };
-        process.Start();
-
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
-        var stderrTask = process.StandardError.ReadToEndAsync(ct);
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var waitTask = process.WaitForExitAsync(timeoutCts.Token);
-        var delayTask = Task.Delay(timeoutMs, timeoutCts.Token);
-        var completedTask = await Task.WhenAny(waitTask, delayTask);
-
-        if (completedTask == delayTask)
+        if (isWindows)
         {
-            try
-            {
-                if (!process.HasExited)
-                    process.Kill(entireProcessTree: true);
-            }
-            catch
-            {
-            }
+            startInfo.ArgumentList.Add("/d");
+            startInfo.ArgumentList.Add("/s");
+            startInfo.ArgumentList.Add("/c");
+            startInfo.ArgumentList.Add(command);
+        }
+        else
+        {
+            startInfo.ArgumentList.Add("-c");
+            startInfo.ArgumentList.Add(command);
+        }
+        startInfo.Environment["PYTHONIOENCODING"] = "utf-8";
+        startInfo.Environment["PYTHONUTF8"] = "1";
+        startInfo.Environment["PYTHONUNBUFFERED"] = "1";
 
-            throw new TimeoutException($"Command timed out after {timeoutMs}ms");
+        var overallStopwatch = Stopwatch.StartNew();
+        using var process = new System.Diagnostics.Process { StartInfo = startInfo };
+        var spawnStopwatch = Stopwatch.StartNew();
+        process.Start();
+        spawnStopwatch.Stop();
+
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        using var timeoutCts = new CancellationTokenSource(timeoutMs);
+        using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
+        try
+        {
+            await process.WaitForExitAsync(waitCts.Token);
+        }
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+        {
+            TryKillProcessTree(process);
+            await WaitForExitSafelyAsync(process).ConfigureAwait(false);
+            var timeoutStdout = await stdoutTask.ConfigureAwait(false);
+            var timeoutStderr = await stderrTask.ConfigureAwait(false);
+            overallStopwatch.Stop();
+            return new ShellCommandExecutionResult(
+                124,
+                timeoutStdout,
+                $"{timeoutStderr}\n[Timed out after {timeoutMs}ms]".Trim(),
+                shell,
+                overallStopwatch.ElapsedMilliseconds,
+                spawnStopwatch.ElapsedMilliseconds,
+                TimedOut: true,
+                Aborted: false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            TryKillProcessTree(process);
+            await WaitForExitSafelyAsync(process).ConfigureAwait(false);
+            var abortedStdout = await stdoutTask.ConfigureAwait(false);
+            var abortedStderr = await stderrTask.ConfigureAwait(false);
+            overallStopwatch.Stop();
+            return new ShellCommandExecutionResult(
+                130,
+                abortedStdout,
+                $"{abortedStderr}\n[Aborted]".Trim(),
+                shell,
+                overallStopwatch.ElapsedMilliseconds,
+                spawnStopwatch.ElapsedMilliseconds,
+                TimedOut: false,
+                Aborted: true);
         }
 
-        timeoutCts.Cancel();
-        await waitTask;
-        var stdout = await stdoutTask;
-        var stderr = await stderrTask;
-        return (process.ExitCode, stdout, stderr);
+        var stdout = await stdoutTask.ConfigureAwait(false);
+        var stderr = await stderrTask.ConfigureAwait(false);
+        overallStopwatch.Stop();
+        return new ShellCommandExecutionResult(
+            process.ExitCode,
+            stdout,
+            stderr,
+            shell,
+            overallStopwatch.ElapsedMilliseconds,
+            spawnStopwatch.ElapsedMilliseconds,
+            TimedOut: false,
+            Aborted: false);
+    }
+
+    private static void TryKillProcessTree(System.Diagnostics.Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+        }
+        catch
+        {
+        }
+    }
+
+    private static async Task WaitForExitSafelyAsync(System.Diagnostics.Process process)
+    {
+        try
+        {
+            await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch
+        {
+        }
     }
 
     private static bool IsWithinWorkingFolder(string path, string workingFolder)
@@ -1259,13 +1365,38 @@ When the task is complete you MUST call the `SubmitReport` tool exactly once to 
                 RunId = runId,
                 Event = SerializeAgentEvent(evt)
             }, ct);
-            Console.Error.WriteLine($"[{DateTimeOffset.Now:HH:mm:ss.fff}] [AgentRuntime] event sent runId={runId} type={evt.Type}");
+            Console.Error.WriteLine($"[{DateTimeOffset.Now:HH:mm:ss.fff}] [AgentRuntime] event sent runId={runId} {DescribeAgentEvent(evt)}");
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[{DateTimeOffset.Now:HH:mm:ss.fff}] [AgentRuntime] event send failed runId={runId} type={evt.Type}: {ex}");
+            Console.Error.WriteLine($"[{DateTimeOffset.Now:HH:mm:ss.fff}] [AgentRuntime] event send failed runId={runId} {DescribeAgentEvent(evt)}: {ex}");
             throw;
         }
+    }
+
+    private static string DescribeAgentEvent(AgentEvent evt)
+    {
+        if (evt is RequestDebugEvent requestDebug)
+        {
+            var details = new List<string> { "type=request_debug" };
+            if (!string.IsNullOrWhiteSpace(requestDebug.DebugInfo.Transport))
+                details.Add($"transport={requestDebug.DebugInfo.Transport}");
+            if (!string.IsNullOrWhiteSpace(requestDebug.DebugInfo.FallbackReason))
+                details.Add($"fallbackReason={requestDebug.DebugInfo.FallbackReason}");
+            if (requestDebug.DebugInfo.ReusedConnection is bool reusedConnection)
+                details.Add($"reusedConnection={reusedConnection.ToString().ToLowerInvariant()}");
+            if (!string.IsNullOrWhiteSpace(requestDebug.DebugInfo.WebsocketRequestKind))
+                details.Add($"websocketRequestKind={requestDebug.DebugInfo.WebsocketRequestKind}");
+            if (!string.IsNullOrWhiteSpace(requestDebug.DebugInfo.WebsocketIncrementalReason))
+                details.Add($"websocketIncrementalReason={requestDebug.DebugInfo.WebsocketIncrementalReason}");
+            if (!string.IsNullOrWhiteSpace(requestDebug.DebugInfo.PreviousResponseId))
+                details.Add($"previousResponseId={requestDebug.DebugInfo.PreviousResponseId}");
+            if (!string.IsNullOrWhiteSpace(requestDebug.DebugInfo.Url))
+                details.Add($"url={requestDebug.DebugInfo.Url}");
+            return string.Join(" ", details);
+        }
+
+        return $"type={evt.Type}";
     }
 
     private async Task<string?> RunFallbackReportAsync(

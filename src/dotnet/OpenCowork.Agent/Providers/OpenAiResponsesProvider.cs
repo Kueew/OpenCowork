@@ -1,4 +1,8 @@
 using System.Runtime.CompilerServices;
+using System.Collections.Concurrent;
+using System.Net;
+using System.Net.Http;
+using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -15,6 +19,9 @@ public sealed class OpenAiResponsesProvider : ILlmProvider
     private const string DesktopTypeToolName = "DesktopType";
     private const string DesktopScrollToolName = "DesktopScroll";
     private const string DesktopWaitToolName = "DesktopWait";
+    private static readonly TimeSpan WebsocketCircuitBreakDuration = TimeSpan.FromMinutes(1);
+    private static readonly ConcurrentDictionary<string, ResponsesWebSocketCircuitState> WebsocketCircuitBreakers = new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<string, ReusableResponsesWebSocketConnection> WebsocketConnections = new(StringComparer.Ordinal);
 
     public string Name => "OpenAI Responses";
     public string Type => "openai-responses";
@@ -56,13 +63,788 @@ public sealed class OpenAiResponsesProvider : ILlmProvider
 
         ProviderMessageFormatter.ApplyHeaderOverrides(headers, config);
         var bodyBytes = await BuildRequestBodyAsync(messages, tools, config, ct);
-
-        yield return new StreamEvent
+        var websocketHeaders = OpenAiResponsesWebSocketProtocol.BuildHandshakeHeaders(headers);
+        async IAsyncEnumerable<StreamEvent> StreamMappedItemsAsync(
+            IAsyncEnumerable<OpenAiResponsesSseItem> items,
+            [EnumeratorCancellation] CancellationToken innerCt = default)
         {
-            Type = "request_debug",
-            DebugInfo = CreateRequestDebugInfo(url, "POST", headers, bodyBytes, config)
-        };
+            await foreach (var item in items.WithCancellation(innerCt))
+            {
+                using var document = item.Document;
+                var root = document.RootElement;
 
+                switch (item.EventType)
+                {
+                    case "response.output_text.delta":
+                        {
+                            var textDelta = GetStringOrDefault(root, "delta");
+                            if (!string.IsNullOrEmpty(textDelta))
+                            {
+                                state.MarkFirstToken();
+                                yield return new StreamEvent { Type = "text_delta", Text = textDelta };
+                            }
+                        }
+                        break;
+
+                    case "response.reasoning_summary_text.delta":
+                        {
+                            var thinkingDelta = GetStringOrDefault(root, "delta");
+                            if (!string.IsNullOrEmpty(thinkingDelta))
+                            {
+                                state.MarkFirstToken();
+                                state.EmittedThinkingDelta = true;
+                                yield return new StreamEvent { Type = "thinking_delta", Thinking = thinkingDelta };
+                            }
+                        }
+                        break;
+
+                    case "response.reasoning_summary_text.done":
+                        {
+                            if (!state.EmittedThinkingDelta)
+                            {
+                                var thinkingDone = GetReasoningSummaryText(root);
+                                if (!string.IsNullOrWhiteSpace(thinkingDone))
+                                {
+                                    state.MarkFirstToken();
+                                    state.EmittedThinkingDelta = true;
+                                    yield return new StreamEvent { Type = "thinking_delta", Thinking = thinkingDone };
+                                }
+                            }
+                        }
+                        break;
+
+                    case "response.output_item.added":
+                        if (root.TryGetProperty("item", out var addedItem))
+                        {
+                            foreach (var evt in HandleOutputItemAdded(addedItem, state))
+                                yield return evt;
+                        }
+                        break;
+
+                    case "response.output_item.done":
+                        if (root.TryGetProperty("item", out var doneItem))
+                        {
+                            foreach (var evt in HandleOutputItemDone(doneItem, state))
+                                yield return evt;
+                        }
+                        break;
+
+                    case "response.function_call_arguments.delta":
+                        {
+                            var itemId = GetStringOrDefault(root, "item_id");
+                            var callId = GetStringOrDefault(root, "call_id");
+                            var delta = GetStringOrDefault(root, "delta");
+                            if (!string.IsNullOrEmpty(itemId))
+                            {
+                                if (!state.ArgBuffers.TryGetValue(itemId, out var buffer))
+                                {
+                                    buffer = new StringBuilder();
+                                    state.ArgBuffers[itemId] = buffer;
+                                }
+                                buffer.Append(delta);
+                            }
+
+                            if (!string.IsNullOrEmpty(callId) && !string.IsNullOrEmpty(delta))
+                            {
+                                yield return new StreamEvent
+                                {
+                                    Type = "tool_call_delta",
+                                    ToolCallId = callId,
+                                    ArgumentsDelta = delta
+                                };
+                            }
+                        }
+                        break;
+
+                    case "response.function_call_arguments.done":
+                        {
+                            var itemId = GetStringOrDefault(root, "item_id");
+                            var callId = GetStringOrDefault(root, "call_id");
+                            var name = GetStringOrDefault(root, "name");
+                            var arguments = GetStringOrDefault(root, "arguments");
+
+                            var finalArguments = arguments;
+                            if (!string.IsNullOrEmpty(itemId) && state.ArgBuffers.TryGetValue(itemId, out var buffer))
+                            {
+                                var bufferedArguments = buffer.ToString();
+                                if (!string.IsNullOrWhiteSpace(bufferedArguments))
+                                    finalArguments = bufferedArguments;
+
+                                state.ArgBuffers.Remove(itemId);
+                            }
+
+                            yield return new StreamEvent
+                            {
+                                Type = "tool_call_end",
+                                ToolCallId = callId,
+                                ToolName = name,
+                                ToolCallInput = ParseArguments(finalArguments)
+                            };
+                        }
+                        break;
+
+                    case "response.completed":
+                        {
+                            if (root.TryGetProperty("response", out var completedResponse))
+                            {
+                                if (completedResponse.TryGetProperty("output", out var output)
+                                    && output.ValueKind == JsonValueKind.Array)
+                                {
+                                    foreach (var outputItem in output.EnumerateArray())
+                                    {
+                                        foreach (var evt in HandleCompletedOutputItem(outputItem, state))
+                                            yield return evt;
+                                    }
+                                }
+
+                                outputTokens = GetIntOrDefault(completedResponse, "usage", "output_tokens", outputTokens);
+                                var completedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                                var usage = BuildUsage(completedResponse);
+                                if (usage is not null)
+                                    outputTokens = usage.OutputTokens;
+
+                                yield return new StreamEvent
+                                {
+                                    Type = "message_end",
+                                    StopReason = GetStringOrDefault(completedResponse, "status"),
+                                    ProviderResponseId = GetStringOrDefault(completedResponse, "id"),
+                                    Usage = usage,
+                                    Timing = new RequestTiming
+                                    {
+                                        TotalMs = completedAt - requestStartedAt,
+                                        TtftMs = state.FirstTokenAt.HasValue ? state.FirstTokenAt.Value - requestStartedAt : null,
+                                        Tps = outputTokens > 1 && state.FirstTokenAt.HasValue
+                                            ? (outputTokens - 1) / ((completedAt - state.FirstTokenAt.Value) / 1000.0)
+                                            : null
+                                    }
+                                };
+                            }
+                        }
+                        break;
+
+                    case "response.failed":
+                    case "error":
+                        yield return new StreamEvent
+                        {
+                            Type = "error",
+                            Error = new StreamEventError
+                            {
+                                Type = "api_error",
+                                Message = root.GetRawText()
+                            }
+                        };
+                        break;
+                }
+            }
+        }
+
+        var websocketResolution = ResolveResponsesWebSocketTarget(config, url);
+        var fallbackReason = websocketResolution.FallbackReason;
+        var shouldUseWebSocket = websocketResolution.Mode != "disabled"
+            && websocketResolution.WebsocketUrl is not null
+            && websocketResolution.Reason is null;
+        var forceFreshWebSocket = false;
+
+        while (true)
+        {
+            if (shouldUseWebSocket && websocketResolution.WebsocketUrl is not null)
+            {
+                var websocketCircuitReason = TryGetResponsesWebSocketCircuitReason(config, websocketResolution.WebsocketUrl);
+                if (websocketCircuitReason is null)
+                {
+                    ReusableResponsesWebSocketConnection? connection = null;
+                    var reusedConnection = false;
+                    ResponsesWebSocketFallbackException? websocketFallback = null;
+                    ResponsesWebSocketFatalException? websocketFatal = null;
+                    OpenAiResponsesWebSocketProtocol.PreparedRequest? warmupRequest = null;
+                    OpenAiResponsesWebSocketProtocol.PreparedRequest? preparedRequest = null;
+
+                    try
+                    {
+                        var connectionKey = BuildResponsesWebSocketConnectionKey(config, websocketResolution.WebsocketUrl);
+                        (connection, reusedConnection) = await AcquireResponsesWebSocketConnectionAsync(
+                            config,
+                            websocketResolution.WebsocketUrl,
+                            websocketHeaders,
+                            connectionKey,
+                            forceFreshWebSocket,
+                            ct);
+                    }
+                    catch (ResponsesWebSocketFallbackException ex) when (!ct.IsCancellationRequested)
+                    {
+                        websocketFallback = ex;
+                    }
+                    catch (ResponsesWebSocketFatalException ex) when (!ct.IsCancellationRequested)
+                    {
+                        websocketFatal = ex;
+                    }
+
+                    if (connection is not null && !reusedConnection && connection.Reusable)
+                    {
+                        warmupRequest = OpenAiResponsesWebSocketProtocol.PrepareRequest(
+                            bodyBytes,
+                            lastFullRequest: null,
+                            lastCompletedResponseId: null,
+                            lastResponseOutputItems: null,
+                            warmup: true);
+                        LogResponsesWebSocketLifecycle(
+                            "warmup_start",
+                            config,
+                            websocketResolution.WebsocketUrl,
+                            key: connection.Key,
+                            requestKind: warmupRequest.RequestKind,
+                            incrementalReason: warmupRequest.IncrementalReason,
+                            reusedConnection: reusedConnection);
+                        yield return new StreamEvent
+                        {
+                            Type = "request_debug",
+                            DebugInfo = CreateRequestDebugInfo(
+                                websocketResolution.WebsocketUrl,
+                                "WEBSOCKET",
+                                websocketHeaders,
+                                warmupRequest.PayloadBytes,
+                                config,
+                                transport: "websocket",
+                                fallbackReason: fallbackReason,
+                                reusedConnection: reusedConnection,
+                                websocketRequestKind: warmupRequest.RequestKind,
+                                websocketIncrementalReason: warmupRequest.IncrementalReason)
+                        };
+
+                        await using var warmupStream = ReadOpenAiResponsesWebSocketItemsAsync(
+                            connection,
+                            warmupRequest,
+                            ct).GetAsyncEnumerator(ct);
+
+                        while (true)
+                        {
+                            try
+                            {
+                                if (!await warmupStream.MoveNextAsync())
+                                    break;
+                            }
+                            catch (ResponsesWebSocketFallbackException ex) when (!ct.IsCancellationRequested)
+                            {
+                                websocketFallback = ex;
+                                break;
+                            }
+                            catch (ResponsesWebSocketFatalException ex) when (!ct.IsCancellationRequested)
+                            {
+                                websocketFatal = ex;
+                                break;
+                            }
+                        }
+
+                        if (websocketFallback is null && websocketFatal is null)
+                        {
+                            LogResponsesWebSocketLifecycle(
+                            "warmup_end",
+                            config,
+                            websocketResolution.WebsocketUrl,
+                            key: connection.Key,
+                            requestKind: warmupRequest.RequestKind,
+                            incrementalReason: warmupRequest.IncrementalReason,
+                            reusedConnection: reusedConnection);
+                        }
+                    }
+
+                    if (websocketFallback is null && websocketFatal is null && connection is not null)
+                    {
+                        preparedRequest = OpenAiResponsesWebSocketProtocol.PrepareRequest(
+                            bodyBytes,
+                            connection.Reusable ? connection.LastFullRequest : null,
+                            connection.Reusable ? connection.LastCompletedResponseId : null,
+                            connection.Reusable ? connection.LastResponseOutputItems : null,
+                            warmup: false);
+                    }
+
+                    if (websocketFallback is not null)
+                    {
+                        LogResponsesWebSocketLifecycle(
+                            "fallback",
+                            config,
+                            websocketResolution.WebsocketUrl,
+                            key: connection?.Key,
+                            reason: websocketFallback.Reason,
+                            requestKind: preparedRequest?.RequestKind,
+                            incrementalReason: preparedRequest?.IncrementalReason,
+                            previousResponseId: preparedRequest?.PreviousResponseId,
+                            reusedConnection: reusedConnection);
+                        if (!forceFreshWebSocket && websocketFallback.Reason == "websocket_connection_limit_reached")
+                        {
+                            forceFreshWebSocket = true;
+                            fallbackReason = websocketFallback.Reason;
+                            continue;
+                        }
+
+                        SetResponsesWebSocketCircuitReason(config, websocketResolution.WebsocketUrl, websocketFallback.Reason);
+                        fallbackReason = websocketFallback.Reason;
+                        shouldUseWebSocket = false;
+                        continue;
+                    }
+
+                    if (websocketFatal is not null)
+                    {
+                        yield return new StreamEvent
+                        {
+                            Type = "error",
+                            Error = new StreamEventError
+                            {
+                                Type = "api_error",
+                                Message = websocketFatal.Message
+                            }
+                        };
+                        yield break;
+                    }
+
+                    if (preparedRequest is null || connection is null)
+                    {
+                        shouldUseWebSocket = false;
+                        continue;
+                    }
+
+                    yield return new StreamEvent
+                    {
+                        Type = "request_debug",
+                        DebugInfo = CreateRequestDebugInfo(
+                            websocketResolution.WebsocketUrl,
+                            "WEBSOCKET",
+                            websocketHeaders,
+                            preparedRequest.PayloadBytes,
+                            config,
+                            transport: "websocket",
+                            fallbackReason: fallbackReason,
+                            reusedConnection: reusedConnection,
+                            websocketRequestKind: preparedRequest.RequestKind,
+                            websocketIncrementalReason: preparedRequest.IncrementalReason,
+                            previousResponseId: preparedRequest.PreviousResponseId)
+                    };
+
+                    await using var websocketStream = StreamMappedItemsAsync(
+                        ReadOpenAiResponsesWebSocketItemsAsync(
+                            connection,
+                            preparedRequest,
+                            ct),
+                        ct).GetAsyncEnumerator(ct);
+
+                    while (true)
+                    {
+                        StreamEvent websocketEvent;
+
+                        try
+                        {
+                            if (!await websocketStream.MoveNextAsync())
+                                yield break;
+
+                            websocketEvent = websocketStream.Current;
+                        }
+                        catch (ResponsesWebSocketFallbackException ex) when (!ct.IsCancellationRequested)
+                        {
+                            websocketFallback = ex;
+                            break;
+                        }
+                        catch (ResponsesWebSocketFatalException ex) when (!ct.IsCancellationRequested)
+                        {
+                            websocketFatal = ex;
+                            break;
+                        }
+
+                        yield return websocketEvent;
+                    }
+
+                    if (websocketFallback is not null)
+                    {
+                        LogResponsesWebSocketLifecycle(
+                            "fallback",
+                            config,
+                            websocketResolution.WebsocketUrl,
+                            key: connection?.Key,
+                            reason: websocketFallback.Reason,
+                            requestKind: preparedRequest?.RequestKind,
+                            incrementalReason: preparedRequest?.IncrementalReason,
+                            previousResponseId: preparedRequest?.PreviousResponseId,
+                            reusedConnection: reusedConnection);
+                        if (!forceFreshWebSocket && websocketFallback.Reason == "websocket_connection_limit_reached")
+                        {
+                            forceFreshWebSocket = true;
+                            fallbackReason = websocketFallback.Reason;
+                            continue;
+                        }
+
+                        SetResponsesWebSocketCircuitReason(config, websocketResolution.WebsocketUrl, websocketFallback.Reason);
+                        fallbackReason = websocketFallback.Reason;
+                        shouldUseWebSocket = false;
+                        continue;
+                    }
+
+                    if (websocketFatal is not null)
+                    {
+                        yield return new StreamEvent
+                        {
+                            Type = "error",
+                            Error = new StreamEventError
+                            {
+                                Type = "api_error",
+                                Message = websocketFatal.Message
+                            }
+                        };
+                        yield break;
+                    }
+                }
+
+                fallbackReason = websocketCircuitReason;
+                shouldUseWebSocket = false;
+            }
+
+            yield return new StreamEvent
+            {
+                Type = "request_debug",
+                DebugInfo = CreateRequestDebugInfo(
+                    url,
+                    "POST",
+                    headers,
+                    bodyBytes,
+                    config,
+                    transport: "http",
+                    fallbackReason: fallbackReason)
+            };
+
+            ResponsesHttpErrorException? httpError = null;
+            await using var httpStream = StreamMappedItemsAsync(
+                ReadOpenAiResponsesHttpItemsAsync(url, headers, bodyBytes, config, ct),
+                ct).GetAsyncEnumerator(ct);
+
+            while (true)
+            {
+                StreamEvent httpEvent;
+
+                try
+                {
+                    if (!await httpStream.MoveNextAsync())
+                        yield break;
+
+                    httpEvent = httpStream.Current;
+                }
+                catch (ResponsesHttpErrorException ex) when (!ct.IsCancellationRequested)
+                {
+                    httpError = ex;
+                    break;
+                }
+
+                yield return httpEvent;
+            }
+
+            if (httpError is not null)
+            {
+                yield return new StreamEvent
+                {
+                    Type = "error",
+                    Error = new StreamEventError
+                    {
+                        Type = $"http_{httpError.StatusCode}",
+                        Message = $"HTTP {httpError.StatusCode}: {httpError.ResponseBody[..Math.Min(2000, httpError.ResponseBody.Length)]}"
+                    }
+                };
+                yield break;
+            }
+        }
+    }
+
+    private static RequestDebugInfo CreateRequestDebugInfo(
+        string url,
+        string method,
+        Dictionary<string, string> headers,
+        byte[] bodyBytes,
+        ProviderConfig config,
+        string? transport = null,
+        string? fallbackReason = null,
+        bool? reusedConnection = null,
+        string? websocketRequestKind = null,
+        string? websocketIncrementalReason = null,
+        string? previousResponseId = null)
+    {
+        var maskedHeaders = headers.ToDictionary(
+            static pair => pair.Key,
+            pair => pair.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase)
+                ? "Bearer ***"
+                : pair.Value);
+
+        return new RequestDebugInfo
+        {
+            Url = url,
+            Method = method,
+            Headers = maskedHeaders,
+            Body = Encoding.UTF8.GetString(bodyBytes),
+            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            ProviderId = config.ProviderId,
+            ProviderBuiltinId = config.ProviderBuiltinId,
+            Model = config.Model,
+            ExecutionPath = "sidecar",
+            Transport = transport,
+            FallbackReason = fallbackReason,
+            ReusedConnection = reusedConnection,
+            WebsocketRequestKind = websocketRequestKind,
+            WebsocketIncrementalReason = websocketIncrementalReason,
+            PreviousResponseId = previousResponseId
+        };
+    }
+
+    private static ResponsesWebSocketResolution ResolveResponsesWebSocketTarget(ProviderConfig config, string httpUrl)
+    {
+        var mode = string.Equals(config.WebsocketMode, "disabled", StringComparison.OrdinalIgnoreCase)
+            ? "disabled"
+            : "auto";
+        if (mode == "disabled")
+            return new ResponsesWebSocketResolution(mode, null, "disabled");
+
+        var explicitUrl = config.WebsocketUrl?.Trim();
+        if (!string.IsNullOrWhiteSpace(explicitUrl))
+        {
+            return IsValidResponsesWebSocketUrl(explicitUrl)
+                ? new ResponsesWebSocketResolution(mode, explicitUrl, null)
+                : new ResponsesWebSocketResolution(mode, null, "invalid_explicit_url");
+        }
+
+        var derivedUrl = DeriveResponsesWebSocketUrl(httpUrl);
+        return derivedUrl is not null
+            ? new ResponsesWebSocketResolution(mode, derivedUrl, null)
+            : new ResponsesWebSocketResolution(mode, null, "derived_url_invalid");
+    }
+
+    private static bool IsValidResponsesWebSocketUrl(string value)
+        => Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            && (uri.Scheme == "ws" || uri.Scheme == "wss");
+
+    private static string? DeriveResponsesWebSocketUrl(string baseUrl)
+    {
+        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri))
+            return null;
+
+        if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+            return null;
+
+        var builder = new UriBuilder(uri)
+        {
+            Scheme = uri.Scheme == Uri.UriSchemeHttps ? "wss" : "ws"
+        };
+        if (uri.IsDefaultPort)
+            builder.Port = -1;
+
+        var path = builder.Path.TrimEnd('/');
+        builder.Path = path.EndsWith("/responses", StringComparison.OrdinalIgnoreCase)
+            ? (string.IsNullOrWhiteSpace(path) ? "/responses" : path)
+            : $"{(string.IsNullOrWhiteSpace(path) ? string.Empty : path)}/responses";
+
+        var derived = builder.Uri.ToString();
+        return IsValidResponsesWebSocketUrl(derived) ? derived : null;
+    }
+
+    private static string BuildResponsesWebSocketCircuitKey(ProviderConfig config, string websocketUrl)
+        => $"{config.ProviderId ?? config.ProviderBuiltinId ?? "unknown"}::{websocketUrl}";
+
+    private static string? TryGetResponsesWebSocketCircuitReason(ProviderConfig config, string websocketUrl)
+    {
+        var key = BuildResponsesWebSocketCircuitKey(config, websocketUrl);
+        if (!WebsocketCircuitBreakers.TryGetValue(key, out var state))
+            return null;
+        if (state.ExpiresAt <= DateTimeOffset.UtcNow)
+        {
+            WebsocketCircuitBreakers.TryRemove(key, out _);
+            return null;
+        }
+        return state.Reason;
+    }
+
+    private static void SetResponsesWebSocketCircuitReason(ProviderConfig config, string websocketUrl, string reason)
+    {
+        WebsocketCircuitBreakers[BuildResponsesWebSocketCircuitKey(config, websocketUrl)] = new ResponsesWebSocketCircuitState(
+            DateTimeOffset.UtcNow.Add(WebsocketCircuitBreakDuration),
+            reason);
+    }
+
+    private static void ResetResponsesWebSocketState(ReusableResponsesWebSocketConnection connection)
+    {
+        connection.LastFullRequest = null;
+        connection.LastCompletedResponseId = null;
+        connection.LastResponseOutputItems = null;
+        connection.LastUsedAt = DateTimeOffset.UtcNow;
+    }
+
+    private static void LogResponsesWebSocketLifecycle(
+        string phase,
+        ProviderConfig config,
+        string websocketUrl,
+        string? key = null,
+        string? reason = null,
+        string? requestKind = null,
+        string? incrementalReason = null,
+        string? previousResponseId = null,
+        bool? reusedConnection = null)
+    {
+        var parts = new List<string>
+        {
+            $"[{DateTimeOffset.Now:HH:mm:ss.fff}]",
+            "[OpenAiResponses]",
+            $"action={phase}",
+            $"label={config.SessionId ?? config.ProviderId ?? config.Model ?? "n/a"}",
+            $"url={websocketUrl}"
+        };
+        if (!string.IsNullOrWhiteSpace(key))
+            parts.Add($"key={key}");
+        if (!string.IsNullOrWhiteSpace(reason))
+            parts.Add($"reason={reason}");
+        if (!string.IsNullOrWhiteSpace(requestKind))
+            parts.Add($"requestKind={requestKind}");
+        if (!string.IsNullOrWhiteSpace(incrementalReason))
+            parts.Add($"incrementalReason={incrementalReason}");
+        if (!string.IsNullOrWhiteSpace(previousResponseId))
+            parts.Add($"previousResponseId={previousResponseId}");
+        if (reusedConnection.HasValue)
+            parts.Add($"reusedConnection={reusedConnection.Value.ToString().ToLowerInvariant()}");
+
+        Console.Error.WriteLine(string.Join(" ", parts));
+    }
+
+    private static string? BuildResponsesWebSocketConnectionKey(ProviderConfig config, string websocketUrl)
+    {
+        if (string.IsNullOrWhiteSpace(config.SessionId) || string.IsNullOrWhiteSpace(config.Model))
+            return null;
+        return $"{config.ProviderId ?? config.ProviderBuiltinId ?? "unknown"}::{config.Model}::{config.SessionId}::{websocketUrl}";
+    }
+
+    private static async Task<(ReusableResponsesWebSocketConnection Connection, bool ReusedConnection)> AcquireResponsesWebSocketConnectionAsync(
+        ProviderConfig config,
+        string websocketUrl,
+        Dictionary<string, string> headers,
+        string? connectionKey,
+        bool forceFresh,
+        CancellationToken ct)
+    {
+        if (!string.IsNullOrWhiteSpace(connectionKey))
+        {
+            while (true)
+            {
+                if (WebsocketConnections.TryGetValue(connectionKey, out var existing))
+                {
+                    if (existing.Gate.CurrentCount == 0)
+                    {
+                        LogResponsesWebSocketLifecycle(
+                            "queue_wait",
+                            config,
+                            websocketUrl,
+                            key: connectionKey,
+                            reusedConnection: true);
+                    }
+                    await existing.Gate.WaitAsync(ct);
+                    var expired = existing.Socket.State == WebSocketState.Open
+                        && DateTimeOffset.UtcNow - existing.CreatedAt >= OpenAiResponsesWebSocketProtocol.ConnectionMaxAge;
+                    if (!forceFresh && existing.Socket.State == WebSocketState.Open && !expired)
+                    {
+                        existing.LastUsedAt = DateTimeOffset.UtcNow;
+                        LogResponsesWebSocketLifecycle(
+                            "reuse",
+                            config,
+                            websocketUrl,
+                            key: connectionKey,
+                            reusedConnection: true);
+                        return (existing, true);
+                    }
+
+                    LogResponsesWebSocketLifecycle(
+                        "close",
+                        config,
+                        websocketUrl,
+                        key: connectionKey,
+                        reason: forceFresh ? "force_fresh" : expired ? "connection_expired" : "connection_reset");
+                    ReleaseResponsesWebSocketConnection(existing, closeConnection: true);
+                    forceFresh = false;
+                    continue;
+                }
+
+                var created = await CreateResponsesWebSocketConnectionAsync(config, websocketUrl, headers, connectionKey, ct);
+                if (WebsocketConnections.TryAdd(connectionKey, created))
+                {
+                    await created.Gate.WaitAsync(ct);
+                    ResetResponsesWebSocketState(created);
+                    LogResponsesWebSocketLifecycle(
+                        "connect",
+                        config,
+                        websocketUrl,
+                        key: connectionKey,
+                        reusedConnection: false);
+                    return (created, false);
+                }
+
+                created.Dispose();
+            }
+        }
+
+        var oneShot = await CreateResponsesWebSocketConnectionAsync(config, websocketUrl, headers, null, ct);
+        await oneShot.Gate.WaitAsync(ct);
+        LogResponsesWebSocketLifecycle(
+            "connect",
+            config,
+            websocketUrl,
+            reusedConnection: false);
+        return (oneShot, false);
+    }
+
+    private static async Task<ReusableResponsesWebSocketConnection> CreateResponsesWebSocketConnectionAsync(
+        ProviderConfig config,
+        string websocketUrl,
+        Dictionary<string, string> headers,
+        string? connectionKey,
+        CancellationToken ct)
+    {
+        var socket = new ClientWebSocket();
+        socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(20);
+        foreach (var (key, value) in headers)
+        {
+            socket.Options.SetRequestHeader(key, value);
+        }
+
+        if (config.UseSystemProxy == true)
+            socket.Options.Proxy = HttpClient.DefaultProxy;
+
+        if (config.AllowInsecureTls == true)
+            socket.Options.RemoteCertificateValidationCallback = static (_, _, _, _) => true;
+
+        try
+        {
+            await socket.ConnectAsync(new Uri(websocketUrl), ct);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            socket.Dispose();
+            throw new ResponsesWebSocketFallbackException(ex.Message);
+        }
+        return new ReusableResponsesWebSocketConnection(connectionKey, websocketUrl, socket, !string.IsNullOrWhiteSpace(connectionKey));
+    }
+
+    private static void ReleaseResponsesWebSocketConnection(ReusableResponsesWebSocketConnection connection, bool closeConnection)
+    {
+        var shouldReleaseGate = connection.Gate.CurrentCount == 0;
+        if (closeConnection || connection.Socket.State != WebSocketState.Open)
+        {
+            if (shouldReleaseGate)
+                connection.Gate.Release();
+            if (!string.IsNullOrWhiteSpace(connection.Key))
+                WebsocketConnections.TryRemove(connection.Key, out _);
+            connection.Dispose();
+            return;
+        }
+
+        if (shouldReleaseGate)
+            connection.Gate.Release();
+    }
+
+    private async IAsyncEnumerable<OpenAiResponsesSseItem> ReadOpenAiResponsesHttpItemsAsync(
+        string url,
+        Dictionary<string, string> headers,
+        byte[] bodyBytes,
+        ProviderConfig config,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
         var client = _httpFactory.GetClient(allowInsecureTls: config.AllowInsecureTls ?? true);
         using var response = await SseStreamReader.SendStreamingRequestAsync(
             client, url, "POST", headers, bodyBytes, ct);
@@ -70,16 +852,7 @@ public sealed class OpenAiResponsesProvider : ILlmProvider
         if (!response.IsSuccessStatusCode)
         {
             var errorBody = await response.Content.ReadAsStringAsync(ct);
-            yield return new StreamEvent
-            {
-                Type = "error",
-                Error = new StreamEventError
-                {
-                    Type = $"http_{(int)response.StatusCode}",
-                    Message = $"HTTP {(int)response.StatusCode}: {errorBody[..Math.Min(2000, errorBody.Length)]}"
-                }
-            };
-            yield break;
+            throw new ResponsesHttpErrorException((int)response.StatusCode, errorBody);
         }
 
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
@@ -106,194 +879,169 @@ public sealed class OpenAiResponsesProvider : ILlmProvider
             },
             ct))
         {
-            using var document = item.Document;
-            var root = document.RootElement;
-
-            switch (item.EventType)
-            {
-                case "response.output_text.delta":
-                    {
-                        var textDelta = GetStringOrDefault(root, "delta");
-                        if (!string.IsNullOrEmpty(textDelta))
-                        {
-                            state.MarkFirstToken();
-                            yield return new StreamEvent { Type = "text_delta", Text = textDelta };
-                        }
-                    }
-                    break;
-
-                case "response.reasoning_summary_text.delta":
-                    {
-                        var thinkingDelta = GetStringOrDefault(root, "delta");
-                        if (!string.IsNullOrEmpty(thinkingDelta))
-                        {
-                            state.MarkFirstToken();
-                            state.EmittedThinkingDelta = true;
-                            yield return new StreamEvent { Type = "thinking_delta", Thinking = thinkingDelta };
-                        }
-                    }
-                    break;
-
-                case "response.reasoning_summary_text.done":
-                    {
-                        if (!state.EmittedThinkingDelta)
-                        {
-                            var thinkingDone = GetReasoningSummaryText(root);
-                            if (!string.IsNullOrWhiteSpace(thinkingDone))
-                            {
-                                state.MarkFirstToken();
-                                state.EmittedThinkingDelta = true;
-                                yield return new StreamEvent { Type = "thinking_delta", Thinking = thinkingDone };
-                            }
-                        }
-                    }
-                    break;
-
-                case "response.output_item.added":
-                    if (root.TryGetProperty("item", out var addedItem))
-                    {
-                        foreach (var evt in HandleOutputItemAdded(addedItem, state))
-                            yield return evt;
-                    }
-                    break;
-
-                case "response.output_item.done":
-                    if (root.TryGetProperty("item", out var doneItem))
-                    {
-                        foreach (var evt in HandleOutputItemDone(doneItem, state))
-                            yield return evt;
-                    }
-                    break;
-
-                case "response.function_call_arguments.delta":
-                    {
-                        var itemId = GetStringOrDefault(root, "item_id");
-                        var callId = GetStringOrDefault(root, "call_id");
-                        var delta = GetStringOrDefault(root, "delta");
-                        if (!string.IsNullOrEmpty(itemId))
-                        {
-                            if (!state.ArgBuffers.TryGetValue(itemId, out var buffer))
-                            {
-                                buffer = new StringBuilder();
-                                state.ArgBuffers[itemId] = buffer;
-                            }
-                            buffer.Append(delta);
-                        }
-
-                        if (!string.IsNullOrEmpty(callId) && !string.IsNullOrEmpty(delta))
-                        {
-                            yield return new StreamEvent
-                            {
-                                Type = "tool_call_delta",
-                                ToolCallId = callId,
-                                ArgumentsDelta = delta
-                            };
-                        }
-                    }
-                    break;
-
-                case "response.function_call_arguments.done":
-                    {
-                        var itemId = GetStringOrDefault(root, "item_id");
-                        var callId = GetStringOrDefault(root, "call_id");
-                        var name = GetStringOrDefault(root, "name");
-                        var arguments = GetStringOrDefault(root, "arguments");
-
-                        var finalArguments = arguments;
-                        if (!string.IsNullOrEmpty(itemId) && state.ArgBuffers.TryGetValue(itemId, out var buffer))
-                        {
-                            var bufferedArguments = buffer.ToString();
-                            if (!string.IsNullOrWhiteSpace(bufferedArguments))
-                                finalArguments = bufferedArguments;
-
-                            state.ArgBuffers.Remove(itemId);
-                        }
-
-                        yield return new StreamEvent
-                        {
-                            Type = "tool_call_end",
-                            ToolCallId = callId,
-                            ToolName = name,
-                            ToolCallInput = ParseArguments(finalArguments)
-                        };
-                    }
-                    break;
-
-                case "response.completed":
-                    {
-                        if (root.TryGetProperty("response", out var completedResponse))
-                        {
-                            if (completedResponse.TryGetProperty("output", out var output)
-                                && output.ValueKind == JsonValueKind.Array)
-                            {
-                                foreach (var outputItem in output.EnumerateArray())
-                                {
-                                    foreach (var evt in HandleCompletedOutputItem(outputItem, state))
-                                        yield return evt;
-                                }
-                            }
-
-                            outputTokens = GetIntOrDefault(completedResponse, "usage", "output_tokens", outputTokens);
-                            var completedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                            var usage = BuildUsage(completedResponse);
-                            if (usage is not null)
-                                outputTokens = usage.OutputTokens;
-
-                            yield return new StreamEvent
-                            {
-                                Type = "message_end",
-                                StopReason = GetStringOrDefault(completedResponse, "status"),
-                                ProviderResponseId = GetStringOrDefault(completedResponse, "id"),
-                                Usage = usage,
-                                Timing = new RequestTiming
-                                {
-                                    TotalMs = completedAt - requestStartedAt,
-                                    TtftMs = state.FirstTokenAt.HasValue ? state.FirstTokenAt.Value - requestStartedAt : null,
-                                    Tps = outputTokens > 1 && state.FirstTokenAt.HasValue
-                                        ? (outputTokens - 1) / ((completedAt - state.FirstTokenAt.Value) / 1000.0)
-                                        : null
-                                }
-                            };
-                        }
-                    }
-                    break;
-
-                case "response.failed":
-                case "error":
-                    yield return new StreamEvent
-                    {
-                        Type = "error",
-                        Error = new StreamEventError
-                        {
-                            Type = "api_error",
-                            Message = root.GetRawText()
-                        }
-                    };
-                    break;
-            }
+            yield return item;
         }
     }
 
-    private static RequestDebugInfo CreateRequestDebugInfo(string url, string method, Dictionary<string, string> headers, byte[] bodyBytes, ProviderConfig config)
+    private async IAsyncEnumerable<OpenAiResponsesSseItem> ReadOpenAiResponsesWebSocketItemsAsync(
+        ReusableResponsesWebSocketConnection connection,
+        OpenAiResponsesWebSocketProtocol.PreparedRequest preparedRequest,
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var maskedHeaders = headers.ToDictionary(
-            static pair => pair.Key,
-            pair => pair.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase)
-                ? "Bearer ***"
-                : pair.Value);
-
-        return new RequestDebugInfo
+        var closeConnection = !connection.Reusable;
+        using var cancellationRegistration = ct.Register(() => closeConnection = true);
+        try
         {
-            Url = url,
-            Method = method,
-            Headers = maskedHeaders,
-            Body = Encoding.UTF8.GetString(bodyBytes),
-            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            ProviderId = config.ProviderId,
-            ProviderBuiltinId = config.ProviderBuiltinId,
-            Model = config.Model,
-            ExecutionPath = "sidecar"
-        };
+            try
+            {
+                await connection.Socket.SendAsync(preparedRequest.PayloadBytes, WebSocketMessageType.Text, true, ct);
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested)
+            {
+                closeConnection = true;
+                throw new ResponsesWebSocketFallbackException(ex.Message);
+            }
+            var sawFirstModelEvent = false;
+            var buffer = new byte[16 * 1024];
+            using var messageBuffer = new MemoryStream();
+
+            while (connection.Socket.State == WebSocketState.Open)
+            {
+                var result = await connection.Socket.ReceiveAsync(buffer, ct);
+
+                if (result.MessageType == WebSocketMessageType.Close)
+                {
+                    closeConnection = true;
+                    if (!sawFirstModelEvent)
+                    {
+                        throw new ResponsesWebSocketFallbackException(
+                            connection.Socket.CloseStatusDescription ?? "websocket_connection_closed");
+                    }
+
+                    throw new ResponsesWebSocketFatalException(
+                        connection.Socket.CloseStatusDescription ?? "WebSocket connection closed unexpectedly");
+                }
+
+                if (result.MessageType != WebSocketMessageType.Text)
+                {
+                    closeConnection = true;
+                    if (!sawFirstModelEvent)
+                        throw new ResponsesWebSocketFallbackException("websocket_protocol_parse_failed");
+                    throw new ResponsesWebSocketFatalException("Unexpected non-text WebSocket frame");
+                }
+
+                messageBuffer.Write(buffer, 0, result.Count);
+                if (!result.EndOfMessage)
+                    continue;
+
+                var payloadBytes = messageBuffer.ToArray();
+                messageBuffer.SetLength(0);
+
+                JsonDocument document;
+                try
+                {
+                    document = JsonDocument.Parse(payloadBytes);
+                }
+                catch
+                {
+                    if (!sawFirstModelEvent)
+                    {
+                        Console.Error.WriteLine(
+                            $"[{DateTimeOffset.Now:HH:mm:ss.fff}] [OpenAiResponses] WebSocket pre-first-event invalid JSON: {Encoding.UTF8.GetString(payloadBytes)}");
+                    }
+                    closeConnection = true;
+                    if (!sawFirstModelEvent)
+                        throw new ResponsesWebSocketFallbackException("websocket_protocol_parse_failed");
+                    throw new ResponsesWebSocketFatalException("WebSocket protocol parse failed");
+                }
+
+                var root = document.RootElement;
+                var eventType = GetStringOrDefault(root, "type");
+                if (string.IsNullOrWhiteSpace(eventType))
+                {
+                    document.Dispose();
+                    closeConnection = true;
+                    if (!sawFirstModelEvent)
+                        throw new ResponsesWebSocketFallbackException("websocket_protocol_parse_failed");
+                    throw new ResponsesWebSocketFatalException("Missing WebSocket event type");
+                }
+
+                if (!sawFirstModelEvent && OpenAiResponsesWebSocketProtocol.IsConnectionLimitReached(root))
+                {
+                    document.Dispose();
+                    closeConnection = true;
+                    throw new ResponsesWebSocketFallbackException("websocket_connection_limit_reached");
+                }
+
+                if (preparedRequest.RequestKind == "warmup" && (eventType == "error" || eventType == "response.failed"))
+                {
+                    Console.Error.WriteLine(
+                        $"[{DateTimeOffset.Now:HH:mm:ss.fff}] [OpenAiResponses] WebSocket warmup failed: {root.GetRawText()}");
+                    var reason = OpenAiResponsesWebSocketProtocol.GetFailureReason(
+                        root,
+                        "websocket_warmup_failed");
+                    document.Dispose();
+                    closeConnection = true;
+                    throw new ResponsesWebSocketFallbackException(reason);
+                }
+
+                if (preparedRequest.RequestKind == "warmup" && OpenAiResponsesWebSocketProtocol.IsFirstModelEvent(root))
+                {
+                    Console.Error.WriteLine(
+                        $"[{DateTimeOffset.Now:HH:mm:ss.fff}] [OpenAiResponses] WebSocket warmup unexpected model event: {root.GetRawText()}");
+                    document.Dispose();
+                    closeConnection = true;
+                    throw new ResponsesWebSocketFallbackException("websocket_warmup_unexpected_model_event");
+                }
+
+                if (!sawFirstModelEvent && (eventType == "error" || eventType == "response.failed"))
+                {
+                    Console.Error.WriteLine(
+                        $"[{DateTimeOffset.Now:HH:mm:ss.fff}] [OpenAiResponses] WebSocket pre-first-event error: {root.GetRawText()}");
+                    var reason = OpenAiResponsesWebSocketProtocol.GetFailureReason(
+                        root,
+                        "websocket_server_error_before_first_event");
+                    document.Dispose();
+                    closeConnection = true;
+                    throw new ResponsesWebSocketFallbackException(reason);
+                }
+
+                if (OpenAiResponsesWebSocketProtocol.IsFirstModelEvent(root))
+                    sawFirstModelEvent = true;
+
+                var completionState = OpenAiResponsesWebSocketProtocol.ExtractCompletionState(root);
+                if (completionState is not null && connection.Reusable && preparedRequest.RequestKind != "warmup")
+                {
+                    connection.LastFullRequest = JsonNode.Parse(preparedRequest.FullRequest.ToJsonString()) as JsonObject;
+                    connection.LastCompletedResponseId = completionState.ResponseId;
+                    connection.LastResponseOutputItems = completionState.OutputItems;
+                    connection.LastUsedAt = DateTimeOffset.UtcNow;
+                }
+
+                yield return new OpenAiResponsesSseItem
+                {
+                    EventType = eventType,
+                    Document = document
+                };
+
+                if (eventType == "response.completed" || eventType == "response.failed" || eventType == "error")
+                {
+                    if (eventType == "response.failed" || eventType == "error")
+                        closeConnection = true;
+                    yield break;
+                }
+            }
+
+            closeConnection = true;
+            if (!ct.IsCancellationRequested)
+            {
+                throw new ResponsesWebSocketFallbackException("websocket_connection_closed");
+            }
+        }
+        finally
+        {
+            ReleaseResponsesWebSocketConnection(connection, closeConnection);
+        }
     }
 
     private static async Task<byte[]> BuildRequestBodyAsync(
@@ -1127,6 +1875,87 @@ public sealed class OpenAiResponsesProvider : ILlmProvider
     {
         public required string EventType { get; init; }
         public required JsonDocument Document { get; init; }
+    }
+
+    private sealed record ResponsesWebSocketResolution(string Mode, string? WebsocketUrl, string? Reason)
+    {
+        public string? FallbackReason => Reason;
+    }
+
+    private sealed record ResponsesWebSocketCircuitState(DateTimeOffset ExpiresAt, string Reason);
+
+    private sealed class ResponsesHttpErrorException : Exception
+    {
+        public int StatusCode { get; }
+        public string ResponseBody { get; }
+
+        public ResponsesHttpErrorException(int statusCode, string responseBody)
+            : base($"HTTP {statusCode}")
+        {
+            StatusCode = statusCode;
+            ResponseBody = responseBody;
+        }
+    }
+
+    private sealed class ResponsesWebSocketFallbackException : Exception
+    {
+        public string Reason { get; }
+
+        public ResponsesWebSocketFallbackException(string reason)
+            : base(reason)
+        {
+            Reason = string.IsNullOrWhiteSpace(reason) ? "websocket_connection_failed" : reason.Trim();
+        }
+    }
+
+    private sealed class ResponsesWebSocketFatalException : Exception
+    {
+        public ResponsesWebSocketFatalException(string message)
+            : base(message)
+        {
+        }
+    }
+
+    private sealed class ReusableResponsesWebSocketConnection : IDisposable
+    {
+        public string? Key { get; }
+        public string WebsocketUrl { get; }
+        public ClientWebSocket Socket { get; }
+        public bool Reusable { get; }
+        public SemaphoreSlim Gate { get; } = new(1, 1);
+        public DateTimeOffset CreatedAt { get; } = DateTimeOffset.UtcNow;
+        public DateTimeOffset LastUsedAt { get; set; } = DateTimeOffset.UtcNow;
+        public JsonObject? LastFullRequest { get; set; }
+        public string? LastCompletedResponseId { get; set; }
+        public JsonArray? LastResponseOutputItems { get; set; }
+
+        public ReusableResponsesWebSocketConnection(string? key, string websocketUrl, ClientWebSocket socket, bool reusable)
+        {
+            Key = key;
+            WebsocketUrl = websocketUrl;
+            Socket = socket;
+            Reusable = reusable;
+        }
+
+        public void Dispose()
+        {
+            try
+            {
+                if (Socket.State == WebSocketState.Open || Socket.State == WebSocketState.CloseReceived)
+                {
+                    Socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "dispose", CancellationToken.None)
+                        .GetAwaiter()
+                        .GetResult();
+                }
+            }
+            catch
+            {
+                // ignore
+            }
+
+            Socket.Dispose();
+            Gate.Dispose();
+        }
     }
 
     private sealed class ComputerActionDescriptor

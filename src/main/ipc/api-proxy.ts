@@ -3,6 +3,12 @@ import * as https from 'https'
 import * as http from 'http'
 import { URL } from 'url'
 import { readSettings } from './settings-handlers'
+import {
+  resolveResponsesWebsocketConfig,
+  type ResponsesWebsocketMode,
+  type ResponsesWebsocketRequestKind
+} from '../../shared/openai-responses-websocket'
+import { ResponsesWebSocketSessionManager } from '../lib/responses-websocket-session-manager'
 
 const MAX_RESPONSE_BODY_CHARS = 10_000_000
 
@@ -45,6 +51,7 @@ type AttemptResult =
   | { kind: 'streamed' }
   | { kind: 'retryable'; status: number; body: string; retryAfterMs?: number }
   | { kind: 'fatal'; status: number; body: string }
+  | { kind: 'fallback'; reason: string }
 
 interface APIStreamRequest {
   requestId: string
@@ -58,6 +65,11 @@ interface APIStreamRequest {
   providerBuiltinId?: string
   /** Active OAuth account id when the request is account-scoped. Used to surface rate-limit markers. */
   accountId?: string
+  providerType?: string
+  model?: string
+  sessionId?: string
+  websocketUrl?: string
+  websocketMode?: ResponsesWebsocketMode
 }
 
 interface AccountRateLimitPayload {
@@ -93,50 +105,123 @@ function sanitizeHeaders(headers: Record<string, string>): Record<string, string
   const sanitized: Record<string, string> = {}
   for (const [key, value] of Object.entries(headers)) {
     if (value == null) continue
-    const str = String(value)
-    if (!str) continue
-    if (/\r|\n/.test(str)) continue
-    sanitized[key] = str
+    const stringValue = String(value)
+    if (!stringValue || /\r|\n/.test(stringValue)) continue
+    sanitized[key] = stringValue
   }
   return sanitized
 }
 
-const SYSTEM_PROXY_ENV_KEYS = [
-  'HTTPS_PROXY',
-  'https_proxy',
-  'HTTP_PROXY',
-  'http_proxy',
-  'ALL_PROXY',
-  'all_proxy'
-]
 const INSECURE_PROXY_SESSION_PARTITION = 'persist:open-cowork-provider-insecure-tls-proxy'
-let insecureProxySessionState:
-  | {
-      promise: Promise<Electron.Session>
-      proxyRules: string | null
-    }
-  | null = null
+let insecureProxySessionState: {
+  promise: Promise<Electron.Session>
+  proxyRules: string | null
+} | null = null
+const responsesWsManager = new ResponsesWebSocketSessionManager('api-proxy')
 
-function getEnvProxyUrl(): string | null {
-  for (const key of SYSTEM_PROXY_ENV_KEYS) {
+function getConfiguredSystemProxyUrl(): string | null {
+  const saved = readSettings().systemProxyUrl
+  if (typeof saved === 'string' && saved.trim()) return saved.trim()
+  for (const key of [
+    'HTTPS_PROXY',
+    'https_proxy',
+    'HTTP_PROXY',
+    'http_proxy',
+    'ALL_PROXY',
+    'all_proxy'
+  ]) {
     const value = process.env[key]?.trim()
     if (value) return value
   }
   return null
 }
 
-function getConfiguredSystemProxyUrl(): string | null {
-  const saved = readSettings().systemProxyUrl
-  if (typeof saved === 'string' && saved.trim()) return saved.trim()
-  return getEnvProxyUrl()
+function maskDebugHeaders(headers: Record<string, string>): Record<string, string> {
+  const masked: Record<string, string> = {}
+  const sensitiveKeys = ['authorization', 'x-api-key', 'api-key', 'x-goog-api-key']
+  for (const [key, value] of Object.entries(headers)) {
+    if (sensitiveKeys.includes(key.toLowerCase())) {
+      if (value.length > 8) {
+        masked[key] = `${value.slice(0, 4)}****${value.slice(-4)}`
+      } else if (value.length > 0) {
+        masked[key] = '****'
+      } else {
+        masked[key] = value
+      }
+      continue
+    }
+    masked[key] = value
+  }
+  return masked
+}
+
+function createSseChunk(eventName: string, payload: string): string {
+  return `event: ${eventName}\ndata: ${payload}\n\n`
+}
+
+function sendStreamChunk(
+  sender: Electron.WebContents | null,
+  requestId: string,
+  data: string
+): void {
+  if (!sender) return
+  sender.send('api:stream-chunk', { requestId, data })
+}
+
+function sendSseEvent(
+  sender: Electron.WebContents | null,
+  requestId: string,
+  eventName: string,
+  payload: unknown
+): void {
+  sendStreamChunk(sender, requestId, createSseChunk(eventName, JSON.stringify(payload)))
+}
+
+function sendResponsesRequestDebug(
+  sender: Electron.WebContents | null,
+  req: Pick<
+    APIStreamRequest,
+    'requestId' | 'providerId' | 'providerBuiltinId' | 'model' | 'headers'
+  >,
+  args: {
+    url: string
+    method: string
+    body?: string
+    headers?: Record<string, string>
+    transport: 'http' | 'websocket'
+    fallbackReason?: string
+    reusedConnection?: boolean
+    websocketRequestKind?: ResponsesWebsocketRequestKind
+    websocketIncrementalReason?: string
+    previousResponseId?: string
+  }
+): void {
+  sendSseEvent(sender, req.requestId, '__request_debug', {
+    url: args.url,
+    method: args.method,
+    headers: maskDebugHeaders(args.headers ?? req.headers),
+    ...(typeof args.body === 'string' ? { body: args.body } : {}),
+    timestamp: Date.now(),
+    ...(req.providerId ? { providerId: req.providerId } : {}),
+    ...(req.providerBuiltinId ? { providerBuiltinId: req.providerBuiltinId } : {}),
+    ...(req.model ? { model: req.model } : {}),
+    transport: args.transport,
+    ...(args.fallbackReason ? { fallbackReason: args.fallbackReason } : {}),
+    ...(typeof args.reusedConnection === 'boolean'
+      ? { reusedConnection: args.reusedConnection }
+      : {}),
+    ...(args.websocketRequestKind ? { websocketRequestKind: args.websocketRequestKind } : {}),
+    ...(args.websocketIncrementalReason
+      ? { websocketIncrementalReason: args.websocketIncrementalReason }
+      : {}),
+    ...(args.previousResponseId ? { previousResponseId: args.previousResponseId } : {}),
+    executionPath: 'node'
+  })
 }
 
 async function getInsecureProxySession(): Promise<Electron.Session> {
   const proxyRules = getConfiguredSystemProxyUrl()
-  if (
-    insecureProxySessionState &&
-    insecureProxySessionState.proxyRules === proxyRules
-  ) {
+  if (insecureProxySessionState && insecureProxySessionState.proxyRules === proxyRules) {
     return await insecureProxySessionState.promise
   }
 
@@ -560,7 +645,16 @@ export function registerApiProxyHandlers(): void {
         }
       })
 
-    const runOneAttempt = async (): Promise<AttemptResult> => {
+    const runOneHttpAttempt = async (args?: {
+      debugInfo?: {
+        transport: 'http' | 'websocket'
+        url: string
+        method: string
+        body?: string
+        fallbackReason?: string
+        reusedConnection?: boolean
+      }
+    }): Promise<AttemptResult> => {
       const requestSession =
         useSystemProxy && allowInsecureTls ? await getInsecureProxySession() : undefined
 
@@ -623,6 +717,10 @@ export function registerApiProxyHandlers(): void {
         const IDLE_TIMEOUT = readTimeoutFromEnv('OPENCOWORK_API_IDLE_TIMEOUT_MS', 300_000)
 
         try {
+          if (args?.debugInfo) {
+            sendResponsesRequestDebug(getSender(event), req, args.debugInfo)
+          }
+
           if (useSystemProxy) {
             const requestUrl = url.trim()
             const bodyBuffer = body ? Buffer.from(body, 'utf-8') : null
@@ -678,11 +776,11 @@ export function registerApiProxyHandlers(): void {
                 { requestId, url, providerId, providerBuiltinId },
                 res.headers ?? {}
               )
-              const rateLimit = detectAccountRateLimit(
-                statusCode,
-                res.headers ?? {},
-                { providerId, providerBuiltinId, accountId }
-              )
+              const rateLimit = detectAccountRateLimit(statusCode, res.headers ?? {}, {
+                providerId,
+                providerBuiltinId,
+                accountId
+              })
               if (rateLimit) {
                 sendAccountRateLimited(event, rateLimit)
               }
@@ -773,7 +871,8 @@ export function registerApiProxyHandlers(): void {
               clearChunkFlushTimer()
               bufferedChunk = ''
               // 正常流结束后，底层连接 close 是预期行为，不应再报错。
-              if (!settled && !completed) finish({ kind: 'fatal', status: 0, body: 'Connection closed' })
+              if (!settled && !completed)
+                finish({ kind: 'fatal', status: 0, body: 'Connection closed' })
             })
 
             if (bodyBuffer) httpReq.write(bodyBuffer)
@@ -816,11 +915,11 @@ export function registerApiProxyHandlers(): void {
               { requestId, url, providerId, providerBuiltinId },
               res.headers ?? {}
             )
-            const rateLimit = detectAccountRateLimit(
-              statusCode,
-              res.headers ?? {},
-              { providerId, providerBuiltinId, accountId }
-            )
+            const rateLimit = detectAccountRateLimit(statusCode, res.headers ?? {}, {
+              providerId,
+              providerBuiltinId,
+              accountId
+            })
             if (rateLimit) {
               sendAccountRateLimited(event, rateLimit)
             }
@@ -837,11 +936,7 @@ export function registerApiProxyHandlers(): void {
                   `[API Proxy] stream-request[${requestId}] HTTP ${statusCode}: ${errorBody.slice(0, 500)}`
                 )
                 finish({
-                  kind: rateLimit
-                    ? 'fatal'
-                    : isRetryableStatus(statusCode)
-                      ? 'retryable'
-                      : 'fatal',
+                  kind: rateLimit ? 'fatal' : isRetryableStatus(statusCode) ? 'retryable' : 'fatal',
                   status: statusCode,
                   body: errorBody,
                   retryAfterMs
@@ -913,7 +1008,8 @@ export function registerApiProxyHandlers(): void {
             clearIdleTimer()
             clearChunkFlushTimer()
             bufferedChunk = ''
-            if (!settled && !completed) finish({ kind: 'fatal', status: 0, body: 'Connection closed' })
+            if (!settled && !completed)
+              finish({ kind: 'fatal', status: 0, body: 'Connection closed' })
           })
 
           if (bodyBuffer) httpReq.write(bodyBuffer)
@@ -926,12 +1022,21 @@ export function registerApiProxyHandlers(): void {
       })
     }
 
-    ;(async () => {
+    const runHttpWithRetries = async (debugInfo?: {
+      transport: 'http' | 'websocket'
+      url: string
+      method: string
+      body?: string
+      fallbackReason?: string
+      reusedConnection?: boolean
+    }): Promise<boolean> => {
       for (let attempt = 0; attempt <= MAX_RETRY_ATTEMPTS; attempt++) {
-        if (aborted) return
-        const result = await runOneAttempt()
-        if (aborted) return
-        if (result.kind === 'streamed') return
+        if (aborted) return true
+        const result = await runOneHttpAttempt(
+          attempt === 0 && debugInfo ? { debugInfo } : undefined
+        )
+        if (aborted) return true
+        if (result.kind === 'streamed') return true
         if (result.kind === 'retryable' && attempt < MAX_RETRY_ATTEMPTS) {
           const delay = computeBackoffMs(attempt, result.retryAfterMs)
           console.warn(
@@ -940,13 +1045,143 @@ export function registerApiProxyHandlers(): void {
           await waitForRetry(delay)
           continue
         }
-        // Fatal, or retryable but retries exhausted: surface the error.
+        if (result.kind === 'fallback') {
+          continue
+        }
         const trimmed = result.body.slice(0, 2000)
         const errorMessage =
           result.status > 0 ? `HTTP ${result.status}: ${trimmed}` : trimmed || 'Unknown error'
         sendError(errorMessage)
+        return false
+      }
+      return true
+    }
+
+    const runResponsesWsAttempt = async (args: {
+      websocketUrl: string
+      fallbackReason?: string
+    }): Promise<AttemptResult> => {
+      const sender = getSender(event)
+      const wsAbortController = new AbortController()
+      cancelCurrentAttempt = (): void => {
+        wsAbortController.abort()
+      }
+
+      const result = await responsesWsManager.executeRequest({
+        providerKey: providerId ?? providerBuiltinId ?? 'unknown',
+        sessionKey:
+          !req.sessionId || !req.model
+            ? null
+            : `${providerId ?? providerBuiltinId ?? 'unknown'}::${req.model}::${req.sessionId}::${args.websocketUrl}`,
+        websocketUrl: args.websocketUrl,
+        headers,
+        httpBody: body ?? '',
+        useSystemProxy,
+        allowInsecureTls,
+        signal: wsAbortController.signal,
+        label: requestId,
+        fallbackReason: args.fallbackReason,
+        onDebug: (debugInfo) => {
+          sendResponsesRequestDebug(sender, req, {
+            url: debugInfo.url,
+            method: 'WEBSOCKET',
+            headers: debugInfo.headers,
+            body: debugInfo.body,
+            transport: debugInfo.transport,
+            fallbackReason: debugInfo.fallbackReason,
+            reusedConnection: debugInfo.reusedConnection,
+            websocketRequestKind: debugInfo.websocketRequestKind,
+            websocketIncrementalReason: debugInfo.websocketIncrementalReason,
+            previousResponseId: debugInfo.previousResponseId
+          })
+        },
+        onEvent: (eventType, payload) => {
+          sendStreamChunk(sender, requestId, createSseChunk(eventType, JSON.stringify(payload)))
+          if (
+            eventType === 'response.completed' ||
+            eventType === 'response.failed' ||
+            eventType === 'error'
+          ) {
+            sender?.send('api:stream-end', { requestId })
+          }
+        }
+      })
+
+      cancelCurrentAttempt = null
+      if (result.kind === 'streamed') {
+        return { kind: 'streamed' }
+      }
+      if (result.kind === 'fallback') {
+        return { kind: 'fallback', reason: result.reason }
+      }
+      return { kind: 'fatal', status: 0, body: result.error }
+    }
+
+    ;(async () => {
+      const responsesWsConfig = resolveResponsesWebsocketConfig({
+        providerType: req.providerType,
+        websocketMode: req.websocketMode,
+        websocketUrl: req.websocketUrl,
+        baseUrl: url
+      })
+
+      const shouldTryResponsesWs =
+        req.providerType === 'openai-responses' &&
+        responsesWsConfig.mode !== 'disabled' &&
+        Boolean(responsesWsConfig.websocketUrl)
+
+      if (!shouldTryResponsesWs) {
+        const fallbackReason =
+          req.providerType === 'openai-responses' &&
+          responsesWsConfig.source !== 'disabled' &&
+          responsesWsConfig.reason &&
+          responsesWsConfig.reason !== 'unsupported_provider'
+            ? responsesWsConfig.reason
+            : undefined
+        await runHttpWithRetries({
+          transport: 'http',
+          url,
+          method,
+          body,
+          ...(fallbackReason ? { fallbackReason } : {})
+        })
         return
       }
+
+      const websocketUrl = responsesWsConfig.websocketUrl!
+      const circuitReason = responsesWsManager.getCircuitReason(
+        providerId ?? providerBuiltinId ?? 'unknown',
+        websocketUrl
+      )
+      if (circuitReason) {
+        await runHttpWithRetries({
+          transport: 'http',
+          url,
+          method,
+          body,
+          fallbackReason: circuitReason
+        })
+        return
+      }
+
+      const wsResult = await runResponsesWsAttempt({ websocketUrl })
+      if (aborted) return
+
+      if (wsResult.kind === 'streamed') return
+
+      if (wsResult.kind === 'fallback') {
+        await runHttpWithRetries({
+          transport: 'http',
+          url,
+          method,
+          body,
+          fallbackReason: wsResult.reason
+        })
+        return
+      }
+
+      const trimmed = wsResult.body.slice(0, 2000)
+      sendError(trimmed || 'Unknown WebSocket error')
     })().finally(() => {
       ipcMain.removeListener('api:abort', abortHandler)
     })

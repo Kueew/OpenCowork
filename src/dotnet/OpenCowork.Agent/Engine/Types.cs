@@ -407,6 +407,8 @@ public sealed class ProviderConfig
     public string? Organization { get; set; }
     public string? Project { get; set; }
     public string? AccountId { get; set; }
+    public string? WebsocketUrl { get; set; }
+    public string? WebsocketMode { get; set; }
 }
 
 // --- Agent Events ---
@@ -620,6 +622,12 @@ public sealed class RequestDebugInfo
     public string? ProviderBuiltinId { get; init; }
     public string? Model { get; init; }
     public string? ExecutionPath { get; init; }
+    public string? Transport { get; init; }
+    public string? FallbackReason { get; init; }
+    public bool? ReusedConnection { get; init; }
+    public string? WebsocketRequestKind { get; init; }
+    public string? WebsocketIncrementalReason { get; init; }
+    public string? PreviousResponseId { get; init; }
 }
 
 public sealed class RequestDebugEvent : AgentEvent
@@ -926,6 +934,7 @@ public sealed class AgentRunParams
     /// </summary>
     public int MaxIterations { get; init; } = 0;
     public bool ForceApproval { get; init; }
+    public int MaxParallelTools { get; init; } = 8;
     public CompressionConfig? Compression { get; init; }
     /// <summary>
     /// "agent" (default) runs the full tool-calling loop.

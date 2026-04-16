@@ -27,6 +27,11 @@ export type MainModelSelectionMode = 'auto' | 'manual'
 export type ClarifyPlanModeAutoSwitchTarget = 'off' | 'code' | 'acp'
 export type ProjectDefaultDirectoryMode = 'last-used' | 'custom'
 export type FileDiffViewMode = 'split' | 'inline'
+export type LiveOutputAnimationStyle = 'agile' | 'elegant'
+
+export const DEFAULT_MAX_PARALLEL_TOOL_CALLS = 8
+export const MIN_MAX_PARALLEL_TOOL_CALLS = 1
+export const MAX_MAX_PARALLEL_TOOL_CALLS = 16
 
 export interface RecentWorkingTarget {
   workingFolder: string
@@ -90,6 +95,14 @@ function getSystemLanguage(): 'en' | 'zh' {
   return lang.startsWith('zh') ? 'zh' : 'en'
 }
 
+export function clampMaxParallelToolCalls(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_MAX_PARALLEL_TOOL_CALLS
+  return Math.min(
+    MAX_MAX_PARALLEL_TOOL_CALLS,
+    Math.max(MIN_MAX_PARALLEL_TOOL_CALLS, Math.floor(value))
+  )
+}
+
 export function getReasoningEffortKey(
   providerId?: string | null,
   modelId?: string | null
@@ -146,6 +159,7 @@ interface SettingsStore {
   contextCompressionEnabled: boolean
   editorWorkspaceEnabled: boolean
   editorRemoteLanguageServiceEnabled: boolean
+  maxParallelToolCalls: number
   toolResultFormat: 'toon' | 'json'
   fileDiffViewMode: FileDiffViewMode
   userName: string
@@ -157,6 +171,7 @@ interface SettingsStore {
   fontFamily: string
   fontSize: number
   animationsEnabled: boolean
+  liveOutputAnimationStyle: LiveOutputAnimationStyle
   toolbarCollapsedByDefault: boolean
   leftSidebarWidth: number
 
@@ -232,6 +247,7 @@ export const useSettingsStore = create<SettingsStore>()(
       contextCompressionEnabled: true,
       editorWorkspaceEnabled: false,
       editorRemoteLanguageServiceEnabled: false,
+      maxParallelToolCalls: DEFAULT_MAX_PARALLEL_TOOL_CALLS,
       toolResultFormat: 'toon',
       fileDiffViewMode: 'split',
       userName: '',
@@ -243,6 +259,7 @@ export const useSettingsStore = create<SettingsStore>()(
       fontFamily: '',
       fontSize: 16,
       animationsEnabled: true,
+      liveOutputAnimationStyle: 'agile',
       toolbarCollapsedByDefault: false,
       leftSidebarWidth: LEFT_SIDEBAR_DEFAULT_WIDTH,
 
@@ -276,7 +293,13 @@ export const useSettingsStore = create<SettingsStore>()(
       lastProjectDirectory: '',
       recentWorkingTargets: [],
 
-      updateSettings: (patch) => set(patch),
+      updateSettings: (patch) =>
+        set({
+          ...patch,
+          ...(patch.maxParallelToolCalls === undefined
+            ? {}
+            : { maxParallelToolCalls: clampMaxParallelToolCalls(patch.maxParallelToolCalls) })
+        }),
       pushRecentWorkingTarget: (target) =>
         set((state) => ({
           recentWorkingTargets: sanitizeRecentWorkingTargets([
@@ -292,7 +315,7 @@ export const useSettingsStore = create<SettingsStore>()(
     }),
     {
       name: 'opencowork-settings',
-      version: 12,
+      version: 14,
       storage: createJSONStorage(() => ipcStorage),
       migrate: (persisted: unknown, version: number) => {
         const state = persisted as Record<string, unknown>
@@ -324,8 +347,12 @@ export const useSettingsStore = create<SettingsStore>()(
             code: null,
             acp: null
           }
-        } else if ((state.promptRecommendationModels as Record<string, unknown>).acp === undefined) {
-          ;(state.promptRecommendationModels as Record<string, PromptRecommendationModelBinding>).acp = null
+        } else if (
+          (state.promptRecommendationModels as Record<string, unknown>).acp === undefined
+        ) {
+          ;(
+            state.promptRecommendationModels as Record<string, PromptRecommendationModelBinding>
+          ).acp = null
         }
         if (state.newSessionDefaultModel === undefined) {
           state.newSessionDefaultModel = null
@@ -356,6 +383,13 @@ export const useSettingsStore = create<SettingsStore>()(
         if (state.animationsEnabled === undefined) {
           state.animationsEnabled = true
         }
+        if (
+          state.liveOutputAnimationStyle === undefined ||
+          (state.liveOutputAnimationStyle !== 'agile' &&
+            state.liveOutputAnimationStyle !== 'elegant')
+        ) {
+          state.liveOutputAnimationStyle = 'agile'
+        }
         if (state.toolbarCollapsedByDefault === undefined) {
           state.toolbarCollapsedByDefault = false
         }
@@ -378,6 +412,14 @@ export const useSettingsStore = create<SettingsStore>()(
         }
         if (state.editorRemoteLanguageServiceEnabled === undefined) {
           state.editorRemoteLanguageServiceEnabled = false
+        }
+        if (
+          state.maxParallelToolCalls === undefined ||
+          typeof state.maxParallelToolCalls !== 'number'
+        ) {
+          state.maxParallelToolCalls = DEFAULT_MAX_PARALLEL_TOOL_CALLS
+        } else {
+          state.maxParallelToolCalls = clampMaxParallelToolCalls(state.maxParallelToolCalls)
         }
         if (state.reasoningEffortByModel === undefined) {
           state.reasoningEffortByModel = {}
@@ -416,6 +458,7 @@ export const useSettingsStore = create<SettingsStore>()(
         contextCompressionEnabled: state.contextCompressionEnabled,
         editorWorkspaceEnabled: state.editorWorkspaceEnabled,
         editorRemoteLanguageServiceEnabled: state.editorRemoteLanguageServiceEnabled,
+        maxParallelToolCalls: clampMaxParallelToolCalls(state.maxParallelToolCalls),
         toolResultFormat: state.toolResultFormat,
         fileDiffViewMode: state.fileDiffViewMode,
         userName: state.userName,
@@ -426,6 +469,7 @@ export const useSettingsStore = create<SettingsStore>()(
         fontFamily: state.fontFamily,
         fontSize: state.fontSize,
         animationsEnabled: state.animationsEnabled,
+        liveOutputAnimationStyle: state.liveOutputAnimationStyle,
         toolbarCollapsedByDefault: state.toolbarCollapsedByDefault,
         leftSidebarWidth: clampLeftSidebarWidth(state.leftSidebarWidth),
         // Web Search Settings

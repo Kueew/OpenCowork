@@ -28,6 +28,13 @@ interface ShellOutputSummary {
   stderrLines: number
   errorLikeLines: number
   warningLikeLines: number
+  totalMs?: number
+  spawnMs?: number
+  firstChunkMs?: number
+  shell?: string
+  executionEngine?: 'main'
+  timedOut?: boolean
+  aborted?: boolean
 }
 
 interface CompactStreamResult {
@@ -37,6 +44,38 @@ interface CompactStreamResult {
   errorLikeLines: number
   warningLikeLines: number
   compacted: boolean
+}
+
+interface ShellLaunchSpec {
+  file: string
+  args: string[]
+  label: string
+}
+
+interface ShellExecutionTiming {
+  totalMs: number
+  spawnMs: number
+  firstChunkMs?: number
+  shell: string
+  timedOut?: boolean
+  aborted?: boolean
+}
+
+function resolveShellLaunch(command: string): ShellLaunchSpec {
+  if (process.platform === 'win32') {
+    const shellPath = process.env.ComSpec?.trim() || 'cmd.exe'
+    return {
+      file: shellPath,
+      args: ['/d', '/s', '/c', command],
+      label: shellPath
+    }
+  }
+
+  return {
+    file: '/bin/sh',
+    args: ['-c', command],
+    label: '/bin/sh'
+  }
 }
 
 function createOutputDecoder(): TextDecoder {
@@ -149,6 +188,7 @@ function buildShellResult(payload: {
   stdout: string
   stderr: string
   error?: string
+  timing?: ShellExecutionTiming
 }): {
   exitCode: number
   stdout: string
@@ -182,7 +222,20 @@ function buildShellResult(payload: {
       stdoutLines: stdout.totalLines,
       stderrLines: stderr.totalLines,
       errorLikeLines: stdout.errorLikeLines + stderr.errorLikeLines,
-      warningLikeLines: stdout.warningLikeLines + stderr.warningLikeLines
+      warningLikeLines: stdout.warningLikeLines + stderr.warningLikeLines,
+      ...(payload.timing
+        ? {
+            totalMs: payload.timing.totalMs,
+            spawnMs: payload.timing.spawnMs,
+            ...(payload.timing.firstChunkMs !== undefined
+              ? { firstChunkMs: payload.timing.firstChunkMs }
+              : {}),
+            shell: payload.timing.shell,
+            executionEngine: 'main' as const,
+            timedOut: payload.timing.timedOut === true,
+            aborted: payload.timing.aborted === true
+          }
+        : {})
     }
   }
 }
@@ -240,16 +293,21 @@ export function registerShellHandlers(): void {
         let stderr = ''
         const stdoutDecoder = createOutputDecoder()
         const stderrDecoder = createOutputDecoder()
+        const startedAt = Date.now()
+        const launch = resolveShellLaunch(args.command)
         let killed = false
+        let abortReason: 'user' | 'timeout' | null = null
         let settled = false
         let timeoutTimer: ReturnType<typeof setTimeout> | null = null
         let forceResolveTimer: ReturnType<typeof setTimeout> | null = null
         let exitResolveTimer: ReturnType<typeof setTimeout> | null = null
+        let firstChunkAt: number | null = null
 
-        const child = spawn(args.command, {
+        const child = spawn(launch.file, launch.args, {
           cwd: args.cwd || process.cwd(),
-          shell: true,
+          shell: false,
           stdio: ['ignore', 'pipe', 'pipe'],
+          windowsHide: true,
           env: {
             ...process.env,
             PYTHONIOENCODING: 'utf-8',
@@ -257,6 +315,7 @@ export function registerShellHandlers(): void {
             PYTHONUNBUFFERED: '1'
           }
         })
+        const spawnCompletedAt = Date.now()
 
         const finalize = (payload: {
           exitCode: number
@@ -286,20 +345,36 @@ export function registerShellHandlers(): void {
           child.removeAllListeners('error')
           child.removeAllListeners('exit')
           child.removeAllListeners('close')
-          resolve(buildShellResult(payload))
+          resolve(
+            buildShellResult({
+              ...payload,
+              timing: {
+                totalMs: Date.now() - startedAt,
+                spawnMs: spawnCompletedAt - startedAt,
+                ...(firstChunkAt !== null ? { firstChunkMs: firstChunkAt - startedAt } : {}),
+                shell: launch.label,
+                timedOut: abortReason === 'timeout',
+                aborted: abortReason === 'user'
+              }
+            })
+          )
         }
 
-        const requestAbort = (): void => {
+        const requestAbort = (reason: 'user' | 'timeout' = 'user'): void => {
           if (child.exitCode !== null || settled) return
           killed = true
+          abortReason = reason
           void terminateChildProcess(child)
           if (forceResolveTimer) return
           forceResolveTimer = setTimeout(() => {
             if (child.exitCode !== null || settled) return
             finalize({
-              exitCode: 1,
+              exitCode: reason === 'timeout' ? 124 : 130,
               stdout,
-              stderr: `${stderr}\n[Process termination timed out]`
+              stderr:
+                reason === 'timeout'
+                  ? `${stderr}\n[Timed out waiting for process termination]`
+                  : `${stderr}\n[Process termination timed out]`
             })
           }, 2000)
         }
@@ -317,6 +392,7 @@ export function registerShellHandlers(): void {
         }
 
         child.stdout?.on('data', (data: Buffer) => {
+          if (firstChunkAt === null) firstChunkAt = Date.now()
           const text = decodeOutputChunk(stdoutDecoder, data)
           stdout += text
           if (stdout.length > MAX_LIVE_BUFFER_CHARS) {
@@ -326,6 +402,7 @@ export function registerShellHandlers(): void {
         })
 
         child.stderr?.on('data', (data: Buffer) => {
+          if (firstChunkAt === null) firstChunkAt = Date.now()
           const text = decodeOutputChunk(stderrDecoder, data)
           stderr += text
           if (stderr.length > MAX_LIVE_BUFFER_CHARS) {
@@ -338,7 +415,7 @@ export function registerShellHandlers(): void {
           if (settled || exitResolveTimer) return
           exitResolveTimer = setTimeout(() => {
             finalize({
-              exitCode: killed ? 1 : (code ?? 0),
+              exitCode: killed ? (abortReason === 'timeout' ? 124 : 130) : (code ?? 0),
               stdout,
               stderr
             })
@@ -347,7 +424,7 @@ export function registerShellHandlers(): void {
 
         child.on('close', (code) => {
           finalize({
-            exitCode: killed ? 1 : (code ?? 0),
+            exitCode: killed ? (abortReason === 'timeout' ? 124 : 130) : (code ?? 0),
             stdout,
             stderr
           })
@@ -363,7 +440,7 @@ export function registerShellHandlers(): void {
         })
 
         timeoutTimer = setTimeout(() => {
-          requestAbort()
+          requestAbort('timeout')
         }, timeout)
       })
     }

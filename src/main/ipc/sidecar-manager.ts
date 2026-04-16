@@ -571,12 +571,68 @@ export function registerSidecarHandlers(): void {
   const pendingRendererToolRequests = new Map<string, PendingRendererToolRequest>()
   const pendingProviderStreamRequests = new Map<string, PendingRendererToolRequest>()
 
+  const describeForwardedEvent = (payload: {
+    runId?: string
+    event?: {
+      type?: string
+      debugInfo?: {
+        transport?: string
+        fallbackReason?: string
+        reusedConnection?: boolean
+        url?: string
+      }
+    }
+  } | null): string => {
+    const eventType = payload?.event?.type ?? 'unknown'
+    if (eventType !== 'request_debug') {
+      return `${eventType} runId=${payload?.runId ?? ''}`
+    }
+
+    const details = [`${eventType} runId=${payload?.runId ?? ''}`]
+    const debugInfo = payload?.event?.debugInfo as
+      | {
+          transport?: string
+          fallbackReason?: string
+          reusedConnection?: boolean
+          websocketRequestKind?: string
+          websocketIncrementalReason?: string
+          previousResponseId?: string
+          url?: string
+        }
+      | undefined
+    if (debugInfo?.transport) details.push(`transport=${debugInfo.transport}`)
+    if (debugInfo?.fallbackReason) details.push(`fallbackReason=${debugInfo.fallbackReason}`)
+    if (typeof debugInfo?.reusedConnection === 'boolean') {
+      details.push(`reusedConnection=${debugInfo.reusedConnection}`)
+    }
+    if (debugInfo?.websocketRequestKind) {
+      details.push(`websocketRequestKind=${debugInfo.websocketRequestKind}`)
+    }
+    if (debugInfo?.websocketIncrementalReason) {
+      details.push(`websocketIncrementalReason=${debugInfo.websocketIncrementalReason}`)
+    }
+    if (debugInfo?.previousResponseId) {
+      details.push(`previousResponseId=${debugInfo.previousResponseId}`)
+    }
+    if (debugInfo?.url) details.push(`url=${debugInfo.url}`)
+    return details.join(' ')
+  }
+
   manager.setEventHandler((method, params) => {
     if (method === 'agent/event') {
-      const payload = params as { runId?: string; event?: { type?: string } } | null
-      console.log(
-        `[Sidecar] event forwarded: ${payload?.event?.type ?? 'unknown'} runId=${payload?.runId ?? ''}`
-      )
+      const payload = params as {
+        runId?: string
+        event?: {
+          type?: string
+          debugInfo?: {
+            transport?: string
+            fallbackReason?: string
+            reusedConnection?: boolean
+            url?: string
+          }
+        }
+      } | null
+      console.log(`[Sidecar] event forwarded: ${describeForwardedEvent(payload)}`)
     }
     for (const win of BrowserWindow.getAllWindows()) {
       safeSendToWindow(win, 'sidecar:event', { method, params })

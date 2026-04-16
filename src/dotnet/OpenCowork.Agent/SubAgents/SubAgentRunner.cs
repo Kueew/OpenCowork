@@ -178,7 +178,9 @@ public sealed class SubAgentRunner
             ComputerUseEnabled = baseConfig.ComputerUseEnabled,
             Organization = baseConfig.Organization,
             Project = baseConfig.Project,
-            AccountId = baseConfig.AccountId
+            AccountId = baseConfig.AccountId,
+            WebsocketUrl = baseConfig.WebsocketUrl,
+            WebsocketMode = baseConfig.WebsocketMode
         };
 
         var innerToolContext = new ToolContext
