@@ -35,6 +35,7 @@
     "projectNamePlaceholder": "For example: OpenCoWork",
     "createProject": "Create project",
     "currentWorkingFolder": "Current working folder",
+    "selectedWorkingFolder": "Selected working folder",
     "noWorkingFolderSelected": "No folder selected",
     "defaultProjectDirectory": "Default project location",
     "defaultProjectDirectoryHint": "Use custom path or remember the last used location.",
@@ -484,7 +485,8 @@
     "scrollToBottom": "Scroll to bottom",
     "imageCopied": "Image copied to clipboard",
     "imageCopiedDesc": "You can paste it into chat or documents",
-    "exportImageFailed": "Export image failed"
+    "exportImageFailed": "Export image failed",
+    "homeWorkspaceCaption": "Workspace"
   },
   "projectHome": {
     "noProjectSelected": "No project selected",
@@ -493,7 +495,12 @@
     "heroDesc": "Continue working around the current project. New sessions default to this project's working folder.",
     "openArchive": "Project Archive",
     "openChannels": "Channels",
-    "openGit": "Git"
+    "openGit": "Git",
+    "workspaceLabel": "Project workspace",
+    "folderLabel": "Working folder",
+    "sshLabel": "SSH connection",
+    "actionsLabel": "Quick access",
+    "noWorkingFolder": "No working folder configured"
   },
   "skills": {
     "addActions": "Add actions",

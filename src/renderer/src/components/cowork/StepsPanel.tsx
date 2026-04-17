@@ -18,11 +18,16 @@ import { Separator } from '@renderer/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { useTaskStore, type TaskItem } from '@renderer/stores/task-store'
 import { useTeamStore } from '@renderer/stores/team-store'
-import { useAgentStore } from '@renderer/stores/agent-store'
+import { useAgentStore, type AgentRunChangeSet } from '@renderer/stores/agent-store'
 import { useChatStore } from '@renderer/stores/chat-store'
 import { usePlanStore } from '@renderer/stores/plan-store'
+import { useUIStore } from '@renderer/stores/ui-store'
 import { cn } from '@renderer/lib/utils'
 import type { TeamTask } from '@renderer/lib/agent/teams/types'
+import {
+  aggregateDisplayableRunFileChanges,
+  summarizeTrackedChange
+} from '@renderer/components/chat/file-change-utils'
 
 const EMPTY_TEAM_TASKS: TeamTask[] = []
 const EMPTY_TASKS: TaskItem[] = []
@@ -59,6 +64,7 @@ interface InlineTaskSummaryItem {
 }
 
 interface InlineChangeSummary {
+  runId: string
   assistantMessageId: string
   fileCount: number
   added: number | null
@@ -77,131 +83,27 @@ function buildProgress(
   }
 }
 
-function normalizeLineEndings(text: string): string {
-  return text.replace(/\r\n/g, '\n')
-}
-
-function countLines(text: string): number {
-  const normalized = normalizeLineEndings(text)
-  return normalized.length === 0 ? 0 : normalized.split('\n').length
-}
-
-function summarizeLineDiff(
-  beforeText: string,
-  afterText: string
-): {
-  added: number
-  deleted: number
-} {
-  const beforeLines = normalizeLineEndings(beforeText).split('\n')
-  const afterLines = normalizeLineEndings(afterText).split('\n')
-  const beforeCount = beforeLines.length
-  const afterCount = afterLines.length
-
-  if (beforeCount * afterCount > 100000) {
-    let prefix = 0
-    while (
-      prefix < beforeCount &&
-      prefix < afterCount &&
-      beforeLines[prefix] === afterLines[prefix]
-    ) {
-      prefix += 1
-    }
-
-    let beforeSuffix = beforeCount - 1
-    let afterSuffix = afterCount - 1
-    while (
-      beforeSuffix >= prefix &&
-      afterSuffix >= prefix &&
-      beforeLines[beforeSuffix] === afterLines[afterSuffix]
-    ) {
-      beforeSuffix -= 1
-      afterSuffix -= 1
-    }
-
-    return {
-      deleted: Math.max(0, beforeSuffix - prefix + 1),
-      added: Math.max(0, afterSuffix - prefix + 1)
-    }
-  }
-
-  const dp = Array.from({ length: beforeCount + 1 }, () => new Uint32Array(afterCount + 1))
-  for (let i = 1; i <= beforeCount; i += 1) {
-    for (let j = 1; j <= afterCount; j += 1) {
-      dp[i][j] =
-        beforeLines[i - 1] === afterLines[j - 1]
-          ? dp[i - 1][j - 1] + 1
-          : Math.max(dp[i - 1][j], dp[i][j - 1])
-    }
-  }
-
-  const common = dp[beforeCount][afterCount]
-  return {
-    deleted: beforeCount - common,
-    added: afterCount - common
-  }
-}
-
-function summarizeInlineChangeSet(changeSet: {
-  assistantMessageId: string
-  changes: Array<{
-    filePath: string
-    op: 'create' | 'modify'
-    before: { text?: string; previewText?: string; lineCount?: number }
-    after: { text?: string; previewText?: string; lineCount?: number }
-  }>
-}): InlineChangeSummary | null {
-  if (changeSet.changes.length === 0) return null
+function summarizeInlineChangeSet(changeSet: AgentRunChangeSet): InlineChangeSummary | null {
+  const visibleChanges = aggregateDisplayableRunFileChanges(changeSet.changes)
+  if (visibleChanges.length === 0) return null
 
   const filePaths = new Set<string>()
   let added = 0
   let deleted = 0
   let hasLineStats = false
 
-  for (const change of changeSet.changes) {
+  for (const change of visibleChanges) {
     filePaths.add(change.filePath)
-
-    if (change.op === 'create') {
-      const lineTotal =
-        typeof change.after.lineCount === 'number'
-          ? change.after.lineCount
-          : typeof change.after.text === 'string'
-            ? countLines(change.after.text)
-            : typeof change.after.previewText === 'string'
-              ? countLines(change.after.previewText)
-              : 0
-      if (lineTotal > 0) {
-        added += lineTotal
-        hasLineStats = true
-      }
-      continue
-    }
-
-    const beforeText = change.before.text ?? change.before.previewText
-    const afterText = change.after.text ?? change.after.previewText
-    if (typeof beforeText === 'string' && typeof afterText === 'string') {
-      const diff = summarizeLineDiff(beforeText, afterText)
-      added += diff.added
-      deleted += diff.deleted
-      hasLineStats = true
-      continue
-    }
-
-    if (
-      typeof change.before.lineCount === 'number' &&
-      typeof change.after.lineCount === 'number' &&
-      change.before.lineCount !== change.after.lineCount
-    ) {
-      if (change.after.lineCount > change.before.lineCount) {
-        added += change.after.lineCount - change.before.lineCount
-      } else {
-        deleted += change.before.lineCount - change.after.lineCount
-      }
+    const diff = summarizeTrackedChange(change)
+    added += diff.added
+    deleted += diff.deleted
+    if (diff.added > 0 || diff.deleted > 0) {
       hasLineStats = true
     }
   }
 
   return {
+    runId: changeSet.runId,
     assistantMessageId: changeSet.assistantMessageId,
     fileCount: filePaths.size,
     added: hasLineStats ? added : null,
@@ -433,8 +335,17 @@ function InlineStepsPanelCard({
   reviewLabel: string
 }): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
+  const openDetailPanel = useUIStore((state) => state.openDetailPanel)
 
   const handleOpenChangeReview = (): void => {
+    if (changeSummary?.runId) {
+      openDetailPanel({
+        type: 'change-review',
+        runId: changeSummary.runId
+      })
+      return
+    }
+
     if (!changeSummary?.assistantMessageId) return
     const target = document.querySelector<HTMLElement>(
       `[data-message-id="${changeSummary.assistantMessageId}"]`
@@ -581,7 +492,7 @@ export function InlineStepsPanel({
     for (const changeSet of Object.values(runChangesByRunId)) {
       if (
         changeSet.sessionId !== resolvedSessionId ||
-        changeSet.changes.length === 0 ||
+        aggregateDisplayableRunFileChanges(changeSet.changes).length === 0 ||
         (changeSet.status !== 'open' &&
           changeSet.status !== 'partial' &&
           changeSet.status !== 'conflicted')

@@ -606,6 +606,7 @@
     "responsesSummaryAuto": "Auto",
     "responsesSummaryConcise": "Concise",
     "responsesSummaryDetailed": "Detailed",
+    "responsesWebsocket": "Enable WebSocket protocol",
     "promptCache": "Prompt cache (responses)",
     "systemPromptCache": "System prompt cache (anthropic)",
 

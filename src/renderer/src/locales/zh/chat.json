@@ -34,6 +34,7 @@
     "projectNamePlaceholder": "例如：OpenCoWork",
     "createProject": "创建项目",
     "currentWorkingFolder": "当前工作目录",
+    "selectedWorkingFolder": "已选工作目录",
     "noWorkingFolderSelected": "尚未选择目录",
     "defaultProjectDirectory": "默认项目位置",
     "defaultProjectDirectoryHint": "可使用自定义路径，也可回退到上次使用的位置。",
@@ -469,7 +470,8 @@
     "scrollToBottom": "滚动到底部",
     "imageCopied": "图片已复制到剪贴板",
     "imageCopiedDesc": "可直接粘贴到聊天或文档中",
-    "exportImageFailed": "导出图片失败"
+    "exportImageFailed": "导出图片失败",
+    "homeWorkspaceCaption": "工作区"
   },
   "projectHome": {
     "noProjectSelected": "未选择项目",
@@ -478,7 +480,12 @@
     "heroDesc": "围绕当前项目继续推进，默认使用当前项目工作目录创建新会话。",
     "openArchive": "项目档案",
     "openChannels": "聊天频道",
-    "openGit": "Git"
+    "openGit": "Git",
+    "workspaceLabel": "项目工作区",
+    "folderLabel": "工作目录",
+    "sshLabel": "SSH 连接",
+    "actionsLabel": "快捷入口",
+    "noWorkingFolder": "未配置工作目录"
   },
   "skills": {
     "addActions": "添加操作",

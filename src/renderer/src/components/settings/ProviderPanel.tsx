@@ -359,10 +359,15 @@ function ModelFormDialog({
   const [responseSummary, setResponseSummary] = useState<'auto' | 'concise' | 'detailed' | 'none'>(
     initial?.responseSummary ?? 'none'
   )
+  const [websocketMode, setWebsocketMode] = useState<'auto' | 'disabled'>(
+    initial?.websocketMode ?? 'auto'
+  )
   const [enablePromptCache, setEnablePromptCache] = useState(initial?.enablePromptCache ?? true)
   const [enableSystemPromptCache, setEnableSystemPromptCache] = useState(
     initial?.enableSystemPromptCache ?? true
   )
+  const requestType = typeOverride === 'none' ? providerType : typeOverride
+  const isResponsesModel = requestType === 'openai-responses'
   const handleSave = (): void => {
     if (!id.trim()) return
     const model: AIModelConfig = {
@@ -419,6 +424,11 @@ function ModelFormDialog({
     if (responseSummary && responseSummary !== 'none') model.responseSummary = responseSummary
     model.enablePromptCache = enablePromptCache
     model.enableSystemPromptCache = enableSystemPromptCache
+    if (isResponsesModel) {
+      model.websocketMode = websocketMode
+    } else if (initial?.websocketMode !== undefined) {
+      model.websocketMode = undefined
+    }
     // preserve thinking config if editing
     if (initial?.supportsThinking) model.supportsThinking = initial.supportsThinking
     if (initial?.thinkingConfig) model.thinkingConfig = initial.thinkingConfig
@@ -726,6 +736,17 @@ function ModelFormDialog({
                   </SelectContent>
                 </Select>
               </div>
+              {isResponsesModel && (
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground">
+                    {t('provider.responsesWebsocket')}
+                  </span>
+                  <Switch
+                    checked={websocketMode === 'auto'}
+                    onCheckedChange={(v) => setWebsocketMode(v ? 'auto' : 'disabled')}
+                  />
+                </div>
+              )}
               <div className="flex items-center justify-between">
                 <span className="text-xs text-muted-foreground">{t('provider.promptCache')}</span>
                 <Switch checked={enablePromptCache} onCheckedChange={setEnablePromptCache} />

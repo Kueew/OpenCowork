@@ -46,7 +46,7 @@
     "switchToChinese": "Switch to Chinese",
     "switchToEnglish": "Switch to English",
     "aboutLabel": "About",
-    "searchProjects": "Search projects...",
+    "searchProjects": "Search projects and sessions...",
     "noProjects": "No projects yet",
     "newProject": "New Project",
     "openProject": "Open Project",
@@ -81,7 +81,9 @@
     "sessions": "sessions",
     "msgs": "msgs",
     "changeWorkingFolder": "Working folder",
-    "projectGit": "Git"
+    "projectGit": "Git",
+    "showMoreSessions": "Show more ({{count}})",
+    "showLessSessions": "Show less"
   },
   "sidebar_toast": {
     "sessionDeleted": "Session deleted",

@@ -606,6 +606,7 @@
     "responsesSummaryAuto": "自动",
     "responsesSummaryConcise": "简洁",
     "responsesSummaryDetailed": "详细",
+    "responsesWebsocket": "启用 WebSocket 协议",
     "promptCache": "Prompt 缓存（Responses）",
     "systemPromptCache": "System 缓存（Anthropic）",
 

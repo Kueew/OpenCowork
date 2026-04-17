@@ -46,7 +46,7 @@
     "switchToChinese": "切换到中文",
     "switchToEnglish": "切换到 English",
     "aboutLabel": "关于",
-    "searchProjects": "搜索项目...",
+    "searchProjects": "搜索项目和会话...",
     "noProjects": "还没有项目",
     "newProject": "新建项目",
     "openProject": "打开项目",
@@ -81,7 +81,9 @@
     "sessions": "会话",
     "msgs": "消息",
     "changeWorkingFolder": "工作目录",
-    "projectGit": "Git"
+    "projectGit": "Git",
+    "showMoreSessions": "展开更多（{{count}}）",
+    "showLessSessions": "收起"
   },
   "sidebar_toast": {
     "sessionDeleted": "会话已删除",
