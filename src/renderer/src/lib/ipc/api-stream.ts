@@ -171,8 +171,19 @@ export async function* ipcStreamRequest(params: {
     new Promise<void>((r) => {
       if (queue.length > 0) {
         r()
-      } else {
-        resolve = r
+        return
+      }
+      let settled = false
+      const settle = (): void => {
+        if (settled) return
+        settled = true
+        resolve = null
+        r()
+      }
+      const timer = setTimeout(settle, 30_000)
+      resolve = () => {
+        clearTimeout(timer)
+        settle()
       }
     })
 

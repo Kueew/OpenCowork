@@ -176,12 +176,18 @@ function resolveSessionWorkingFolder(
 
 type MessageSource = 'team' | 'queued' | 'continue'
 
+export interface SendMessageOptions {
+  longRunningMode?: boolean
+  clearCompletedTasksOnTurnStart?: boolean
+}
+
 interface QueuedSessionMessage {
   id: string
   text: string
   images?: ImageAttachment[]
   command?: SystemCommandSnapshot | null
   source?: MessageSource
+  options?: SendMessageOptions
   createdAt: number
 }
 
@@ -208,6 +214,11 @@ function getTaskProgressSnapshot(sessionId: string): string {
   const inProgress = tasks.filter((task) => task.status === 'in_progress').length
   const completed = tasks.filter((task) => task.status === 'completed').length
   return `${tasks.length}:${pending}:${inProgress}:${completed}`
+}
+
+function shouldClearCompletedSessionTasks(sessionId: string): boolean {
+  const tasks = useTaskStore.getState().getTasksBySession(sessionId)
+  return tasks.length > 0 && tasks.every((task) => task.status === 'completed')
 }
 
 function extractMessagePlainText(message?: UnifiedMessage): string {
@@ -768,7 +779,8 @@ function enqueuePendingSessionMessage(
       text: msg.text,
       images: cloneOptionalImageAttachments(msg.images),
       command: msg.command ?? null,
-      source: msg.source
+      source: msg.source,
+      options: msg.options ? { ...msg.options } : undefined
     }
   ]
   replaceSessionPendingMessages(sessionId, next)
@@ -784,7 +796,8 @@ function dequeuePendingSessionMessage(sessionId: string): QueuedSessionMessage |
     ...head,
     text: head.text,
     images: cloneOptionalImageAttachments(head.images),
-    command: head.command ?? null
+    command: head.command ?? null,
+    options: head.options ? { ...head.options } : undefined
   }
 }
 
@@ -1000,7 +1013,9 @@ let _sendMessageFn:
       images?: ImageAttachment[],
       source?: MessageSource,
       targetSessionId?: string,
-      commandOverride?: SystemCommandSnapshot | null
+      commandOverride?: SystemCommandSnapshot | null,
+      reuseAssistantMessageId?: string,
+      options?: SendMessageOptions
     ) => Promise<void>)
   | null = null
 
@@ -1137,7 +1152,15 @@ function dispatchNextQueuedMessage(sessionId: string): boolean {
 
   setPendingSessionDispatchPaused(sessionId, false)
   setTimeout(() => {
-    void _sendMessageFn?.(next.text, next.images, next.source ?? 'queued', sessionId, next.command)
+    void _sendMessageFn?.(
+      next.text,
+      next.images,
+      next.source ?? 'queued',
+      sessionId,
+      next.command,
+      undefined,
+      next.options
+    )
   }, 0)
   return true
 }
@@ -1766,7 +1789,7 @@ export function useChatActions(): {
     targetSessionId?: string,
     commandOverride?: SystemCommandSnapshot | null,
     reuseAssistantMessageId?: string,
-    options?: { longRunningMode?: boolean }
+    options?: SendMessageOptions
   ) => Promise<void>
   stopStreaming: () => void
   continueLastToolExecution: () => Promise<void>
@@ -1805,7 +1828,7 @@ export function useChatActions(): {
       targetSessionId?: string,
       commandOverride?: SystemCommandSnapshot | null,
       reuseAssistantMessageId?: string,
-      options?: { longRunningMode?: boolean }
+      options?: SendMessageOptions
     ): Promise<void> => {
       // Reset auto-trigger counter and unpause when user manually sends a message
       if (source !== 'team') {
@@ -1914,7 +1937,8 @@ export function useChatActions(): {
           text: resolvedCommand.command ? resolvedCommand.userText : text,
           images,
           command: resolvedCommand.command,
-          source
+          source,
+          options
         })
         if (source === undefined) {
           setPendingSessionDispatchPaused(sessionId, false)
@@ -1940,9 +1964,19 @@ export function useChatActions(): {
           text: resolvedCommand.command ? resolvedCommand.userText : text,
           images,
           command: resolvedCommand.command,
-          source
+          source,
+          options
         })
         return
+      }
+
+      if (
+        options?.clearCompletedTasksOnTurnStart &&
+        source !== 'continue' &&
+        source !== 'team' &&
+        shouldClearCompletedSessionTasks(sessionId)
+      ) {
+        useTaskStore.getState().deleteSessionTasks(sessionId)
       }
 
       const pendingReviewPlan =
