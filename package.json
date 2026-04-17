@@ -19,7 +19,7 @@
     "build:sidecar:mac": "powershell -ExecutionPolicy Bypass -File ./scripts/build-sidecar.ps1 -Runtime osx-arm64",
     "build:sidecar:linux": "powershell -ExecutionPolicy Bypass -File ./scripts/build-sidecar.ps1 -Runtime linux-x64",
     "benchmark:sidecar": "dotnet run --project ./src/dotnet/OpenCowork.Agent -- benchmark",
-    "postinstall": "electron-builder install-app-deps",
+    "postinstall": "node ./scripts/postinstall.mjs",
     "build:unpack": "npm run build && npm run build:sidecar && electron-builder --dir",
     "build:win": "npm run build && npm run build:sidecar:win && electron-builder --win",
     "build:mac": "electron-vite build && npm run build:sidecar:mac && electron-builder --mac",
