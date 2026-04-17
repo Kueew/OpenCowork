@@ -120,6 +120,17 @@ export function buildFileSnapshot(exists: boolean, text?: string): FileSnapshot 
 function buildLightSnapshot(text: string): FileSnapshot {
   const size = Buffer.byteLength(text, 'utf-8')
   const lineCount = text.length === 0 ? 0 : text.replace(/\r\n/g, '\n').split('\n').length
+  if (size <= INLINE_TEXT_SNAPSHOT_LIMIT_BYTES) {
+    return {
+      exists: true,
+      text,
+      fullText: text,
+      hash: hashText(text),
+      size,
+      lineCount
+    }
+  }
+
   return {
     exists: true,
     previewText: text.slice(0, SNAPSHOT_PREVIEW_HEAD_CHARS),
@@ -158,7 +169,9 @@ function readLocalSnapshot(filePath: string): FileSnapshot {
 function cloneSnapshot(snapshot: FileSnapshot): FileSnapshot {
   return {
     exists: snapshot.exists,
-    text: snapshot.text,
+    text:
+      snapshot.text ??
+      (snapshot.size <= INLINE_TEXT_SNAPSHOT_LIMIT_BYTES ? snapshot.fullText : undefined),
     previewText: snapshot.previewText,
     tailPreviewText: snapshot.tailPreviewText,
     textOmitted: snapshot.textOmitted,
@@ -168,11 +181,34 @@ function cloneSnapshot(snapshot: FileSnapshot): FileSnapshot {
   }
 }
 
+function hydrateLocalAfterSnapshot(
+  change: TrackedFileChange,
+  snapshot: FileSnapshot
+): FileSnapshot {
+  const cloned = cloneSnapshot(snapshot)
+  if (cloned.text !== undefined) return cloned
+  if (change.transport !== 'local' || snapshot.size > INLINE_TEXT_SNAPSHOT_LIMIT_BYTES) {
+    return cloned
+  }
+  if (!snapshot.hash || !fs.existsSync(change.filePath)) return cloned
+
+  const stats = fs.statSync(change.filePath)
+  if (!stats.isFile() || stats.size > INLINE_TEXT_SNAPSHOT_LIMIT_BYTES) return cloned
+
+  const text = fs.readFileSync(change.filePath, 'utf-8')
+  if (hashText(text) !== snapshot.hash) return cloned
+
+  return {
+    ...cloned,
+    text
+  }
+}
+
 function cloneChange(change: TrackedFileChange): TrackedFileChange {
   return {
     ...change,
     before: cloneSnapshot(change.before),
-    after: cloneSnapshot(change.after)
+    after: hydrateLocalAfterSnapshot(change, change.after)
   }
 }
 
@@ -383,6 +419,50 @@ async function getChangeDiffContent(
   return { beforeText, afterText }
 }
 
+async function getSnapshotContent(
+  runId: string,
+  changeId: string,
+  side: 'before' | 'after'
+): Promise<{ text: string } | { error: string } | null> {
+  const found = findChange(runId, changeId)
+  if (!found) return null
+
+  const snapshot = side === 'before' ? found.change.before : found.change.after
+  let text = resolveSnapshotFullText(snapshot)
+
+  if (text === null && side === 'after' && found.change.status === 'open') {
+    if (found.change.transport === 'local') {
+      try {
+        const currentText = fs.readFileSync(found.change.filePath, 'utf-8')
+        if (hashText(currentText) === found.change.after.hash) {
+          text = currentText
+        }
+      } catch {
+        // file may have been deleted or changed
+      }
+    } else if (found.change.connectionId && sshChangeAdapter) {
+      try {
+        const snap = await sshChangeAdapter.readSnapshot(
+          found.change.connectionId,
+          found.change.filePath
+        )
+        const snapText = resolveSnapshotFullText(snap)
+        if (snapText !== null && hashText(snapText) === found.change.after.hash) {
+          text = snapText
+        }
+      } catch {
+        // SSH connection may be unavailable
+      }
+    }
+  }
+
+  if (text === null) {
+    return { error: `Full ${side} snapshot is unavailable for this change` }
+  }
+
+  return { text }
+}
+
 function acceptOneChange(change: TrackedFileChange): void {
   if (change.status !== 'open' && change.status !== 'conflicted') return
   change.status = 'accepted'
@@ -581,6 +661,20 @@ export function registerAgentChangeHandlers(): void {
       try {
         if (!args?.runId || !args?.changeId) return { error: 'runId and changeId are required' }
         return await getChangeDiffContent(args.runId, args.changeId)
+      } catch (err) {
+        return { error: String(err) }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'agent:changes:snapshot-content',
+    async (_event, args: { runId: string; changeId: string; side: 'before' | 'after' }) => {
+      try {
+        if (!args?.runId || !args?.changeId || !args?.side) {
+          return { error: 'runId, changeId, and side are required' }
+        }
+        return await getSnapshotContent(args.runId, args.changeId, args.side)
       } catch (err) {
         return { error: String(err) }
       }
