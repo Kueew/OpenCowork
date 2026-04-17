@@ -141,16 +141,24 @@ function selectAutoModel(setOpen: (v: boolean) => void): void {
 function ModelSettingsPopover({
   model,
   providerId,
+  providerType,
+  providerWebsocketMode,
   t,
-  tChat
+  tChat,
+  tSettings
 }: {
   model: AIModelConfig | undefined
   providerId?: string | null
+  providerType?: AIProvider['type']
+  providerWebsocketMode?: AIProvider['websocketMode']
   t: (key: string) => string
   tChat: (key: string, opts?: Record<string, unknown>) => string
+  tSettings: (key: string, opts?: Record<string, unknown>) => string
 }): React.JSX.Element | null {
+  const requestType = model?.type ?? providerType
   const supportsThinking = model?.supportsThinking ?? false
   const supportsFastMode = supportsPriorityServiceTier(model)
+  const supportsResponsesWebsocket = !!model && requestType === 'openai-responses'
   const supportsContextCompression = !!model
   const levels = model?.thinkingConfig?.reasoningEffortLevels
   const thinkingEnabled = useSettingsStore((s) => s.thinkingEnabled)
@@ -194,7 +202,11 @@ function ModelSettingsPopover({
     [effortKey]
   )
 
-  const hasAnySetting = supportsThinking || supportsFastMode || supportsContextCompression
+  const hasAnySetting =
+    supportsThinking ||
+    supportsFastMode ||
+    supportsResponsesWebsocket ||
+    supportsContextCompression
 
   const contextCompressionPercent = Math.round(
     clampCompressionThreshold(
@@ -207,14 +219,26 @@ function ModelSettingsPopover({
       if (!model?.id) return
       const normalized = clampCompressionThreshold(value / 100)
       const providerStore = useProviderStore.getState()
-      const activeProviderId = providerStore.activeProviderId
-      if (!activeProviderId) return
-      providerStore.updateModel(activeProviderId, model.id, {
+      const targetProviderId = providerId ?? providerStore.activeProviderId
+      if (!targetProviderId) return
+      providerStore.updateModel(targetProviderId, model.id, {
         contextCompressionThreshold: normalized
       })
     },
-    [model]
+    [model, providerId]
   )
+
+  const websocketEnabled = (model?.websocketMode ?? providerWebsocketMode ?? 'auto') !== 'disabled'
+
+  const toggleResponsesWebsocket = useCallback(() => {
+    if (!model?.id) return
+    const providerStore = useProviderStore.getState()
+    const targetProviderId = providerId ?? providerStore.activeProviderId
+    if (!targetProviderId) return
+    providerStore.updateModel(targetProviderId, model.id, {
+      websocketMode: websocketEnabled ? 'disabled' : 'auto'
+    })
+  }, [model, providerId, websocketEnabled])
 
   return (
     <Popover>
@@ -356,9 +380,39 @@ function ModelSettingsPopover({
             </>
           )}
 
-          {supportsContextCompression && (
+          {supportsResponsesWebsocket && (
             <>
               {(supportsThinking || supportsFastMode) && (
+                <div className="my-1 border-t border-border/50" />
+              )}
+              <div className="flex items-center gap-1.5 px-1 pb-1 pt-1 text-[10px] font-medium text-muted-foreground/60 uppercase tracking-wider">
+                <Settings2 className="size-3" />
+                {tSettings('provider.responsesConfig')}
+              </div>
+              <button
+                type="button"
+                className={cn(
+                  'flex items-center justify-between rounded-md px-2.5 py-2 text-xs transition-colors',
+                  websocketEnabled
+                    ? 'bg-sky-500/10 text-sky-600 dark:text-sky-400'
+                    : 'hover:bg-muted/60 text-foreground/80'
+                )}
+                onClick={toggleResponsesWebsocket}
+              >
+                <span className="font-medium">{tSettings('provider.responsesWebsocket')}</span>
+                <span
+                  className={cn(
+                    'size-4 rounded-full border-2 transition-colors shrink-0',
+                    websocketEnabled ? 'bg-sky-500 border-sky-500' : 'border-muted-foreground/30'
+                  )}
+                />
+              </button>
+            </>
+          )}
+
+          {supportsContextCompression && (
+            <>
+              {(supportsThinking || supportsFastMode || supportsResponsesWebsocket) && (
                 <div className="my-1 border-t border-border/50" />
               )}
               <div className="flex items-center gap-1.5 px-1 pb-1 pt-1 text-[10px] font-medium text-muted-foreground/60 uppercase tracking-wider">
@@ -871,8 +925,13 @@ export function ModelSwitcher(): React.JSX.Element {
       <ModelSettingsPopover
         model={settingsModel}
         providerId={settingsProviderId}
+        providerType={isAutoModeActive ? autoResolvedProvider?.type : displayProvider?.type}
+        providerWebsocketMode={
+          isAutoModeActive ? autoResolvedProvider?.websocketMode : displayProvider?.websocketMode
+        }
         t={t}
         tChat={tChat}
+        tSettings={tSettings}
       />
     </div>
   )

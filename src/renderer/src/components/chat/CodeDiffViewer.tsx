@@ -18,6 +18,8 @@ export type DiffViewerChunk =
 interface CodeDiffViewerProps {
   chunks: DiffViewerChunk[]
   defaultMode?: 'split' | 'inline'
+  mode?: 'split' | 'inline'
+  showModeToggle?: boolean
   toolbarEnd?: React.ReactNode
 }
 
@@ -66,13 +68,15 @@ function rowTone(line: DiffViewerLine | undefined): string {
 export function CodeDiffViewer({
   chunks,
   defaultMode = 'split',
+  mode,
+  showModeToggle = true,
   toolbarEnd
 }: CodeDiffViewerProps): React.JSX.Element {
   const { t } = useTranslation('chat')
   const persistedViewMode = useSettingsStore((state) => state.fileDiffViewMode)
   const updateSettings = useSettingsStore((state) => state.updateSettings)
   const [expandedChunks, setExpandedChunks] = React.useState<Set<number>>(new Set())
-  const viewMode = persistedViewMode ?? defaultMode
+  const viewMode = mode ?? persistedViewMode ?? defaultMode
 
   React.useEffect(() => {
     setExpandedChunks(new Set())
@@ -154,39 +158,45 @@ export function CodeDiffViewer({
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center justify-between gap-3">
-        <div className="inline-flex items-center rounded-md border border-zinc-800/80 bg-[#111214] p-0.5 text-[10px]">
-          <button
-            type="button"
-            onClick={() => updateSettings({ fileDiffViewMode: 'inline' })}
-            className={cn(
-              'rounded px-2 py-1 transition-colors',
-              viewMode === 'inline'
-                ? 'bg-zinc-800 text-zinc-100'
-                : 'text-zinc-500 hover:text-zinc-200'
-            )}
-          >
-            {t('diffViewer.inline', { defaultValue: 'Inline' })}
-          </button>
-          <button
-            type="button"
-            onClick={() => updateSettings({ fileDiffViewMode: 'split' })}
-            className={cn(
-              'rounded px-2 py-1 transition-colors',
-              viewMode === 'split'
-                ? 'bg-zinc-800 text-zinc-100'
-                : 'text-zinc-500 hover:text-zinc-200'
-            )}
-          >
-            {t('diffViewer.sideBySide', { defaultValue: 'Split' })}
-          </button>
+      {showModeToggle || toolbarEnd ? (
+        <div className="flex items-center justify-between gap-3">
+          {showModeToggle ? (
+            <div className="inline-flex items-center rounded-md border border-zinc-800/80 bg-[#111214] p-0.5 text-[10px]">
+              <button
+                type="button"
+                onClick={() => updateSettings({ fileDiffViewMode: 'inline' })}
+                className={cn(
+                  'rounded px-2 py-1 transition-colors',
+                  viewMode === 'inline'
+                    ? 'bg-zinc-800 text-zinc-100'
+                    : 'text-zinc-500 hover:text-zinc-200'
+                )}
+              >
+                {t('diffViewer.inline', { defaultValue: 'Inline' })}
+              </button>
+              <button
+                type="button"
+                onClick={() => updateSettings({ fileDiffViewMode: 'split' })}
+                className={cn(
+                  'rounded px-2 py-1 transition-colors',
+                  viewMode === 'split'
+                    ? 'bg-zinc-800 text-zinc-100'
+                    : 'text-zinc-500 hover:text-zinc-200'
+                )}
+              >
+                {t('diffViewer.sideBySide', { defaultValue: 'Split' })}
+              </button>
+            </div>
+          ) : (
+            <div />
+          )}
+          {toolbarEnd ? (
+            <div className="flex items-center justify-end gap-2 text-[10px] text-zinc-500">
+              {toolbarEnd}
+            </div>
+          ) : null}
         </div>
-        {toolbarEnd ? (
-          <div className="flex items-center justify-end gap-2 text-[10px] text-zinc-500">
-            {toolbarEnd}
-          </div>
-        ) : null}
-      </div>
+      ) : null}
 
       <div
         className="overflow-hidden rounded-lg border border-zinc-800/80 bg-[#111214] shadow-[0_0_0_1px_rgba(255,255,255,0.02)]"

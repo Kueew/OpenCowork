@@ -25,6 +25,7 @@ export interface TailToolExecutionState {
 }
 
 const messageLookupCache = new WeakMap<UnifiedMessage[], Map<string, UnifiedMessage>>()
+const HIDDEN_MESSAGE_LIST_TOOL_NAMES = new Set(['TaskCreate', 'TaskUpdate'])
 
 export function isToolResultOnlyUserMessage(message: UnifiedMessage): boolean {
   return (
@@ -36,6 +37,24 @@ export function isToolResultOnlyUserMessage(message: UnifiedMessage): boolean {
 
 function isRealUserMessage(message: UnifiedMessage): boolean {
   return isEditableUserMessage(message)
+}
+
+function hasVisibleAssistantBlock(block: ContentBlock): boolean {
+  if (block.type === 'tool_use') {
+    return !HIDDEN_MESSAGE_LIST_TOOL_NAMES.has(block.name)
+  }
+
+  if (block.type === 'text') {
+    return block.text.trim().length > 0
+  }
+
+  return true
+}
+
+function shouldRenderInMessageList(message: UnifiedMessage): boolean {
+  if (isToolResultOnlyUserMessage(message)) return false
+  if (message.role !== 'assistant' || !Array.isArray(message.content)) return true
+  return message.content.some(hasVisibleAssistantBlock)
 }
 
 function collectToolResults(
@@ -146,7 +165,7 @@ function resolveLastRealUserIndex(
 function resolveLastAssistantIndex(messages: UnifiedMessage[]): number {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]
-    if (isToolResultOnlyUserMessage(message)) continue
+    if (!shouldRenderInMessageList(message)) continue
     return message.role === 'assistant' ? index : -1
   }
 
@@ -163,7 +182,7 @@ export function buildRenderableMessageMeta(
 
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index]
-    if (isToolResultOnlyUserMessage(message)) continue
+    if (!shouldRenderInMessageList(message)) continue
 
     result.push({
       messageId: message.id,

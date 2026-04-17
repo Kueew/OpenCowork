@@ -1,6 +1,14 @@
 import * as React from 'react'
 import { useEffect } from 'react'
-import { CircleHelp, Briefcase, Code2, ShieldCheck, BookOpen, PanelLeftOpen } from 'lucide-react'
+import {
+  CircleHelp,
+  Briefcase,
+  Code2,
+  ShieldCheck,
+  BookOpen,
+  FolderOpen,
+  PanelLeftOpen
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@renderer/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
@@ -10,7 +18,7 @@ import { useUIStore } from '@renderer/stores/ui-store'
 import { useChatStore } from '@renderer/stores/chat-store'
 import { useProviderStore, modelSupportsVision } from '@renderer/stores/provider-store'
 import { useSettingsStore } from '@renderer/stores/settings-store'
-import { useChatActions } from '@renderer/hooks/use-chat-actions'
+import { useChatActions, type SendMessageOptions } from '@renderer/hooks/use-chat-actions'
 import appIconUrl from '../../../../../resources/icon.png'
 import type { ImageAttachment } from '@renderer/lib/image-attachments'
 import { WorkingFolderSelectorDialog } from './WorkingFolderSelectorDialog'
@@ -87,16 +95,17 @@ export function ChatHomePage(): React.JSX.Element {
   const autoSelection = activeSessionId
     ? (autoModelSelectionsBySession[activeSessionId] ?? null)
     : null
+
   const handleSend = (
     text: string,
     images?: ImageAttachment[],
-    options?: { longRunningMode?: boolean }
+    options?: SendMessageOptions
   ): void => {
     const chatStore = useChatStore.getState()
     const sessionId = chatStore.createSession(mode, activeProject?.id ?? undefined, options)
     chatStore.setActiveSession(sessionId)
     useUIStore.getState().navigateToSession()
-    void sendMessage(text, images)
+    void sendMessage(text, images, undefined, sessionId, undefined, undefined, options)
   }
 
   const updateHomeProjectDirectory = React.useCallback(
@@ -204,7 +213,7 @@ export function ChatHomePage(): React.JSX.Element {
   }, [conversationGuideSeen, sessions.length])
 
   return (
-    <div className="relative flex flex-1 flex-col overflow-auto bg-gradient-to-b from-background via-background to-muted/20">
+    <div className="relative flex flex-1 flex-col overflow-auto bg-background">
       {!leftSidebarOpen && (
         <Button
           variant="ghost"
@@ -215,11 +224,12 @@ export function ChatHomePage(): React.JSX.Element {
           <PanelLeftOpen className="size-4" />
         </Button>
       )}
-      <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col px-4 py-8">
-        <div className="mb-5 flex justify-center">
+
+      <div className="mx-auto flex w-full max-w-[1040px] flex-1 flex-col px-4 pb-6 pt-4 sm:px-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div
             data-tour="mode-switch"
-            className="flex items-center gap-0.5 rounded-xl border border-border/50 bg-background/95 p-0.5 shadow-md backdrop-blur-sm"
+            className="flex items-center gap-0.5 rounded-xl border border-border/50 bg-background/95 p-0.5 shadow-sm"
           >
             {modes.map((m, i) => (
               <Tooltip key={m.value}>
@@ -273,123 +283,168 @@ export function ChatHomePage(): React.JSX.Element {
               </Tooltip>
             ))}
           </div>
+
+          {activeProject ? (
+            <div className="inline-flex max-w-full items-center gap-2 rounded-full border border-border/60 bg-muted/20 px-3 py-1.5 text-[11px] text-muted-foreground">
+              <span>{t('messageList.homeWorkspaceCaption')}</span>
+              <span className="truncate text-foreground">{activeProject.name}</span>
+            </div>
+          ) : null}
         </div>
 
-        <div className="mb-5 flex min-h-[240px] flex-1 flex-col">
-          <div className="flex flex-1 items-center justify-center">
-            <img
-              src={appIconUrl}
-              alt="OpenCowork"
-              className="size-24 rounded-[28px] object-cover shadow-xl ring-1 ring-border/50"
-            />
-          </div>
-          <div className="text-center">
-            <p className="text-xs font-medium tracking-wide text-muted-foreground/80">
-              {t('messageList.homeCurrentModel', { model: homeModelTitle })}
-            </p>
-            <h1 className="mt-2 text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
-              {homeTitle}
-            </h1>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">{homeDescription}</p>
-            {homeModelMeta && (
-              <p className="mt-1 text-xs text-muted-foreground/70">{homeModelMeta}</p>
-            )}
+        <div className="mt-4 border-b border-border/50 pb-5">
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px] lg:items-start">
+            <div className="min-w-0">
+              <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/80">
+                {t('messageList.homeWorkspaceCaption')}
+              </p>
+              <h1 className="mt-1 text-[26px] font-semibold tracking-tight text-foreground sm:text-[30px]">
+                {homeTitle}
+              </h1>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
+                {homeDescription}
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <span className="rounded-full border border-border/60 bg-background px-2.5 py-1 text-[11px] text-muted-foreground">
+                  {t('messageList.homeCurrentModel', { model: homeModelTitle })}
+                </span>
+                {homeModelMeta ? (
+                  <span className="rounded-full border border-border/60 bg-muted/20 px-2.5 py-1 text-[11px] text-muted-foreground">
+                    {homeModelMeta}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="hidden rounded-xl border border-border/60 bg-muted/20 p-3 lg:block">
+              <div className="flex items-center gap-3">
+                <div className="flex size-11 items-center justify-center rounded-xl border border-border/60 bg-background">
+                  <img
+                    src={appIconUrl}
+                    alt="OpenCowork"
+                    className="size-7 rounded-lg object-cover ring-1 ring-border/50"
+                  />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/80">
+                    {t('messageList.homeWorkspaceCaption')}
+                  </div>
+                  <div className="truncate text-sm font-medium text-foreground">
+                    {activeProject?.name ?? t('projectHome.noProjectSelected')}
+                  </div>
+                </div>
+              </div>
+              <div className="mt-3 space-y-2 text-[11px] text-muted-foreground">
+                <div className="flex items-start gap-2">
+                  <FolderOpen className="mt-0.5 size-3.5 shrink-0" />
+                  <span className="line-clamp-2 break-all">
+                    {workingFolder ?? t('projectHome.noWorkingFolder')}
+                  </span>
+                </div>
+                {sshConnectionId ? (
+                  <div className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-background px-2 py-1 text-[10px] text-foreground/80">
+                    <span>SSH</span>
+                  </div>
+                ) : null}
+              </div>
+            </div>
           </div>
         </div>
 
-        <div className="mt-auto">
-          <div className="mx-auto w-full max-w-4xl">
-            <InputArea
-              sessionId={null}
-              onSend={handleSend}
-              onSelectFolder={mode !== 'chat' ? handleOpenFolderDialog : undefined}
-              workingFolder={workingFolder}
-              hideWorkingFolderIndicator
-              isStreaming={false}
-            />
-          </div>
+        <div className="mt-4">
+          <InputArea
+            sessionId={null}
+            onSend={handleSend}
+            onSelectFolder={mode !== 'chat' ? handleOpenFolderDialog : undefined}
+            workingFolder={workingFolder}
+            hideWorkingFolderIndicator
+            isStreaming={false}
+          />
+        </div>
 
-          {mode !== 'chat' && (
-            <WorkingFolderSelectorDialog
-              open={folderDialogOpen}
-              onOpenChange={setFolderDialogOpen}
-              workingFolder={workingFolder}
-              sshConnectionId={sshConnectionId}
-              onSelectLocalFolder={(folderPath) =>
-                updateHomeProjectDirectory({
-                  workingFolder: folderPath,
-                  sshConnectionId: null
-                })
-              }
-              onSelectSshFolder={(folderPath, connectionId) =>
-                updateHomeProjectDirectory({
-                  workingFolder: folderPath,
-                  sshConnectionId: connectionId
-                })
-              }
-            />
-          )}
+        {mode !== 'chat' && (
+          <WorkingFolderSelectorDialog
+            open={folderDialogOpen}
+            onOpenChange={setFolderDialogOpen}
+            workingFolder={workingFolder}
+            sshConnectionId={sshConnectionId}
+            onSelectLocalFolder={(folderPath) =>
+              updateHomeProjectDirectory({
+                workingFolder: folderPath,
+                sshConnectionId: null
+              })
+            }
+            onSelectSshFolder={(folderPath, connectionId) =>
+              updateHomeProjectDirectory({
+                workingFolder: folderPath,
+                sshConnectionId: connectionId
+              })
+            }
+          />
+        )}
 
-          <div className="mx-auto mt-4 flex w-full max-w-3xl items-center justify-between gap-3 rounded-xl border bg-primary/5 px-5 py-3">
+        <div className="mt-4 grid gap-3 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
+          <div className="flex items-start justify-between gap-3 rounded-xl border border-border/60 bg-primary/5 px-4 py-3">
             <div className="min-w-0">
               <div className="flex items-center gap-2 text-sm font-medium text-foreground">
                 <BookOpen className="size-4 text-primary" />
                 <span>{t('guide.bannerTitle')}</span>
               </div>
-              <p className="mt-1 text-xs text-muted-foreground">{t('guide.bannerDesc')}</p>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                {t('guide.bannerDesc')}
+              </p>
             </div>
             <Button
               variant="outline"
               size="sm"
-              className="shrink-0"
+              className="h-8 shrink-0"
               onClick={() => useUIStore.getState().setConversationGuideOpen(true)}
             >
               {t('guide.openButton')}
             </Button>
           </div>
 
-          {/* Keyboard shortcuts hint */}
-          <div className="mx-auto mt-4 w-full max-w-3xl rounded-xl border bg-muted/30 px-5 py-3">
-            <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-[11px]">
+          <div className="rounded-xl border border-border/60 bg-muted/20 px-4 py-3">
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-[11px]">
               <div className="flex items-center gap-2">
-                <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                <kbd className="rounded bg-background px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
                   Ctrl+N
                 </kbd>
-                <span className="text-muted-foreground/60">{t('messageList.newChat')}</span>
+                <span className="text-muted-foreground/70">{t('messageList.newChat')}</span>
               </div>
               <div className="flex items-center gap-2">
-                <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                <kbd className="rounded bg-background px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
                   Ctrl+K
                 </kbd>
-                <span className="text-muted-foreground/60">{t('messageList.commands')}</span>
+                <span className="text-muted-foreground/70">{t('messageList.commands')}</span>
               </div>
               <div className="flex items-center gap-2">
-                <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                <kbd className="rounded bg-background px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
                   Ctrl+B
                 </kbd>
-                <span className="text-muted-foreground/60">{t('messageList.sidebarShortcut')}</span>
+                <span className="text-muted-foreground/70">{t('messageList.sidebarShortcut')}</span>
               </div>
               <div className="flex items-center gap-2">
-                <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                <kbd className="rounded bg-background px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
                   Ctrl+/
                 </kbd>
-                <span className="text-muted-foreground/60">
+                <span className="text-muted-foreground/70">
                   {t('messageList.shortcutsShortcut')}
                 </span>
               </div>
               <div className="flex items-center gap-2">
-                <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                <kbd className="rounded bg-background px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
                   Ctrl+,
                 </kbd>
-                <span className="text-muted-foreground/60">
+                <span className="text-muted-foreground/70">
                   {t('messageList.settingsShortcut')}
                 </span>
               </div>
               <div className="flex items-center gap-2">
-                <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                <kbd className="rounded bg-background px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
                   Ctrl+D
                 </kbd>
-                <span className="text-muted-foreground/60">
+                <span className="text-muted-foreground/70">
                   {t('messageList.duplicateShortcut')}
                 </span>
               </div>

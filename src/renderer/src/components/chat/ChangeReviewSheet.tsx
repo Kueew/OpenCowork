@@ -1,16 +1,28 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import { Check, CheckCircle2, Copy, FileCode, Loader2, RotateCcw, X, XCircle } from 'lucide-react'
+import {
+  Check,
+  CheckCircle2,
+  ChevronDown,
+  Copy,
+  FileCode,
+  Loader2,
+  RotateCcw,
+  X,
+  XCircle
+} from 'lucide-react'
 import { Button } from '@renderer/components/ui/button'
 import { Sheet, SheetContent } from '@renderer/components/ui/sheet'
 import { MONO_FONT } from '@renderer/lib/constants'
 import { IPC } from '@renderer/lib/ipc/channels'
 import { ipcClient } from '@renderer/lib/ipc/ipc-client'
 import { cn } from '@renderer/lib/utils'
-import type { AgentRunChangeSet, AgentRunFileChange } from '@renderer/stores/agent-store'
+import type { AgentRunChangeSet } from '@renderer/stores/agent-store'
 import { useAgentStore } from '@renderer/stores/agent-store'
 import { CodeDiffViewer } from './CodeDiffViewer'
 import {
+  actionableSourceChanges,
+  aggregateDisplayableRunFileChanges,
   buildDiffCopyText,
   canRenderInlineSnapshot,
   computeDiff,
@@ -18,8 +30,10 @@ import {
   fileName,
   foldContext,
   lineCount,
+  matchesAggregatedChangeId,
   snapshotText,
-  summarizeTrackedChange
+  summarizeTrackedChange,
+  type AggregatedFileChange
 } from './file-change-utils'
 
 interface ChangeReviewSheetProps {
@@ -34,16 +48,78 @@ interface LoadedChangeContent {
   afterText: string
 }
 
-function actionLabelKey(change: AgentRunFileChange): 'fileChange.new' | 'fileChange.edited' {
+function isLoadedChangeContent(value: unknown): value is LoadedChangeContent {
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    'beforeText' in value &&
+    'afterText' in value &&
+    typeof value.beforeText === 'string' &&
+    typeof value.afterText === 'string'
+  )
+}
+
+function isErrorResult(value: unknown): value is { error: string } {
+  return !!value && typeof value === 'object' && 'error' in value && typeof value.error === 'string'
+}
+
+async function loadSnapshotSide(
+  change: AggregatedFileChange,
+  side: 'before' | 'after'
+): Promise<string | { error: string } | null> {
+  const sourceChange =
+    side === 'before'
+      ? change.sourceChanges[0]
+      : change.sourceChanges[change.sourceChanges.length - 1]
+  if (!sourceChange) return null
+
+  const snapshot = side === 'before' ? sourceChange.before : sourceChange.after
+  if (side === 'before' && !snapshot.exists) return ''
+  if (canRenderInlineSnapshot(snapshot)) {
+    return snapshotText(snapshot)
+  }
+
+  const result = await ipcClient.invoke(IPC.AGENT_CHANGES_SNAPSHOT_CONTENT, {
+    runId: sourceChange.runId,
+    changeId: sourceChange.id,
+    side
+  })
+
+  if (isErrorResult(result)) return result
+  if (result && typeof result === 'object' && 'text' in result && typeof result.text === 'string') {
+    return result.text
+  }
+  return null
+}
+
+async function loadAggregatedChangeContent(
+  change: AggregatedFileChange
+): Promise<LoadedChangeContent | { error: string } | null> {
+  const [beforeText, afterText] = await Promise.all([
+    loadSnapshotSide(change, 'before'),
+    loadSnapshotSide(change, 'after')
+  ])
+
+  if (isErrorResult(beforeText)) return beforeText
+  if (isErrorResult(afterText)) return afterText
+  if (typeof beforeText !== 'string' || typeof afterText !== 'string') return null
+
+  return {
+    beforeText,
+    afterText
+  }
+}
+
+function actionLabelKey(change: AggregatedFileChange): 'fileChange.new' | 'fileChange.edited' {
   return change.op === 'create' ? 'fileChange.new' : 'fileChange.edited'
 }
 
-function isActionableChange(change: AgentRunFileChange): boolean {
-  return change.status === 'open' || change.status === 'conflicted'
+function isActionableChange(change: AggregatedFileChange): boolean {
+  return actionableSourceChanges(change).length > 0
 }
 
 function statusLabelKey(
-  change: AgentRunFileChange
+  change: AggregatedFileChange
 ):
   | 'fileChange.status.accepted'
   | 'fileChange.status.reverted'
@@ -55,7 +131,7 @@ function statusLabelKey(
   return 'fileChange.status.pending'
 }
 
-function statusTone(change: AgentRunFileChange): string {
+function statusTone(change: AggregatedFileChange): string {
   if (change.status === 'accepted') {
     return 'text-emerald-300'
   }
@@ -72,11 +148,11 @@ function actionTone(): string {
   return 'text-zinc-400'
 }
 
-function transportTone(change: AgentRunFileChange): string {
+function transportTone(change: AggregatedFileChange): string {
   return change.transport === 'ssh' ? 'text-sky-300' : 'text-zinc-400'
 }
 
-function ActionLabel({ change }: { change: AgentRunFileChange }): React.JSX.Element {
+function ActionLabel({ change }: { change: AggregatedFileChange }): React.JSX.Element {
   const { t } = useTranslation('chat')
   return (
     <span className={cn('inline-flex items-center text-[10px] font-medium', actionTone())}>
@@ -158,7 +234,7 @@ function EmptyState(): React.JSX.Element {
   )
 }
 
-function ChangeDetail({ change }: { change: AgentRunFileChange }): React.JSX.Element {
+function ChangeDetail({ change }: { change: AggregatedFileChange }): React.JSX.Element {
   const { t } = useTranslation('chat')
   const [loadedContent, setLoadedContent] = React.useState<LoadedChangeContent | null>(null)
   const [isLoading, setIsLoading] = React.useState(false)
@@ -182,21 +258,11 @@ function ChangeDetail({ change }: { change: AgentRunFileChange }): React.JSX.Ele
       setIsLoading(true)
       setLoadError(null)
       try {
-        const result = await ipcClient.invoke(IPC.AGENT_CHANGES_DIFF_CONTENT, {
-          runId: change.runId,
-          changeId: change.id
-        })
+        const result = await loadAggregatedChangeContent(change)
 
         if (cancelled) return
 
-        if (
-          result &&
-          typeof result === 'object' &&
-          'beforeText' in result &&
-          'afterText' in result &&
-          typeof result.beforeText === 'string' &&
-          typeof result.afterText === 'string'
-        ) {
+        if (isLoadedChangeContent(result)) {
           setLoadedContent({
             beforeText: result.beforeText,
             afterText: result.afterText
@@ -204,12 +270,7 @@ function ChangeDetail({ change }: { change: AgentRunFileChange }): React.JSX.Ele
           return
         }
 
-        if (
-          result &&
-          typeof result === 'object' &&
-          'error' in result &&
-          typeof result.error === 'string'
-        ) {
+        if (isErrorResult(result)) {
           setLoadError(result.error)
           return
         }
@@ -289,12 +350,12 @@ function ChangeDetail({ change }: { change: AgentRunFileChange }): React.JSX.Ele
 
 function ChangeRow({
   change,
-  selected,
-  onSelect
+  expanded,
+  onToggle
 }: {
-  change: AgentRunFileChange
-  selected: boolean
-  onSelect: () => void
+  change: AggregatedFileChange
+  expanded: boolean
+  onToggle: () => void
 }): React.JSX.Element {
   const { t } = useTranslation(['chat', 'common'])
   const acceptFileChange = useAgentStore((state) => state.acceptFileChange)
@@ -302,13 +363,16 @@ function ChangeRow({
   const [isAccepting, setIsAccepting] = React.useState(false)
   const [isRollingBack, setIsRollingBack] = React.useState(false)
   const summary = React.useMemo(() => summarizeTrackedChange(change), [change])
+  const actionableChanges = React.useMemo(() => actionableSourceChanges(change), [change])
   const actionable = isActionableChange(change)
 
   const handleAccept = async (): Promise<void> => {
     if (!actionable) return
     setIsAccepting(true)
     try {
-      await acceptFileChange(change.runId, change.id)
+      for (const entry of actionableChanges) {
+        await acceptFileChange(entry.runId, entry.id)
+      }
     } finally {
       setIsAccepting(false)
     }
@@ -318,34 +382,57 @@ function ChangeRow({
     if (!actionable) return
     setIsRollingBack(true)
     try {
-      await rollbackFileChange(change.runId, change.id)
+      for (const entry of [...actionableChanges].reverse()) {
+        await rollbackFileChange(entry.runId, entry.id)
+      }
     } finally {
       setIsRollingBack(false)
     }
   }
 
   return (
-    <div className="px-2 py-0.5">
-      <div
-        className={cn(
-          'group relative flex items-center gap-2 rounded-md px-2.5 py-2 transition-colors',
-          selected ? 'bg-white/[0.03]' : 'hover:bg-white/[0.015]'
-        )}
-      >
+    <div
+      className={cn(
+        'overflow-hidden rounded-lg border transition-colors',
+        expanded
+          ? 'border-white/[0.12] bg-white/[0.03]'
+          : 'border-white/[0.06] bg-[#0f1012] hover:border-white/[0.1]'
+      )}
+    >
+      <div className="flex items-start gap-1.5 px-2.5 py-2">
         <button
           type="button"
-          className="min-w-0 flex flex-1 items-center gap-1.5 text-left"
-          onClick={onSelect}
+          className="min-w-0 flex flex-1 items-start gap-2.5 text-left"
+          onClick={onToggle}
           title={change.filePath}
+          aria-expanded={expanded}
         >
-          <ActionLabel change={change} />
-          <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-sky-300">
-            {fileName(change.filePath)}
-          </span>
-          <span className="shrink-0 text-[10px] font-medium text-emerald-300">
-            +{summary.added}
-          </span>
-          <span className="shrink-0 text-[10px] font-medium text-red-300">-{summary.deleted}</span>
+          <ChevronDown
+            className={cn(
+              'mt-0.5 size-3.5 shrink-0 transition-transform duration-200',
+              expanded ? 'rotate-180 text-zinc-300' : 'text-zinc-600'
+            )}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+              <ActionLabel change={change} />
+              <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-sky-300">
+                {fileName(change.filePath)}
+              </span>
+              <span className="shrink-0 text-[10px] font-medium text-emerald-300">
+                +{summary.added}
+              </span>
+              <span className="shrink-0 text-[10px] font-medium text-red-300">
+                -{summary.deleted}
+              </span>
+            </div>
+            <div
+              className="mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap text-[10px] text-zinc-500"
+              style={{ fontFamily: MONO_FONT }}
+            >
+              {change.filePath}
+            </div>
+          </div>
         </button>
 
         {actionable ? (
@@ -384,13 +471,31 @@ function ChangeRow({
             </Button>
           </div>
         ) : change.status === 'accepted' ? (
-          <CheckCircle2 className="size-4 shrink-0 text-emerald-400" />
+          <CheckCircle2 className="mt-1 size-4 shrink-0 text-emerald-400" />
         ) : change.status === 'reverted' ? (
-          <RotateCcw className="size-4 shrink-0 text-zinc-500" />
+          <RotateCcw className="mt-1 size-4 shrink-0 text-zinc-500" />
         ) : (
-          <XCircle className="size-4 shrink-0 text-amber-400" />
+          <XCircle className="mt-1 size-4 shrink-0 text-amber-400" />
         )}
       </div>
+
+      {expanded ? (
+        <div className="border-t border-white/[0.06] px-3 pb-3 pt-2.5">
+          <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px]">
+            <span className={cn(statusTone(change))}>{t(statusLabelKey(change))}</span>
+            <span className={cn(transportTone(change))}>
+              {t(`fileChange.transport.${change.transport}`)}
+            </span>
+          </div>
+          <div
+            className="mb-2 break-all text-[10px] text-zinc-500"
+            style={{ fontFamily: MONO_FONT }}
+          >
+            {change.filePath}
+          </div>
+          <ChangeDetail change={change} />
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -416,8 +521,11 @@ export function ChangeReviewPanelContent({
   const [isRollingBackAll, setIsRollingBackAll] = React.useState(false)
   const [isRefreshing, setIsRefreshing] = React.useState(false)
   const requestedRunIdRef = React.useRef<string | null>(null)
-  const lastFocusRequestRef = React.useRef<string | null>(null)
   const changeSet = changeSetOverride ?? storedChangeSet
+  const aggregatedChanges = React.useMemo(
+    () => aggregateDisplayableRunFileChanges(changeSet?.changes ?? []),
+    [changeSet?.changes]
+  )
 
   React.useEffect(() => {
     if (changeSetOverride || changeSet || requestedRunIdRef.current === runId) return
@@ -443,48 +551,19 @@ export function ChangeReviewPanelContent({
       return
     }
 
-    const focusKey = `${runId}:${initialChangeId ?? ''}`
-    if (lastFocusRequestRef.current === focusKey) return
-    lastFocusRequestRef.current = focusKey
-
-    if (initialChangeId && changeSet.changes.some((change) => change.id === initialChangeId)) {
-      setSelectedChangeId(initialChangeId)
-      return
-    }
-
-    const preferred =
-      changeSet.changes.find(
-        (change) => change.status === 'open' || change.status === 'conflicted'
-      ) ?? changeSet.changes[0]
-    setSelectedChangeId(preferred?.id ?? null)
-  }, [changeSet, initialChangeId, runId])
-
-  React.useEffect(() => {
-    if (!changeSet || changeSet.changes.length === 0) {
-      setSelectedChangeId(null)
-      return
-    }
-
-    const hasSelected = selectedChangeId
-      ? changeSet.changes.some((change) => change.id === selectedChangeId)
-      : false
-    if (hasSelected) return
-
-    const preferred =
-      changeSet.changes.find(
-        (change) => change.status === 'open' || change.status === 'conflicted'
-      ) ?? changeSet.changes[0]
-    setSelectedChangeId(preferred?.id ?? null)
-  }, [changeSet, selectedChangeId])
-
-  const selectedChange =
-    changeSet?.changes.find((change) => change.id === selectedChangeId) ??
-    changeSet?.changes[0] ??
-    null
+    setSelectedChangeId((current) => {
+      const preferredId = current ?? initialChangeId
+      if (!preferredId) return null
+      const matched = aggregatedChanges.find((change) =>
+        matchesAggregatedChangeId(change, preferredId)
+      )
+      return matched?.id ?? null
+    })
+  }, [aggregatedChanges, changeSet, initialChangeId])
 
   const summary = React.useMemo(
     () =>
-      (changeSet?.changes ?? []).reduce(
+      aggregatedChanges.reduce(
         (acc, change) => {
           const next = summarizeTrackedChange(change)
           acc.added += next.added
@@ -493,15 +572,15 @@ export function ChangeReviewPanelContent({
         },
         { added: 0, deleted: 0 }
       ),
-    [changeSet]
+    [aggregatedChanges]
   )
 
   const pendingCount = React.useMemo(
     () =>
-      (changeSet?.changes ?? []).filter(
+      aggregatedChanges.filter(
         (change) => change.status === 'open' || change.status === 'conflicted'
       ).length,
-    [changeSet]
+    [aggregatedChanges]
   )
   const actionable = pendingCount > 0
 
@@ -532,7 +611,7 @@ export function ChangeReviewPanelContent({
     )
   }
 
-  if (!changeSet) {
+  if (!changeSet || aggregatedChanges.length === 0) {
     return <EmptyState />
   }
 
@@ -543,15 +622,15 @@ export function ChangeReviewPanelContent({
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-[11px] text-zinc-400">
-                {t('fileChange.filesChanged', { count: changeSet.changes.length })}
+                {t('fileChange.filesChanged', { count: aggregatedChanges.length })}
               </span>
-              <span className="text-sm font-medium text-emerald-300">+{summary.added}</span>
-              <span className="text-sm font-medium text-red-300">-{summary.deleted}</span>
+              <span className="text-xs font-semibold text-emerald-300">+{summary.added}</span>
+              <span className="text-xs font-semibold text-red-300">-{summary.deleted}</span>
             </div>
             <p className="mt-2 text-xs leading-5 text-zinc-500">
               {t('fileChange.reviewPanelDescription', {
                 defaultValue:
-                  'Review changed files for this run on the right and confirm or undo them individually.'
+                  'Review the changed files from this run, expand an item to inspect details, and confirm or undo each change.'
               })}
             </p>
           </div>
@@ -591,73 +670,26 @@ export function ChangeReviewPanelContent({
         </div>
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[320px_minmax(0,1fr)]">
-        <aside className="min-h-0 border-r border-white/[0.06]">
-          <div className="px-4 py-3">
-            <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-zinc-500">
-              {t('fileChange.reviewFileList', { defaultValue: 'Files' })}
-            </p>
-          </div>
-          <div className="overflow-y-auto">
-            {changeSet.changes.map((change) => (
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="px-4 py-2">
+          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-zinc-500">
+            {t('fileChange.reviewFileList', { defaultValue: 'Files' })}
+          </p>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+          <div className="space-y-1.5">
+            {aggregatedChanges.map((change) => (
               <ChangeRow
                 key={change.id}
                 change={change}
-                selected={change.id === selectedChange?.id}
-                onSelect={() => setSelectedChangeId(change.id)}
+                expanded={change.id === selectedChangeId}
+                onToggle={() =>
+                  setSelectedChangeId((current) => (current === change.id ? null : change.id))
+                }
               />
             ))}
           </div>
-        </aside>
-
-        <section className="min-h-0 bg-[#0f1012]">
-          {!selectedChange ? (
-            <div className="p-5">
-              <EmptyState />
-            </div>
-          ) : (
-            <div className="flex h-full min-h-0 flex-col">
-              <div className="px-5 py-4">
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <ActionLabel change={selectedChange} />
-                      <span className={cn('text-[11px]', statusTone(selectedChange))}>
-                        {t(statusLabelKey(selectedChange))}
-                      </span>
-                      <span className={cn('text-[11px]', transportTone(selectedChange))}>
-                        {t(`fileChange.transport.${selectedChange.transport}`)}
-                      </span>
-                    </div>
-                    <h3 className="mt-3 truncate text-lg font-semibold text-sky-300">
-                      {fileName(selectedChange.filePath)}
-                    </h3>
-                    <div
-                      className="mt-1 max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-[11px] text-zinc-500"
-                      title={selectedChange.filePath}
-                      style={{ fontFamily: MONO_FONT }}
-                    >
-                      {selectedChange.filePath}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-emerald-300">
-                      +{summarizeTrackedChange(selectedChange).added}
-                    </span>
-                    <span className="text-sm font-medium text-red-300">
-                      -{summarizeTrackedChange(selectedChange).deleted}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="min-h-0 flex-1 overflow-y-auto p-5">
-                <ChangeDetail change={selectedChange} />
-              </div>
-            </div>
-          )}
-        </section>
+        </div>
       </div>
     </div>
   )
@@ -674,7 +706,7 @@ export function ChangeReviewSheet({
       <SheetContent
         side="right"
         showCloseButton={false}
-        className="w-[min(1100px,calc(100vw-24px))] max-w-none gap-0 border-l border-white/10 bg-[#0d0e10]/98 p-0 text-zinc-100 shadow-[-24px_0_60px_rgba(0,0,0,0.45)] backdrop-blur-2xl sm:max-w-[1100px]"
+        className="w-[min(820px,calc(100vw-24px))] max-w-none gap-0 border-l border-white/10 bg-[#0d0e10]/98 p-0 text-zinc-100 shadow-[-24px_0_60px_rgba(0,0,0,0.45)] backdrop-blur-2xl sm:max-w-[820px]"
       >
         <ChangeReviewPanelContent
           runId={changeSet.runId}

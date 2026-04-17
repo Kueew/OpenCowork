@@ -1,12 +1,7 @@
 import * as React from 'react'
 import { FolderOpen, Monitor, Pencil, Server } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle
-} from '@renderer/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@renderer/components/ui/dialog'
 import { Input } from '@renderer/components/ui/input'
 import { Switch } from '@renderer/components/ui/switch'
 import { useSshStore } from '@renderer/stores/ssh-store'
@@ -33,6 +28,10 @@ interface DesktopDirectoryErrorResult {
 
 type DesktopDirectoryResult = DesktopDirectorySuccessResult | DesktopDirectoryErrorResult
 
+type PendingSelection =
+  | { kind: 'local'; folderPath: string }
+  | { kind: 'ssh'; folderPath: string; connectionId: string }
+
 interface WorkingFolderSelectorDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -57,6 +56,7 @@ export function WorkingFolderSelectorDialog({
   onSelectSshFolder
 }: WorkingFolderSelectorDialogProps): React.JSX.Element {
   const { t } = useTranslation('chat')
+  const { t: tCommon } = useTranslation('common')
   const { t: tLayout } = useTranslation('layout')
   const sshConnections = useSshStore((state) => state.connections)
   const sshLoaded = useSshStore((state) => state._loaded)
@@ -71,11 +71,15 @@ export function WorkingFolderSelectorDialog({
   const [sshDirInputs, setSshDirInputs] = React.useState<Record<string, string>>({})
   const [sshDirEditingId, setSshDirEditingId] = React.useState<string | null>(null)
   const [activeSection, setActiveSection] = React.useState<'local' | 'ssh'>(preferredSection)
+  const [pendingSelection, setPendingSelection] = React.useState<PendingSelection | null>(null)
+  const [creatingProject, setCreatingProject] = React.useState(false)
 
   const loadDesktopDirectories = React.useCallback(async (): Promise<void> => {
     setDesktopDirectoriesLoading(true)
     try {
-      const result = (await ipcClient.invoke('fs:list-desktop-directories')) as DesktopDirectoryResult
+      const result = (await ipcClient.invoke(
+        'fs:list-desktop-directories'
+      )) as DesktopDirectoryResult
       if ('error' in result || !Array.isArray(result.directories)) {
         setDesktopDirectories([])
         return
@@ -109,7 +113,40 @@ export function WorkingFolderSelectorDialog({
     setDefaultDirectoryInput(projectDefaultDirectory)
   }, [open, projectDefaultDirectory, projectDefaultDirectoryMode])
 
-  const normalizedWorkingFolder = workingFolder?.toLowerCase()
+  React.useEffect(() => {
+    if (!open) return
+    setCreatingProject(false)
+    if (createMode) {
+      setPendingSelection(null)
+      return
+    }
+    if (workingFolder?.trim()) {
+      if (sshConnectionId?.trim()) {
+        setPendingSelection({
+          kind: 'ssh',
+          folderPath: workingFolder,
+          connectionId: sshConnectionId
+        })
+        return
+      }
+      setPendingSelection({
+        kind: 'local',
+        folderPath: workingFolder
+      })
+      return
+    }
+    setPendingSelection(null)
+  }, [createMode, open, sshConnectionId, workingFolder])
+
+  const activeLocalWorkingFolder =
+    createMode && pendingSelection?.kind === 'local'
+      ? pendingSelection.folderPath
+      : (workingFolder ?? '')
+  const activeSshConnectionId =
+    createMode && pendingSelection?.kind === 'ssh'
+      ? pendingSelection.connectionId
+      : (sshConnectionId ?? null)
+  const normalizedWorkingFolder = activeLocalWorkingFolder.toLowerCase()
   const preferredDirectory =
     projectDefaultDirectoryMode === 'custom' && projectDefaultDirectory.trim()
       ? projectDefaultDirectory.trim()
@@ -163,10 +200,24 @@ export function WorkingFolderSelectorDialog({
     if (result.canceled || !result.path) {
       return
     }
+    if (createMode) {
+      setPendingSelection({
+        kind: 'local',
+        folderPath: result.path
+      })
+      return
+    }
     await onSelectLocalFolder(result.path)
     updateSettings({ lastProjectDirectory: deriveBaseDirectoryFromSelectedFolder(result.path) })
     onOpenChange(false)
-  }, [onOpenChange, onSelectLocalFolder, preferredDirectory, updateSettings])
+  }, [
+    createMode,
+    deriveBaseDirectoryFromSelectedFolder,
+    onOpenChange,
+    onSelectLocalFolder,
+    preferredDirectory,
+    updateSettings
+  ])
 
   const handlePickDefaultDirectory = React.useCallback(async (): Promise<void> => {
     const result = (await ipcClient.invoke('fs:select-folder', {
@@ -189,11 +240,18 @@ export function WorkingFolderSelectorDialog({
 
   const handleSelectDesktopFolder = React.useCallback(
     async (folderPath: string): Promise<void> => {
+      if (createMode) {
+        setPendingSelection({
+          kind: 'local',
+          folderPath
+        })
+        return
+      }
       await onSelectLocalFolder(folderPath)
       updateSettings({ lastProjectDirectory: folderPath })
       onOpenChange(false)
     },
-    [onOpenChange, onSelectLocalFolder, updateSettings]
+    [createMode, onOpenChange, onSelectLocalFolder, updateSettings]
   )
 
   const handleSelectSshFolder = React.useCallback(
@@ -202,12 +260,53 @@ export function WorkingFolderSelectorDialog({
       if (!conn) return
       const folderPath =
         sshDirInputs[connectionId]?.trim() || conn.defaultDirectory || DEFAULT_SSH_WORKDIR
+      if (createMode) {
+        setPendingSelection({
+          kind: 'ssh',
+          folderPath,
+          connectionId
+        })
+        setSshDirEditingId(null)
+        return
+      }
       await onSelectSshFolder(folderPath, connectionId)
       setSshDirEditingId(null)
       onOpenChange(false)
     },
-    [onOpenChange, onSelectSshFolder, sshConnections, sshDirInputs]
+    [createMode, onOpenChange, onSelectSshFolder, sshConnections, sshDirInputs]
   )
+
+  const handleCreateProject = React.useCallback(async (): Promise<void> => {
+    if (!createMode || !pendingSelection || creatingProject) return
+    setCreatingProject(true)
+    try {
+      if (pendingSelection.kind === 'ssh') {
+        await onSelectSshFolder(pendingSelection.folderPath, pendingSelection.connectionId)
+      } else {
+        updateSettings({
+          lastProjectDirectory: deriveBaseDirectoryFromSelectedFolder(pendingSelection.folderPath)
+        })
+        await onSelectLocalFolder(pendingSelection.folderPath)
+      }
+      onOpenChange(false)
+    } finally {
+      setCreatingProject(false)
+    }
+  }, [
+    createMode,
+    creatingProject,
+    deriveBaseDirectoryFromSelectedFolder,
+    onOpenChange,
+    onSelectLocalFolder,
+    onSelectSshFolder,
+    pendingSelection,
+    updateSettings
+  ])
+
+  const pendingSelectionConnection =
+    pendingSelection?.kind === 'ssh'
+      ? sshConnections.find((item) => item.id === pendingSelection.connectionId)
+      : null
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -222,9 +321,7 @@ export function WorkingFolderSelectorDialog({
           {createMode ? (
             <>
               <div className="mb-3 rounded-md border border-border/60 bg-muted/20 px-2 py-1.5">
-                <p className="text-[10px] text-muted-foreground/70">
-                  {t('input.projectName')}
-                </p>
+                <p className="text-[10px] text-muted-foreground/70">{t('input.projectName')}</p>
                 <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
                   <FolderOpen className="size-3 shrink-0" />
                   <span className="truncate">{suggestedProjectName}</span>
@@ -267,8 +364,7 @@ export function WorkingFolderSelectorDialog({
               <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
                 <FolderOpen className="size-3 shrink-0" />
                 <span className="truncate">
-                  {workingFolder ??
-                    t('input.noWorkingFolderSelected')}
+                  {workingFolder ?? t('input.noWorkingFolderSelected')}
                 </span>
               </div>
             </div>
@@ -286,9 +382,7 @@ export function WorkingFolderSelectorDialog({
                   </p>
                 </div>
                 <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-                  <span>
-                    {t('input.useCustomDirectory')}
-                  </span>
+                  <span>{t('input.useCustomDirectory')}</span>
                   <Switch
                     size="sm"
                     checked={customDefaultDirectoryEnabled}
@@ -316,8 +410,7 @@ export function WorkingFolderSelectorDialog({
               <p className="mt-1 truncate text-[10px] text-muted-foreground/60">
                 {(customDefaultDirectoryEnabled
                   ? defaultDirectoryInput.trim()
-                  : preferredDirectory) ||
-                  t('input.defaultProjectDirectoryFallback')}
+                  : preferredDirectory) || t('input.defaultProjectDirectoryFallback')}
               </p>
             </div>
           ) : null}
@@ -379,7 +472,7 @@ export function WorkingFolderSelectorDialog({
             {sshConnections.length > 0 ? (
               <div className="space-y-1.5">
                 {sshConnections.map((conn) => {
-                  const isSelected = sshConnectionId === conn.id
+                  const isSelected = activeSshConnectionId === conn.id
                   const dirValue =
                     sshDirInputs[conn.id] ?? conn.defaultDirectory ?? DEFAULT_SSH_WORKDIR
                   const displayDir = dirValue.trim() || DEFAULT_SSH_WORKDIR
@@ -473,6 +566,50 @@ export function WorkingFolderSelectorDialog({
               </span>
             )}
           </div>
+
+          {createMode ? (
+            <div className="mt-3 border-t pt-3">
+              <div className="rounded-md border border-border/60 bg-muted/20 px-2 py-2">
+                <p className="text-[10px] font-medium text-muted-foreground/80">
+                  {t('input.selectedWorkingFolder', {
+                    defaultValue: 'Selected working folder'
+                  })}
+                </p>
+                <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  {pendingSelection?.kind === 'ssh' ? (
+                    <Server className="size-3 shrink-0" />
+                  ) : (
+                    <FolderOpen className="size-3 shrink-0" />
+                  )}
+                  <span className="truncate">
+                    {pendingSelection?.folderPath || t('input.noWorkingFolderSelected')}
+                  </span>
+                </div>
+                {pendingSelectionConnection ? (
+                  <p className="mt-1 truncate text-[10px] text-muted-foreground/60">
+                    {pendingSelectionConnection.name} · {pendingSelectionConnection.username}@
+                    {pendingSelectionConnection.host}:{pendingSelectionConnection.port}
+                  </p>
+                ) : null}
+              </div>
+
+              <div className="mt-3 flex justify-end gap-2">
+                <button
+                  className="rounded-md border border-border/70 px-3 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+                  onClick={() => onOpenChange(false)}
+                >
+                  {tCommon('action.cancel')}
+                </button>
+                <button
+                  className="rounded-md border border-primary/50 bg-primary/10 px-3 py-1 text-[11px] font-medium text-primary transition-colors hover:bg-primary/15 disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={() => void handleCreateProject()}
+                  disabled={!pendingSelection || creatingProject}
+                >
+                  {t('input.createProject')}
+                </button>
+              </div>
+            </div>
+          ) : null}
         </div>
       </DialogContent>
     </Dialog>

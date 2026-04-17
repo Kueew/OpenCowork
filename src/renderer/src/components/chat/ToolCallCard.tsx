@@ -16,10 +16,10 @@ import {
   File,
   ListChecks,
   Circle,
-  CircleDot,
   Clock,
   Bot
 } from 'lucide-react'
+import { AnimatePresence, motion } from 'motion/react'
 import { cn } from '@renderer/lib/utils'
 import type { ToolCallStatus } from '@renderer/lib/agent/types'
 import type { ToolResultContent } from '@renderer/lib/api/types'
@@ -1283,53 +1283,78 @@ function TaskListOutputBlock({ output }: { output: string }): React.JSX.Element 
   if (!parsed) return <OutputBlock output={output} />
 
   const completed = parsed.filter((t) => t.status === 'completed').length
-  const statusIcon = (s: string): React.ReactNode => {
-    if (s === 'completed') return <CheckCircle2 className="size-3 text-green-500" />
-    if (s === 'in_progress') return <CircleDot className="size-3 text-blue-500" />
-    return <Circle className="size-3 text-muted-foreground/40" />
+  const shouldScroll = parsed.length > 6
+  const getStatus = (status: string): 'pending' | 'in_progress' | 'completed' => {
+    if (status === 'completed' || status === 'in_progress') return status
+    return 'pending'
+  }
+  const statusIcon = (status: 'pending' | 'in_progress' | 'completed'): React.ReactNode => {
+    if (status === 'completed') {
+      return <CheckCircle2 className="size-3.5 text-emerald-500" />
+    }
+
+    if (status === 'in_progress') {
+      return (
+        <span className="relative flex size-3.5 shrink-0 items-center justify-center">
+          <span className="absolute size-3 rounded-full bg-blue-500/20 animate-ping" />
+          <span className="relative size-2 rounded-full bg-blue-500" />
+        </span>
+      )
+    }
+
+    return <Circle className="size-3.5 text-muted-foreground/35" />
   }
 
   return (
-    <div>
-      <div className="mb-1 flex items-center gap-1.5">
-        <ListChecks className="size-3 text-blue-400" />
-        <p className="text-xs font-medium text-muted-foreground">{t('toolCall.taskList')}</p>
-        <span className="text-[9px] text-muted-foreground/40">
-          {completed}/{parsed.length}
-        </span>
+    <div className="space-y-2">
+      <div className="text-xs text-muted-foreground">
+        {t('todo.tasksDone', { completed, total: parsed.length })}
       </div>
-      <div className="rounded-md border bg-muted/10 divide-y divide-border/50 text-[12px]">
-        {parsed.map((task) => (
-          <div key={task.id} className="flex items-start gap-2 px-2.5 py-1.5">
-            <span className="mt-0.5 shrink-0">{statusIcon(task.status)}</span>
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <span
+      {parsed.length > 0 && (
+        <div className="overflow-hidden rounded-lg border border-border/60 bg-muted/[0.08]">
+          <div
+            className={cn(
+              'divide-y divide-border/60',
+              shouldScroll && 'max-h-80 overflow-y-auto overscroll-contain'
+            )}
+          >
+            {parsed.map((task, index) => {
+              const status = getStatus(task.status)
+              return (
+                <div
+                  key={task.id}
                   className={cn(
-                    'min-w-0 flex-1 font-medium',
-                    task.status === 'completed' && 'line-through text-muted-foreground/50'
+                    'grid grid-cols-[auto_auto_minmax(0,1fr)] items-start gap-2 px-3 py-2.5',
+                    status === 'in_progress' && 'bg-background/50'
                   )}
                 >
-                  {task.subject}
-                </span>
-                {task.owner && (
-                  <span className="shrink-0 text-[9px] text-muted-foreground/40">{task.owner}</span>
-                )}
-              </div>
-              {typeof task.description === 'string' && task.description.trim() && (
-                <p
-                  className={cn(
-                    'mt-0.5 text-[11px] leading-relaxed text-muted-foreground/60',
-                    task.status === 'completed' && 'line-through text-muted-foreground/40'
-                  )}
-                >
-                  {task.description}
-                </p>
-              )}
-            </div>
+                  <span
+                    className={cn(
+                      'min-w-6 pt-0.5 text-right text-[11px] font-medium tabular-nums',
+                      status === 'completed' && 'text-muted-foreground/35',
+                      status === 'pending' && 'text-muted-foreground/45',
+                      status === 'in_progress' && 'text-foreground/70'
+                    )}
+                  >
+                    {index + 1}.
+                  </span>
+                  <span className="pt-0.5">{statusIcon(status)}</span>
+                  <span
+                    className={cn(
+                      'line-clamp-2 min-w-0 text-[13px] leading-5',
+                      status === 'completed' && 'text-muted-foreground/55 line-through',
+                      status === 'pending' && 'text-muted-foreground/80',
+                      status === 'in_progress' && 'font-medium text-foreground'
+                    )}
+                  >
+                    {task.subject}
+                  </span>
+                </div>
+              )
+            })}
           </div>
-        ))}
-      </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -1480,18 +1505,24 @@ function StructuredInput({
     const description = input.description ? String(input.description) : null
     const timeout = input.timeout ? String(input.timeout) : null
     return (
-      <div className="space-y-1.5">
-        {description && <p className="text-[11px] text-zinc-500">{description}</p>}
-        <div
-          className="max-h-40 overflow-auto rounded-xl border border-white/[0.06] bg-[#111214] text-[11px] font-mono text-zinc-300"
-          style={{ fontFamily: MONO_FONT }}
-        >
-          <div className="flex items-start gap-1.5 px-3 py-2.5">
-            <span className="shrink-0 select-none text-zinc-500">$</span>
-            <span className="whitespace-pre-wrap break-all text-sky-300">{command}</span>
-          </div>
+      <div className="space-y-0.5">
+        <div className="flex items-start gap-1.5 text-xs">
+          <span className="shrink-0 select-none pt-0.5 font-mono text-[11px] text-zinc-500">$</span>
+          <span
+            className="break-all font-mono text-[11px] text-sky-300"
+            style={{ fontFamily: MONO_FONT }}
+          >
+            {command}
+          </span>
         </div>
-        {timeout && <span className="text-[10px] text-zinc-500">timeout: {timeout}ms</span>}
+        {(description || timeout) && (
+          <div className="flex flex-wrap items-center gap-2 pl-[18px]">
+            {description && <p className="text-[10px] text-muted-foreground/60">{description}</p>}
+            {timeout && (
+              <span className="text-[10px] text-muted-foreground/40">timeout: {timeout}ms</span>
+            )}
+          </div>
+        )}
       </div>
     )
   }
@@ -2031,7 +2062,7 @@ export function ToolCallCard({
     name === 'Write' && status !== 'streaming' && status !== 'running' && !!input.content
   const elapsed =
     startedAt && completedAt ? ((completedAt - startedAt) / 1000).toFixed(1) + 's' : null
-  const useCompactToolHeader = !isActive && (name === 'Bash' || name === 'Glob')
+  const useCompactToolHeader = !isActive && name === 'Glob'
   const compactPrimary = React.useMemo(
     () => compactToolPrimaryText(name, input, summary ?? undefined),
     [input, name, summary]
@@ -2129,158 +2160,176 @@ export function ToolCallCard({
       </button>
 
       {/* Expanded details */}
-      {open && (
-        <div
-          className={cn(
-            'min-w-0 overflow-hidden space-y-2',
-            useCompactToolHeader ? 'mt-0.5 pl-4' : 'mt-1.5 pl-5'
-          )}
-        >
-          {hideLivePayload ? (
-            <div className="space-y-2">
-              <StructuredInput name={name} input={input} />
-              <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground/70">
-                Detailed Write/Edit content stays hidden until the tool finishes.
-              </div>
-            </div>
-          ) : (
-            <>
-              {/* Write: show content with syntax highlighting */}
-              {showSettledWriteContent && name === 'Write' && (
-                <div>
-                  <div className="mb-1 flex items-center gap-1.5">
-                    <p className="text-xs font-medium text-muted-foreground">
-                      {t('toolCall.content')}
-                    </p>
-                    <span className="text-[9px] text-muted-foreground/40 font-mono">
-                      {detectLang(String(input.file_path ?? input.path ?? ''))} ·{' '}
-                      {typeof input.content === 'string' ? input.content.split('\n').length : '?'}{' '}
-                      lines
-                    </span>
-                    <CopyBtn text={String(input.content)} />
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2, ease: 'easeOut' }}
+            className={cn(
+              'min-w-0 overflow-hidden',
+              useCompactToolHeader ? 'mt-0.5 pl-4' : 'mt-1.5 pl-5'
+            )}
+          >
+            <div className="space-y-2 pb-0.5">
+              {hideLivePayload ? (
+                <div className="space-y-2">
+                  <StructuredInput name={name} input={input} />
+                  <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground/70">
+                    Detailed Write/Edit content stays hidden until the tool finishes.
                   </div>
-                  <LazySyntaxHighlighter
-                    language={detectLang(String(input.file_path ?? input.path ?? ''))}
-                    wrapLongLines
-                    customStyle={{
-                      margin: 0,
-                      padding: '0.5rem',
-                      borderRadius: '0.375rem',
-                      fontSize: '11px',
-                      maxHeight: '200px',
-                      overflow: 'auto',
-                      fontFamily: MONO_FONT
-                    }}
-                    codeTagProps={{ style: { fontFamily: 'inherit' } }}
-                  >
-                    {String(input.content)}
-                  </LazySyntaxHighlighter>
                 </div>
-              )}
-              {/* TaskCreate: checklist-style input */}
-              {name === 'TaskCreate' && !!input.subject && <TaskCreateInputBlock input={input} />}
-              {/* Structured Input — tool-specific rendering */}
-              {!(showSettledWriteContent || (name === 'TaskCreate' && !!input.subject)) && (
-                <StructuredInput name={name} input={input} />
-              )}
-              {/* Output — tool-specific rendering */}
-              {output && name === 'Read' && hasImageBlocks(output) && (
-                <ImageOutputBlock output={output} />
-              )}
-              {shouldRenderOutputPanels &&
-                output &&
-                name === 'Read' &&
-                !hasImageBlocks(output) &&
-                outputText && (
-                  <ReadOutputBlock
-                    output={outputText}
-                    filePath={String(input.file_path ?? input.path ?? '')}
-                  />
-                )}
-              {shouldRenderOutputPanels &&
-                name === 'Bash' &&
-                (status === 'running' || outputText) && (
-                  <BashOutputBlock
-                    output={outputText ?? ''}
-                    toolUseId={toolUseId}
-                    status={status}
-                  />
-                )}
-              {shouldRenderOutputPanels && output && name === 'Grep' && outputText && (
-                <GrepOutputBlock output={outputText} pattern={String(input.pattern ?? '')} />
-              )}
-              {shouldRenderOutputPanels && output && name === 'Glob' && outputText && (
-                <GlobOutputBlock output={outputText} />
-              )}
-              {shouldRenderOutputPanels && output && name === 'LS' && outputText && (
-                <LSOutputBlock output={outputText} />
-              )}
-              {shouldRenderOutputPanels && output && name === 'TaskList' && outputText && (
-                <TaskListOutputBlock output={outputText} />
-              )}
-              {shouldRenderOutputPanels &&
-                output &&
-                ['Edit', 'Write', 'Delete'].includes(name) &&
-                (() => {
-                  const s = outputText ?? ''
-                  const parsed = decodeStructuredToolResult(s)
-                  const success = !!(parsed && !Array.isArray(parsed) && parsed.success === true)
-                  return (
-                    <div className="flex items-center gap-1.5 text-xs">
-                      {success ? (
-                        <>
-                          <CheckCircle2 className="size-3 text-green-500" />
-                          <span className="text-green-500/70">
-                            {t('toolCall.appliedSuccessfully')}
-                          </span>
-                        </>
-                      ) : (
-                        <>
-                          <XCircle className="size-3 text-destructive" />
-                          <span className="text-destructive/70 font-mono truncate">
-                            {s.slice(0, 100)}
-                          </span>
-                        </>
-                      )}
+              ) : (
+                <>
+                  {/* Write: show content with syntax highlighting */}
+                  {showSettledWriteContent && name === 'Write' && (
+                    <div>
+                      <div className="mb-1 flex items-center gap-1.5">
+                        <p className="text-xs font-medium text-muted-foreground">
+                          {t('toolCall.content')}
+                        </p>
+                        <span className="text-[9px] text-muted-foreground/40 font-mono">
+                          {detectLang(String(input.file_path ?? input.path ?? ''))} ·{' '}
+                          {typeof input.content === 'string'
+                            ? input.content.split('\n').length
+                            : '?'}{' '}
+                          lines
+                        </span>
+                        <CopyBtn text={String(input.content)} />
+                      </div>
+                      <LazySyntaxHighlighter
+                        language={detectLang(String(input.file_path ?? input.path ?? ''))}
+                        wrapLongLines
+                        customStyle={{
+                          margin: 0,
+                          padding: '0.5rem',
+                          borderRadius: '0.375rem',
+                          fontSize: '11px',
+                          maxHeight: '200px',
+                          overflow: 'auto',
+                          fontFamily: MONO_FONT
+                        }}
+                        codeTagProps={{ style: { fontFamily: 'inherit' } }}
+                      >
+                        {String(input.content)}
+                      </LazySyntaxHighlighter>
                     </div>
-                  )
-                })()}
-              {shouldRenderOutputPanels &&
-                output &&
-                ![
-                  'Read',
-                  'Bash',
-                  'Grep',
-                  'Glob',
-                  'LS',
-                  'TaskCreate',
-                  'TaskUpdate',
-                  'TaskGet',
-                  'TaskList',
-                  'Edit',
-                  'Write',
-                  'Delete',
-                  'AskUserQuestion',
-                  'visualize_show_widget'
-                ].includes(name) &&
-                (hasImageBlocks(output) ? (
-                  <ImageOutputBlock output={output} />
-                ) : outputText ? (
-                  <OutputBlock output={outputText} />
-                ) : null)}
-              {/* Error */}
-              {displayError && (
-                <div>
-                  <p className="mb-1 text-xs font-medium text-destructive">{t('error.label')}</p>
-                  <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-words text-xs text-destructive font-mono">
-                    {displayError}
-                  </pre>
-                </div>
+                  )}
+                  {/* TaskCreate: checklist-style input */}
+                  {name === 'TaskCreate' && !!input.subject && (
+                    <TaskCreateInputBlock input={input} />
+                  )}
+                  {/* Structured Input — tool-specific rendering */}
+                  {!(showSettledWriteContent || (name === 'TaskCreate' && !!input.subject)) && (
+                    <StructuredInput name={name} input={input} />
+                  )}
+                  {/* Output — tool-specific rendering */}
+                  {output && name === 'Read' && hasImageBlocks(output) && (
+                    <ImageOutputBlock output={output} />
+                  )}
+                  {shouldRenderOutputPanels &&
+                    output &&
+                    name === 'Read' &&
+                    !hasImageBlocks(output) &&
+                    outputText && (
+                      <ReadOutputBlock
+                        output={outputText}
+                        filePath={String(input.file_path ?? input.path ?? '')}
+                      />
+                    )}
+                  {shouldRenderOutputPanels &&
+                    name === 'Bash' &&
+                    (status === 'running' || outputText) && (
+                      <BashOutputBlock
+                        output={outputText ?? ''}
+                        toolUseId={toolUseId}
+                        status={status}
+                      />
+                    )}
+                  {shouldRenderOutputPanels && output && name === 'Grep' && outputText && (
+                    <GrepOutputBlock output={outputText} pattern={String(input.pattern ?? '')} />
+                  )}
+                  {shouldRenderOutputPanels && output && name === 'Glob' && outputText && (
+                    <GlobOutputBlock output={outputText} />
+                  )}
+                  {shouldRenderOutputPanels && output && name === 'LS' && outputText && (
+                    <LSOutputBlock output={outputText} />
+                  )}
+                  {shouldRenderOutputPanels && output && name === 'TaskList' && outputText && (
+                    <TaskListOutputBlock output={outputText} />
+                  )}
+                  {shouldRenderOutputPanels &&
+                    output &&
+                    ['Edit', 'Write', 'Delete'].includes(name) &&
+                    (() => {
+                      const s = outputText ?? ''
+                      const parsed = decodeStructuredToolResult(s)
+                      const success = !!(
+                        parsed &&
+                        !Array.isArray(parsed) &&
+                        parsed.success === true
+                      )
+                      return (
+                        <div className="flex items-center gap-1.5 text-xs">
+                          {success ? (
+                            <>
+                              <CheckCircle2 className="size-3 text-green-500" />
+                              <span className="text-green-500/70">
+                                {t('toolCall.appliedSuccessfully')}
+                              </span>
+                            </>
+                          ) : (
+                            <>
+                              <XCircle className="size-3 text-destructive" />
+                              <span className="text-destructive/70 font-mono truncate">
+                                {s.slice(0, 100)}
+                              </span>
+                            </>
+                          )}
+                        </div>
+                      )
+                    })()}
+                  {shouldRenderOutputPanels &&
+                    output &&
+                    ![
+                      'Read',
+                      'Bash',
+                      'Grep',
+                      'Glob',
+                      'LS',
+                      'TaskCreate',
+                      'TaskUpdate',
+                      'TaskGet',
+                      'TaskList',
+                      'Edit',
+                      'Write',
+                      'Delete',
+                      'AskUserQuestion',
+                      'visualize_show_widget'
+                    ].includes(name) &&
+                    (hasImageBlocks(output) ? (
+                      <ImageOutputBlock output={output} />
+                    ) : outputText ? (
+                      <OutputBlock output={outputText} />
+                    ) : null)}
+                  {/* Error */}
+                  {displayError && (
+                    <div>
+                      <p className="mb-1 text-xs font-medium text-destructive">
+                        {t('error.label')}
+                      </p>
+                      <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-words text-xs text-destructive font-mono">
+                        {displayError}
+                      </pre>
+                    </div>
+                  )}
+                </>
               )}
-            </>
-          )}
-        </div>
-      )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }

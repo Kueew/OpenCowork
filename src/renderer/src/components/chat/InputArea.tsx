@@ -78,6 +78,7 @@ import {
   removePendingSessionMessage,
   subscribePendingSessionMessages,
   updatePendingSessionMessageDraft,
+  type SendMessageOptions,
   type PendingSessionMessageItem
 } from '@renderer/hooks/use-chat-actions'
 import {
@@ -309,11 +310,7 @@ function summarizeQueuedMessage(text: string): string {
 
 interface InputAreaProps {
   sessionId?: string | null
-  onSend: (
-    text: string,
-    images?: ImageAttachment[],
-    options?: { longRunningMode?: boolean }
-  ) => void
+  onSend: (text: string, images?: ImageAttachment[], options?: SendMessageOptions) => void
   onStop?: () => void
   onSelectFolder?: () => void
   isStreaming?: boolean
@@ -1417,7 +1414,8 @@ export function InputArea({
         : serialized
 
     onSend(message, attachedImages.length > 0 ? attachedImages : undefined, {
-      longRunningMode: effectiveLongRunningMode
+      longRunningMode: effectiveLongRunningMode,
+      clearCompletedTasksOnTurnStart: true
     })
 
     if (activeDraftKey) {

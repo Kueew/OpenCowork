@@ -2,7 +2,7 @@ import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { useShallow } from 'zustand/react/shallow'
 import { MessageSquare, CircleHelp, Briefcase, Code2, ShieldCheck, ArrowDown } from 'lucide-react'
-import type { ToolResultContent, UnifiedMessage } from '@renderer/lib/api/types'
+import type { ContentBlock, ToolResultContent, UnifiedMessage } from '@renderer/lib/api/types'
 import { useChatStore } from '@renderer/stores/chat-store'
 import { useUIStore } from '@renderer/stores/ui-store'
 import { useAgentStore } from '@renderer/stores/agent-store'
@@ -104,6 +104,34 @@ function getDistanceToBottom(ref: HTMLDivElement): number {
   return Math.max(0, ref.scrollHeight - ref.scrollTop - ref.clientHeight)
 }
 
+function buildOrchestrationMessageBindingSignature(messages: UnifiedMessage[]): string {
+  return messages
+    .map((message) => {
+      if (message.role !== 'assistant') {
+        return `${message.id}:${message.role}`
+      }
+
+      if (!Array.isArray(message.content)) {
+        return `${message.id}:${message.role}:string`
+      }
+
+      const toolUseSignature = (message.content as ContentBlock[])
+        .filter(
+          (block): block is Extract<ContentBlock, { type: 'tool_use' }> => block.type === 'tool_use'
+        )
+        .map((block) => {
+          const teamName =
+            typeof block.input.team_name === 'string' ? block.input.team_name.trim() : ''
+          const runsInBackground = block.input.run_in_background === true ? 'bg' : 'fg'
+          return `${block.id}:${block.name}:${teamName}:${runsInBackground}`
+        })
+        .join(',')
+
+      return `${message.id}:${message.role}:blocks:${message.content.length}:${toolUseSignature}`
+    })
+    .join('|')
+}
+
 const MessageRow = React.memo(function MessageRow({
   rowIndex,
   message,
@@ -194,10 +222,20 @@ export function MessageList(props: MessageListProps): React.JSX.Element {
     useAgentStore((s) => s.isSessionActive(activeSessionId)) || hasStreamingMessage
   const canSessionTriggerStreamingAutoScroll = isMainChatSession && isSessionRunning
 
+  const orchestrationMessageBindingSignature = React.useMemo(
+    () => buildOrchestrationMessageBindingSignature(messages),
+    [messages]
+  )
   const stableMessagesRef = React.useRef(messages)
-  if (!streamingMessageId) {
+  const stableMessagesBindingSignatureRef = React.useRef(orchestrationMessageBindingSignature)
+  if (
+    !streamingMessageId ||
+    stableMessagesBindingSignatureRef.current !== orchestrationMessageBindingSignature
+  ) {
     stableMessagesRef.current = messages
+    stableMessagesBindingSignatureRef.current = orchestrationMessageBindingSignature
   }
+  const orchestrationMessages = stableMessagesRef.current
 
   const listRef = React.useRef<HTMLDivElement | null>(null)
   const containerRef = React.useRef<HTMLDivElement | null>(null)
@@ -260,7 +298,7 @@ export function MessageList(props: MessageListProps): React.JSX.Element {
       hasSessionOrchestrationData
         ? buildOrchestrationRuns({
             sessionId: activeSessionId,
-            messages: stableMessagesRef.current,
+            messages: orchestrationMessages,
             activeSubAgents,
             completedSubAgents,
             subAgentHistory,
@@ -274,6 +312,7 @@ export function MessageList(props: MessageListProps): React.JSX.Element {
       activeTeam,
       completedSubAgents,
       hasSessionOrchestrationData,
+      orchestrationMessages,
       subAgentHistory,
       teamHistory
     ]

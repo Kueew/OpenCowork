@@ -84,6 +84,7 @@ import {
 } from '@renderer/lib/app-plugin/types'
 import { LazySyntaxHighlighter } from './LazySyntaxHighlighter'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@renderer/components/ui/dialog'
+import { aggregateDisplayableRunFileChanges } from './file-change-utils'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -925,6 +926,10 @@ export function AssistantMessage({
     msgId ? !!s.generatingImageMessages[msgId] : false
   )
   const runChangeSet = useAgentStore((s) => (msgId ? s.runChangesByRunId[msgId] : undefined))
+  const visibleRunChangeCount = useMemo(
+    () => (runChangeSet ? aggregateDisplayableRunFileChanges(runChangeSet.changes).length : 0),
+    [runChangeSet]
+  )
   const refreshRunChanges = useAgentStore((s) => s.refreshRunChanges)
 
   const stringSegments = useMemo(
@@ -1688,7 +1693,7 @@ export function AssistantMessage({
         ) : (
           <>
             {renderContent()}
-            {!isStreaming && runChangeSet && runChangeSet.changes.length > 0 && (
+            {!isStreaming && runChangeSet && visibleRunChangeCount > 0 && (
               <RunChangeReviewCard runId={runChangeSet.runId} changeSet={runChangeSet} />
             )}
             {!isStreaming && plainText && (

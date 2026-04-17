@@ -1,6 +1,29 @@
 import type { AgentRunFileChange } from '@renderer/stores/agent-store'
 import type { DiffViewerChunk, DiffViewerLine } from './CodeDiffViewer'
 
+export interface AggregatedFileChange {
+  id: string
+  runId: string
+  sessionId?: string
+  toolUseId?: string
+  toolName?: string
+  filePath: string
+  transport: AgentRunFileChange['transport']
+  connectionId?: string
+  op: AgentRunFileChange['op']
+  status: AgentRunFileChange['status']
+  before: AgentRunFileChange['before']
+  after: AgentRunFileChange['after']
+  createdAt: number
+  acceptedAt?: number
+  revertedAt?: number
+  conflict?: string
+  sourceChanges: AgentRunFileChange[]
+  sourceIds: string[]
+  firstChangeId: string
+  lastChangeId: string
+}
+
 export function detectLang(filePath: string): string {
   const ext = filePath.includes('.') ? (filePath.split('.').pop()?.toLowerCase() ?? '') : ''
   const map: Record<string, string> = {
@@ -90,6 +113,116 @@ export function canRenderInlineSnapshot(
   snapshot: AgentRunFileChange['before'] | AgentRunFileChange['after']
 ): boolean {
   return typeof snapshot.text === 'string'
+}
+
+type TrackedChangeLike = Pick<AgentRunFileChange, 'op' | 'before' | 'after'>
+
+export function hasDisplayableTrackedChange(change: TrackedChangeLike): boolean {
+  if (change.before.exists !== change.after.exists) return true
+  if (!change.before.exists && !change.after.exists) return false
+
+  if (change.before.hash !== null && change.after.hash !== null) {
+    return change.before.hash !== change.after.hash
+  }
+
+  const beforeText = snapshotText(change.before)
+  const afterText = snapshotText(change.after)
+  if (
+    change.before.text !== undefined ||
+    change.after.text !== undefined ||
+    change.before.previewText !== undefined ||
+    change.after.previewText !== undefined
+  ) {
+    return normalizeLineEndings(beforeText) !== normalizeLineEndings(afterText)
+  }
+
+  return true
+}
+
+function changeGroupKey(
+  change: Pick<AgentRunFileChange, 'filePath' | 'transport' | 'connectionId'>
+): string {
+  return [change.transport, change.connectionId ?? '', change.filePath].join('\u0000')
+}
+
+function aggregateStatus(changes: AgentRunFileChange[]): AgentRunFileChange['status'] {
+  if (changes.some((change) => change.status === 'open')) return 'open'
+  if (changes.some((change) => change.status === 'conflicted')) return 'conflicted'
+  if (changes.every((change) => change.status === 'reverted')) return 'reverted'
+  return 'accepted'
+}
+
+export function aggregateRunFileChanges(changes: AgentRunFileChange[]): AggregatedFileChange[] {
+  const grouped = new Map<string, AggregatedFileChange>()
+  const orderedKeys: string[] = []
+
+  for (const change of changes) {
+    const key = changeGroupKey(change)
+    const existing = grouped.get(key)
+    if (!existing) {
+      grouped.set(key, {
+        id: key,
+        runId: change.runId,
+        sessionId: change.sessionId,
+        toolUseId: change.toolUseId,
+        toolName: change.toolName,
+        filePath: change.filePath,
+        transport: change.transport,
+        connectionId: change.connectionId,
+        op: change.before.exists ? 'modify' : 'create',
+        status: change.status,
+        before: change.before,
+        after: change.after,
+        createdAt: change.createdAt,
+        acceptedAt: change.acceptedAt,
+        revertedAt: change.revertedAt,
+        conflict: change.conflict,
+        sourceChanges: [change],
+        sourceIds: [change.id],
+        firstChangeId: change.id,
+        lastChangeId: change.id
+      })
+      orderedKeys.push(key)
+      continue
+    }
+
+    existing.sessionId = change.sessionId ?? existing.sessionId
+    existing.toolUseId = change.toolUseId ?? existing.toolUseId
+    existing.toolName = change.toolName ?? existing.toolName
+    existing.after = change.after
+    existing.acceptedAt = change.acceptedAt ?? existing.acceptedAt
+    existing.revertedAt = change.revertedAt ?? existing.revertedAt
+    existing.conflict = change.conflict ?? existing.conflict
+    existing.sourceChanges.push(change)
+    existing.sourceIds.push(change.id)
+    existing.lastChangeId = change.id
+  }
+
+  return orderedKeys.map((key) => {
+    const aggregated = grouped.get(key)!
+    aggregated.status = aggregateStatus(aggregated.sourceChanges)
+    return aggregated
+  })
+}
+
+export function aggregateDisplayableRunFileChanges(
+  changes: AgentRunFileChange[]
+): AggregatedFileChange[] {
+  return aggregateRunFileChanges(changes).filter((change) => hasDisplayableTrackedChange(change))
+}
+
+export function matchesAggregatedChangeId(
+  change: AggregatedFileChange,
+  changeId?: string | null
+): boolean {
+  if (!changeId) return false
+  return change.id === changeId || change.sourceIds.includes(changeId)
+}
+
+export function actionableSourceChanges(change: AggregatedFileChange): AgentRunFileChange[] {
+  return change.sourceChanges.filter(
+    (entry) => entry.status === 'open' || entry.status === 'conflicted'
+  )
 }
 
 export type DiffLine = DiffViewerLine
@@ -182,7 +315,7 @@ export function summarizeDiff(lines: DiffLine[]): { added: number; deleted: numb
   )
 }
 
-export function summarizeTrackedChange(change: AgentRunFileChange): {
+export function summarizeTrackedChange(change: TrackedChangeLike): {
   added: number
   deleted: number
 } {

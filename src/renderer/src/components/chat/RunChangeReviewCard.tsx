@@ -1,58 +1,218 @@
 import * as React from 'react'
-import { Check, CheckCircle2, ChevronRight, Loader2, RotateCcw } from 'lucide-react'
+import { ChevronDown, ChevronUp, ExternalLink, Loader2, RotateCcw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { Button } from '@renderer/components/ui/button'
-import { cn } from '@renderer/lib/utils'
+import { MONO_FONT } from '@renderer/lib/constants'
+import { IPC } from '@renderer/lib/ipc/channels'
+import { ipcClient } from '@renderer/lib/ipc/ipc-client'
 import type { AgentRunChangeSet } from '@renderer/stores/agent-store'
 import { useAgentStore } from '@renderer/stores/agent-store'
 import { useUIStore } from '@renderer/stores/ui-store'
-import { fileName, summarizeTrackedChange } from './file-change-utils'
+import { CodeDiffViewer } from './CodeDiffViewer'
+import {
+  aggregateDisplayableRunFileChanges,
+  canRenderInlineSnapshot,
+  computeDiff,
+  foldContext,
+  lineCount,
+  snapshotText,
+  summarizeTrackedChange,
+  type AggregatedFileChange
+} from './file-change-utils'
 
 interface RunChangeReviewCardProps {
   runId: string
   changeSet: AgentRunChangeSet
 }
 
-function runStatusLabelKey(changeSet: AgentRunChangeSet): string {
-  return changeSet.status === 'accepted'
-    ? 'fileChange.runStatus.accepted'
-    : changeSet.status === 'reverted'
-      ? 'fileChange.runStatus.reverted'
-      : changeSet.status === 'conflicted'
-        ? 'fileChange.runStatus.conflicted'
-        : changeSet.status === 'partial'
-          ? 'fileChange.runStatus.partial'
-          : 'fileChange.runStatus.review'
+interface LoadedChangeContent {
+  beforeText: string
+  afterText: string
 }
 
-function runStatusTone(changeSet: AgentRunChangeSet): string {
-  return changeSet.status === 'accepted'
-    ? 'text-emerald-300'
-    : changeSet.status === 'reverted'
-      ? 'text-zinc-300'
-      : changeSet.status === 'conflicted'
-        ? 'text-amber-300'
-        : 'text-sky-300'
+function isLoadedChangeContent(value: unknown): value is LoadedChangeContent {
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    'beforeText' in value &&
+    'afterText' in value &&
+    typeof value.beforeText === 'string' &&
+    typeof value.afterText === 'string'
+  )
 }
 
-function rowActionTone(): string {
-  return 'text-zinc-400'
+function isErrorResult(value: unknown): value is { error: string } {
+  return !!value && typeof value === 'object' && 'error' in value && typeof value.error === 'string'
+}
+
+async function loadSnapshotSide(
+  change: AggregatedFileChange,
+  side: 'before' | 'after'
+): Promise<string | { error: string } | null> {
+  const sourceChange =
+    side === 'before'
+      ? change.sourceChanges[0]
+      : change.sourceChanges[change.sourceChanges.length - 1]
+  if (!sourceChange) return null
+
+  const snapshot = side === 'before' ? sourceChange.before : sourceChange.after
+  if (side === 'before' && !snapshot.exists) return ''
+  if (canRenderInlineSnapshot(snapshot)) {
+    return snapshotText(snapshot)
+  }
+
+  const result = await ipcClient.invoke(IPC.AGENT_CHANGES_SNAPSHOT_CONTENT, {
+    runId: sourceChange.runId,
+    changeId: sourceChange.id,
+    side
+  })
+
+  if (isErrorResult(result)) return result
+  if (result && typeof result === 'object' && 'text' in result && typeof result.text === 'string') {
+    return result.text
+  }
+  return null
+}
+
+async function loadAggregatedChangeContent(
+  change: AggregatedFileChange
+): Promise<LoadedChangeContent | { error: string } | null> {
+  const [beforeText, afterText] = await Promise.all([
+    loadSnapshotSide(change, 'before'),
+    loadSnapshotSide(change, 'after')
+  ])
+
+  if (isErrorResult(beforeText)) return beforeText
+  if (isErrorResult(afterText)) return afterText
+  if (typeof beforeText !== 'string' || typeof afterText !== 'string') return null
+
+  return {
+    beforeText,
+    afterText
+  }
+}
+
+function InlineChangePreview({ change }: { change: AggregatedFileChange }): React.JSX.Element {
+  const { t } = useTranslation('chat')
+  const [loadedContent, setLoadedContent] = React.useState<LoadedChangeContent | null>(null)
+  const [isLoading, setIsLoading] = React.useState(false)
+  const [loadError, setLoadError] = React.useState<string | null>(null)
+
+  const shouldLoadFullContent =
+    change.op === 'create'
+      ? !canRenderInlineSnapshot(change.after)
+      : !canRenderInlineSnapshot(change.before) || !canRenderInlineSnapshot(change.after)
+
+  React.useEffect(() => {
+    if (!shouldLoadFullContent) {
+      setLoadedContent(null)
+      setLoadError(null)
+      setIsLoading(false)
+      return
+    }
+
+    let cancelled = false
+    const load = async (): Promise<void> => {
+      setIsLoading(true)
+      setLoadError(null)
+      try {
+        const result = await loadAggregatedChangeContent(change)
+
+        if (cancelled) return
+
+        if (isLoadedChangeContent(result)) {
+          setLoadedContent({
+            beforeText: result.beforeText,
+            afterText: result.afterText
+          })
+          return
+        }
+
+        if (isErrorResult(result)) {
+          setLoadError(result.error)
+          return
+        }
+
+        setLoadError(
+          t('fileChange.loadDiffFailed', { defaultValue: 'Failed to load the full diff' })
+        )
+      } catch (error) {
+        if (!cancelled) {
+          setLoadError(error instanceof Error ? error.message : String(error))
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false)
+        }
+      }
+    }
+
+    void load()
+
+    return () => {
+      cancelled = true
+    }
+  }, [change, shouldLoadFullContent, t])
+
+  const beforeText =
+    loadedContent?.beforeText ?? (change.op === 'modify' ? snapshotText(change.before) : '')
+  const afterText = loadedContent?.afterText ?? snapshotText(change.after)
+  const diffLines = computeDiff(beforeText, afterText)
+  const diffChunks = foldContext(diffLines)
+
+  if (isLoading && !loadedContent && shouldLoadFullContent) {
+    return (
+      <div className="flex items-center gap-2 px-4 py-5 text-[11px] text-zinc-500">
+        <Loader2 className="size-3.5 animate-spin text-emerald-400" />
+        {t('thinking.thinkingEllipsis')}
+      </div>
+    )
+  }
+
+  if (loadError && !loadedContent && shouldLoadFullContent) {
+    return <div className="px-4 py-5 text-[11px] text-red-300/90">{loadError}</div>
+  }
+
+  if (change.op === 'create') {
+    return (
+      <div className="border-t border-white/[0.06] bg-[#111214] px-3 py-3">
+        <div className="flex items-center gap-3 px-4 py-2 text-[10px] text-zinc-500">
+          <span>{t('fileChange.lineCount', { count: lineCount(afterText) })}</span>
+        </div>
+        <CodeDiffViewer chunks={diffChunks} mode="inline" showModeToggle={false} />
+      </div>
+    )
+  }
+
+  return (
+    <div className="border-t border-white/[0.06] bg-[#111214] px-3 py-3">
+      <CodeDiffViewer chunks={diffChunks} mode="inline" showModeToggle={false} />
+    </div>
+  )
 }
 
 export function RunChangeReviewCard({
   runId,
   changeSet
-}: RunChangeReviewCardProps): React.JSX.Element {
+}: RunChangeReviewCardProps): React.JSX.Element | null {
   const { t } = useTranslation(['chat', 'common'])
-  const acceptRunChanges = useAgentStore((state) => state.acceptRunChanges)
   const rollbackRunChanges = useAgentStore((state) => state.rollbackRunChanges)
   const openDetailPanel = useUIStore((state) => state.openDetailPanel)
-  const [isAccepting, setIsAccepting] = React.useState(false)
+  const [expandedChangeId, setExpandedChangeId] = React.useState<string | null>(null)
   const [isRollingBack, setIsRollingBack] = React.useState(false)
+  const aggregatedChanges = React.useMemo(
+    () => aggregateDisplayableRunFileChanges(changeSet.changes),
+    [changeSet.changes]
+  )
+
+  React.useEffect(() => {
+    setExpandedChangeId((current) =>
+      current && aggregatedChanges.some((change) => change.id === current) ? current : null
+    )
+  }, [aggregatedChanges])
 
   const summary = React.useMemo(
     () =>
-      changeSet.changes.reduce(
+      aggregatedChanges.reduce(
         (acc, change) => {
           const stats = summarizeTrackedChange(change)
           acc.added += stats.added
@@ -61,26 +221,20 @@ export function RunChangeReviewCard({
         },
         { added: 0, deleted: 0 }
       ),
-    [changeSet]
+    [aggregatedChanges]
   )
 
   const pendingCount = React.useMemo(
     () =>
-      changeSet.changes.filter(
+      aggregatedChanges.filter(
         (change) => change.status === 'open' || change.status === 'conflicted'
       ).length,
-    [changeSet]
+    [aggregatedChanges]
   )
   const actionable = pendingCount > 0
-  const visibleChanges = changeSet.changes.slice(0, 3)
 
-  const handleAccept = async (): Promise<void> => {
-    setIsAccepting(true)
-    try {
-      await acceptRunChanges(runId)
-    } finally {
-      setIsAccepting(false)
-    }
+  if (aggregatedChanges.length === 0) {
+    return null
   }
 
   const handleRollback = async (): Promise<void> => {
@@ -92,138 +246,101 @@ export function RunChangeReviewCard({
     }
   }
 
-  const handleOpenReview = (nextChangeId: string | null): void => {
+  const handleOpenReviewForChange = (changeId: string): void => {
     openDetailPanel({
       type: 'change-review',
       runId,
-      initialChangeId: nextChangeId
+      initialChangeId: changeId
     })
   }
 
   return (
-    <div className="mt-4 text-zinc-100">
-      <div className="px-4 py-4">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <CheckCircle2 className="size-4 text-emerald-400" />
-              <span className={cn('text-[11px] font-medium', runStatusTone(changeSet))}>
-                {t(runStatusLabelKey(changeSet))}
-              </span>
-            </div>
-
-            <div className="mt-3 flex flex-wrap items-center gap-3">
-              <h3 className="text-base font-semibold text-zinc-50">
-                {t('fileChange.filesChanged', { count: changeSet.changes.length })}
-              </h3>
-              <span className="text-sm font-medium text-emerald-300">+{summary.added}</span>
-              <span className="text-sm font-medium text-red-300">-{summary.deleted}</span>
-            </div>
-
-            <p className="mt-2 text-xs leading-5 text-zinc-500">
-              {t('fileChange.runSummary', {
-                files: changeSet.changes.length,
-                pending: pendingCount
-              })}
-            </p>
-
-            {changeSet.status === 'conflicted' ? (
-              <p className="mt-2 text-xs leading-5 text-amber-300/90">
-                {t('fileChange.conflictedHint')}
-              </p>
-            ) : null}
-          </div>
-
-          <div className="flex shrink-0 flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              size="xs"
-              variant="ghost"
-              className="text-zinc-200 hover:bg-white/[0.04]"
-              onClick={() => handleOpenReview(changeSet.changes[0]?.id ?? null)}
-            >
-              {t('fileChange.openReview', { defaultValue: '查看更改' })}
-              <ChevronRight className="size-3.5" />
-            </Button>
-            <Button
-              type="button"
-              size="xs"
-              variant="ghost"
-              className="text-zinc-200 hover:bg-white/[0.04]"
-              onClick={() => void handleAccept()}
-              disabled={!actionable || isAccepting || isRollingBack}
-            >
-              {isAccepting ? (
-                <Loader2 className="size-3 animate-spin" />
-              ) : (
-                <Check className="size-3" />
-              )}
-              {t('action.allow', { ns: 'common' })}
-            </Button>
-            <Button
-              type="button"
-              size="xs"
-              variant="ghost"
-              className="text-zinc-200 hover:bg-white/[0.04]"
-              onClick={() => void handleRollback()}
-              disabled={!actionable || isAccepting || isRollingBack}
-            >
-              {isRollingBack ? (
-                <Loader2 className="size-3 animate-spin" />
-              ) : (
-                <RotateCcw className="size-3" />
-              )}
-              {t('action.undo', { ns: 'common' })}
-            </Button>
-          </div>
+    <div className="mt-3 overflow-hidden rounded-xl border border-white/[0.06] bg-[#242628] text-zinc-100 shadow-[0_10px_24px_rgba(0,0,0,0.2)]">
+      <div className="flex items-center justify-between gap-2 px-3 py-2.5">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          <h3 className="text-[11px] font-medium text-zinc-50">
+            {t('fileChange.filesChanged', { count: aggregatedChanges.length })}
+          </h3>
+          <span className="text-[12px] font-medium text-emerald-300">+{summary.added}</span>
+          <span className="text-[12px] font-medium text-red-300">-{summary.deleted}</span>
         </div>
+
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-zinc-300 transition-colors hover:bg-white/[0.05] hover:text-zinc-50 disabled:cursor-not-allowed disabled:opacity-40"
+          onClick={() => void handleRollback()}
+          disabled={!actionable || isRollingBack}
+        >
+          {isRollingBack ? (
+            <Loader2 className="size-3 animate-spin" />
+          ) : (
+            <RotateCcw className="size-3.5" />
+          )}
+          {t('action.undo', { ns: 'common' })}
+        </button>
       </div>
 
-      <div className="mt-1">
-        <div>
-          {visibleChanges.map((change) => {
-            const stats = summarizeTrackedChange(change)
-            return (
-              <button
-                key={change.id}
-                type="button"
-                onClick={() => handleOpenReview(change.id)}
-                className="group w-full px-2 py-0.5 text-left"
-              >
-                <div
-                  className="flex items-center gap-1.5 rounded-md px-2 py-1 text-zinc-400 transition-colors group-hover:bg-white/[0.015] group-hover:text-zinc-100"
+      <div className="border-t border-white/[0.06]">
+        {aggregatedChanges.map((change) => {
+          const stats = summarizeTrackedChange(change)
+          const expanded = expandedChangeId === change.id
+
+          return (
+            <div key={change.id} className="border-b border-white/[0.06] last:border-b-0">
+              <div className="flex items-stretch">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setExpandedChangeId((current) => (current === change.id ? null : change.id))
+                  }
+                  className="group flex min-w-0 flex-1 items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-white/[0.025]"
                   title={change.filePath}
                 >
-                  <span className={cn('shrink-0 text-[10px] font-medium', rowActionTone())}>
-                    {change.op === 'create' ? t('fileChange.new') : t('fileChange.edited')}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-sky-300 transition-colors group-hover:text-sky-200">
-                    {fileName(change.filePath)}
+                  <span
+                    className="min-w-0 flex-1 truncate text-[11px] text-zinc-100 transition-colors group-hover:text-white"
+                    style={{ fontFamily: MONO_FONT }}
+                  >
+                    {change.filePath}
                   </span>
                   <div className="flex shrink-0 items-center gap-1.5 text-[10px] font-medium">
                     <span className="text-emerald-300">+{stats.added}</span>
                     <span className="text-red-300">-{stats.deleted}</span>
                   </div>
-                  <ChevronRight className="size-3 shrink-0 text-zinc-600" />
-                </div>
-              </button>
-            )
-          })}
+                </button>
 
-          {changeSet.changes.length > visibleChanges.length ? (
-            <button
-              type="button"
-              onClick={() => handleOpenReview(changeSet.changes[visibleChanges.length]?.id ?? null)}
-              className="group w-full px-2 py-0.5 text-left"
-            >
-              <div className="flex items-center justify-center rounded-md px-2 py-2 text-xs text-zinc-500 transition-colors group-hover:bg-white/[0.015] group-hover:text-zinc-200">
-                {t('fileChange.moreFiles', {
-                  count: changeSet.changes.length - visibleChanges.length
-                })}
+                <div className="flex shrink-0 items-center gap-0.5 px-2">
+                  {expanded ? (
+                    <button
+                      type="button"
+                      className="rounded p-1 text-zinc-500 transition-colors hover:bg-white/[0.05] hover:text-zinc-200"
+                      onClick={() => handleOpenReviewForChange(change.lastChangeId)}
+                      title={t('fileChange.openReview', { defaultValue: 'Open review' })}
+                      aria-label={t('fileChange.openReview', { defaultValue: 'Open review' })}
+                    >
+                      <ExternalLink className="size-3" />
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="rounded p-1 text-zinc-500 transition-colors hover:bg-white/[0.05] hover:text-zinc-200"
+                    onClick={() =>
+                      setExpandedChangeId((current) => (current === change.id ? null : change.id))
+                    }
+                    aria-label={expanded ? 'Collapse change' : 'Expand change'}
+                  >
+                    {expanded ? (
+                      <ChevronUp className="size-3" />
+                    ) : (
+                      <ChevronDown className="size-3" />
+                    )}
+                  </button>
+                </div>
               </div>
-            </button>
-          ) : null}
-        </div>
+
+              {expanded ? <InlineChangePreview change={change} /> : null}
+            </div>
+          )
+        })}
       </div>
     </div>
   )
