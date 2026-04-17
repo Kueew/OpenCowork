@@ -2,11 +2,11 @@ import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   ChevronDown,
+  ChevronRight,
   CheckCircle2,
   XCircle,
   Copy,
   Check,
-  Terminal,
   SendHorizontal,
   Square,
   FileCode,
@@ -634,8 +634,7 @@ function BashOutputBlock({
   return (
     <div>
       <div className="mb-1 flex items-center gap-1.5">
-        <Terminal className="size-3 text-green-400" />
-        <p className="text-xs font-medium text-muted-foreground">{t('toolCall.terminal')}</p>
+        <span className="text-[10px] font-medium text-zinc-400">{t('Bash')}</span>
         {statusText && (
           <span
             className={cn(
@@ -661,12 +660,12 @@ function BashOutputBlock({
           </span>
         )}
         {processId && <span className="text-[9px] text-muted-foreground/30">{processId}</span>}
-        <span className="text-[9px] text-muted-foreground/30">{lineCount} lines</span>
+        <span className="text-[9px] text-zinc-500">{lineCount} lines</span>
         <CopyBtn text={text} />
       </div>
       <div
         ref={scrollRef}
-        className="max-h-72 overflow-auto rounded-md border bg-muted/30 text-[11px] font-mono dark:bg-zinc-950"
+        className="max-h-72 overflow-auto rounded-xl border border-white/[0.06] bg-[#111214] text-[11px] font-mono text-zinc-300"
         style={{ fontFamily: MONO_FONT }}
       >
         {text ? (
@@ -738,13 +737,11 @@ function BashOutputBlock({
                 />
               </>
             ) : (
-              <pre className="whitespace-pre-wrap break-words text-foreground/80 dark:text-zinc-300/80">
-                {displayed}
-              </pre>
+              <pre className="whitespace-pre-wrap break-words text-zinc-300">{displayed}</pre>
             )}
           </div>
         ) : (
-          <pre className="px-3 py-2 whitespace-pre-wrap break-words text-muted-foreground/70 dark:text-zinc-500/70">
+          <pre className="px-3 py-2 whitespace-pre-wrap break-words text-zinc-500">
             {t('toolCall.noOutputYet')}
           </pre>
         )}
@@ -1141,10 +1138,9 @@ function GlobOutputBlock({ output }: { output: string }): React.JSX.Element {
   return (
     <div>
       <div className="mb-1 flex items-center gap-1.5">
-        <FolderTree className="size-3 text-amber-400" />
-        <p className="text-xs font-medium text-muted-foreground">{t('toolCall.globMatches')}</p>
+        <span className="text-[10px] font-medium text-zinc-400">{t('Glob')}</span>
         <SearchStateBadge state={visualState} />
-        <span className="text-[9px] text-muted-foreground/40">
+        <span className="text-[9px] text-zinc-500">
           {t('toolCall.pathCount', { count: parsed.matches.length })}
         </span>
         <CopyBtn text={parsed.matches.join('\n')} />
@@ -1154,13 +1150,13 @@ function GlobOutputBlock({ output }: { output: string }): React.JSX.Element {
         <SearchEmptyState />
       ) : (
         <div
-          className="max-h-48 overflow-auto rounded-md border bg-muted/30 px-3 py-2 text-[11px] font-mono text-foreground/70 space-y-0.5 dark:bg-zinc-950 dark:text-zinc-400"
+          className="max-h-48 space-y-0.5 overflow-auto rounded-xl border border-white/[0.06] bg-[#111214] px-3 py-2 text-[11px] font-mono text-zinc-400"
           style={{ fontFamily: MONO_FONT }}
         >
           {visibleItems.map((p, i) => (
             <div
               key={i}
-              className="truncate cursor-pointer hover:text-blue-400 transition-colors"
+              className="truncate cursor-pointer text-sky-300 transition-colors hover:text-sky-200"
               title={`Click to insert: ${p}`}
               onClick={() => {
                 const short = p.split(/[\\/]/).slice(-2).join('/')
@@ -1173,7 +1169,7 @@ function GlobOutputBlock({ output }: { output: string }): React.JSX.Element {
             </div>
           ))}
           {hiddenCount > 0 && (
-            <div className="pt-1 text-[10px] text-muted-foreground/60">
+            <div className="pt-1 text-[10px] text-zinc-500">
               {t('toolCall.moreResultsHidden', { shown: visibleItems.length, hidden: hiddenCount })}
             </div>
           )}
@@ -1476,6 +1472,8 @@ function StructuredInput({
   name: string
   input: Record<string, unknown>
 }): React.JSX.Element {
+  const { t } = useTranslation('chat')
+
   // Bash: command in terminal-style block + description/timeout as fields
   if (name === 'Bash') {
     const command = String(input.command ?? '')
@@ -1483,19 +1481,17 @@ function StructuredInput({
     const timeout = input.timeout ? String(input.timeout) : null
     return (
       <div className="space-y-1.5">
-        {description && <p className="text-xs text-muted-foreground/60 italic">{description}</p>}
+        {description && <p className="text-[11px] text-zinc-500">{description}</p>}
         <div
-          className="max-h-40 overflow-auto rounded-md border bg-muted/30 text-[11px] font-mono dark:bg-zinc-950"
+          className="max-h-40 overflow-auto rounded-xl border border-white/[0.06] bg-[#111214] text-[11px] font-mono text-zinc-300"
           style={{ fontFamily: MONO_FONT }}
         >
-          <div className="flex items-start gap-1.5 px-3 py-2 text-green-400/80">
-            <span className="select-none text-green-500/60 shrink-0">$</span>
-            <span className="whitespace-pre-wrap break-all">{command}</span>
+          <div className="flex items-start gap-1.5 px-3 py-2.5">
+            <span className="shrink-0 select-none text-zinc-500">$</span>
+            <span className="whitespace-pre-wrap break-all text-sky-300">{command}</span>
           </div>
         </div>
-        {timeout && (
-          <span className="text-[10px] text-muted-foreground/40">timeout: {timeout}ms</span>
-        )}
+        {timeout && <span className="text-[10px] text-zinc-500">timeout: {timeout}ms</span>}
       </div>
     )
   }
@@ -1685,23 +1681,17 @@ function StructuredInput({
     const pattern = String(input.pattern ?? '')
     const path = input.path ? String(input.path) : null
     return (
-      <div className="space-y-0.5">
+      <div className="space-y-1">
         <div className="flex items-center gap-1.5 text-xs">
-          <FolderTree className="size-3 text-amber-400" />
-          <span
-            className="font-mono text-[11px] text-amber-400/80"
-            style={{ fontFamily: MONO_FONT }}
-          >
+          <span className="shrink-0 text-[10px] font-medium text-zinc-400">{t('Glob')}</span>
+          <span className="font-mono text-[11px] text-sky-300" style={{ fontFamily: MONO_FONT }}>
             {pattern}
           </span>
         </div>
         {path && (
-          <div className="pl-[18px]">
-            <span
-              className="text-[10px] text-muted-foreground/40 font-mono"
-              style={{ fontFamily: MONO_FONT }}
-            >
-              in {path}
+          <div>
+            <span className="text-[10px] text-zinc-500 font-mono" style={{ fontFamily: MONO_FONT }}>
+              {path}
             </span>
           </div>
         )}
@@ -1975,6 +1965,41 @@ export function ToolStatusDot({
   }
 }
 
+function compactToolPrimaryText(
+  name: string,
+  input: Record<string, unknown>,
+  fallback?: string
+): string {
+  if (name === 'Bash') {
+    const command =
+      typeof input.command === 'string' ? input.command.replace(/\s+/g, ' ').trim() : ''
+    return command || fallback || ''
+  }
+
+  if (name === 'Glob') {
+    const pattern = typeof input.pattern === 'string' ? input.pattern.trim() : ''
+    const path = typeof input.path === 'string' ? input.path.trim() : ''
+    return pattern || path || fallback || ''
+  }
+
+  return fallback || ''
+}
+
+function compactToolTitle(name: string, input: Record<string, unknown>, fallback?: string): string {
+  if (name === 'Bash') {
+    const command = typeof input.command === 'string' ? input.command : ''
+    return command || fallback || name
+  }
+
+  if (name === 'Glob') {
+    const pattern = typeof input.pattern === 'string' ? input.pattern : ''
+    const path = typeof input.path === 'string' ? input.path : ''
+    return [pattern, path].filter(Boolean).join('\n') || fallback || name
+  }
+
+  return fallback || name
+}
+
 export function ToolCallCard({
   toolUseId,
   name,
@@ -2006,64 +2031,111 @@ export function ToolCallCard({
     name === 'Write' && status !== 'streaming' && status !== 'running' && !!input.content
   const elapsed =
     startedAt && completedAt ? ((completedAt - startedAt) / 1000).toFixed(1) + 's' : null
+  const useCompactToolHeader = !isActive && (name === 'Bash' || name === 'Glob')
+  const compactPrimary = React.useMemo(
+    () => compactToolPrimaryText(name, input, summary ?? undefined),
+    [input, name, summary]
+  )
+  const compactTitle = React.useMemo(
+    () => compactToolTitle(name, input, summary ?? undefined),
+    [input, name, summary]
+  )
 
   return (
-    <div className="my-5 min-w-0 overflow-hidden">
+    <div
+      className={cn(
+        useCompactToolHeader
+          ? 'my-0 min-w-0 overflow-hidden text-zinc-100'
+          : 'my-5 min-w-0 overflow-hidden'
+      )}
+    >
       {/* Header — click to toggle */}
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+        className={cn(
+          useCompactToolHeader
+            ? 'group w-full px-2 py-0.5 text-left'
+            : 'flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground'
+        )}
       >
-        <ToolStatusDot status={status} />
-        <span className="font-medium">{name}</span>
-        {isProcessing && !error && (
-          <>
-            {name === 'Write' && (input.file_path || input.path) ? (
-              <span className="text-blue-400/70 text-[10px] animate-pulse">
-                写入:{' '}
-                {String(input.file_path || input.path)
-                  .split(/[\\/]/)
-                  .slice(-2)
-                  .join('/')}
-                {((typeof input.content === 'string' && lineCount(input.content)) ||
-                  (typeof input.content_lines === 'number' && input.content_lines)) &&
-                  ` (${typeof input.content_lines === 'number' ? input.content_lines : lineCount(String(input.content ?? ''))} lines)`}
-              </span>
-            ) : name === 'Edit' && (input.file_path || input.path) ? (
-              <span className="text-amber-400/70 text-[10px] animate-pulse">
-                编辑:{' '}
-                {String(input.file_path || input.path)
-                  .split(/[\\/]/)
-                  .slice(-2)
-                  .join('/')}
-              </span>
-            ) : (
-              <span className="text-violet-400/70 text-[10px] animate-pulse">
-                {t('toolCall.receivingArgs')}
-              </span>
+        {useCompactToolHeader ? (
+          <div
+            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-zinc-400 transition-colors group-hover:bg-white/[0.015] group-hover:text-zinc-100"
+            title={compactTitle}
+          >
+            <span className="shrink-0 text-[10px] font-medium text-zinc-400">{t(name)}</span>
+            <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-sky-300 transition-colors group-hover:text-sky-200">
+              {compactPrimary || t('toolCall.receivingArgs')}
+            </span>
+            {elapsed && (
+              <span className="shrink-0 text-[9px] tabular-nums text-zinc-600">{elapsed}</span>
             )}
+            <ToolStatusDot status={status} />
+            {open ? (
+              <ChevronDown className="size-3 shrink-0 text-zinc-600" />
+            ) : (
+              <ChevronRight className="size-3 shrink-0 text-zinc-600" />
+            )}
+          </div>
+        ) : (
+          <>
+            <ToolStatusDot status={status} />
+            <span className="font-medium">{name}</span>
+            {isProcessing && !error && (
+              <>
+                {name === 'Write' && (input.file_path || input.path) ? (
+                  <span className="text-blue-400/70 text-[10px] animate-pulse">
+                    写入:{' '}
+                    {String(input.file_path || input.path)
+                      .split(/[\\/]/)
+                      .slice(-2)
+                      .join('/')}
+                    {((typeof input.content === 'string' && lineCount(input.content)) ||
+                      (typeof input.content_lines === 'number' && input.content_lines)) &&
+                      ` (${typeof input.content_lines === 'number' ? input.content_lines : lineCount(String(input.content ?? ''))} lines)`}
+                  </span>
+                ) : name === 'Edit' && (input.file_path || input.path) ? (
+                  <span className="text-amber-400/70 text-[10px] animate-pulse">
+                    编辑:{' '}
+                    {String(input.file_path || input.path)
+                      .split(/[\\/]/)
+                      .slice(-2)
+                      .join('/')}
+                  </span>
+                ) : (
+                  <span className="text-violet-400/70 text-[10px] animate-pulse">
+                    {t('toolCall.receivingArgs')}
+                  </span>
+                )}
+              </>
+            )}
+            {error && status === 'streaming' && (
+              <span className="text-red-400/70 text-[10px] animate-pulse">{t('error.label')}</span>
+            )}
+            {status !== 'streaming' && summary && !open && (
+              <span className="truncate text-muted-foreground/50 max-w-[300px]">{summary}</span>
+            )}
+            {elapsed && (
+              <span className="text-muted-foreground/30 tabular-nums text-[10px]">{elapsed}</span>
+            )}
+            <ChevronDown
+              className={cn(
+                'size-3 text-muted-foreground/40 transition-transform duration-200',
+                !open && '-rotate-90'
+              )}
+            />
           </>
         )}
-        {error && status === 'streaming' && (
-          <span className="text-red-400/70 text-[10px] animate-pulse">{t('error.label')}</span>
-        )}
-        {status !== 'streaming' && summary && !open && (
-          <span className="truncate text-muted-foreground/50 max-w-[300px]">{summary}</span>
-        )}
-        {elapsed && (
-          <span className="text-muted-foreground/30 tabular-nums text-[10px]">{elapsed}</span>
-        )}
-        <ChevronDown
-          className={cn(
-            'size-3 text-muted-foreground/40 transition-transform duration-200',
-            !open && '-rotate-90'
-          )}
-        />
       </button>
 
       {/* Expanded details */}
       {open && (
-        <div className="mt-1.5 space-y-2 pl-5 min-w-0 overflow-hidden">
+        <div
+          className={cn(
+            'min-w-0 overflow-hidden space-y-2',
+            useCompactToolHeader ? 'mt-0.5 pl-4' : 'mt-1.5 pl-5'
+          )}
+        >
           {hideLivePayload ? (
             <div className="space-y-2">
               <StructuredInput name={name} input={input} />

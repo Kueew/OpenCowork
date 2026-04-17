@@ -1,6 +1,18 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import { FileCode, FilePlus2, FileX2, FileEdit, Loader2, CheckCircle2, XCircle } from 'lucide-react'
+import {
+  FileCode,
+  FilePlus2,
+  FileX2,
+  FileEdit,
+  Loader2,
+  CheckCircle2,
+  XCircle,
+  Check,
+  Copy,
+  ChevronDown,
+  ChevronRight
+} from 'lucide-react'
 import { cn } from '@renderer/lib/utils'
 import type { ToolCallStatus } from '@renderer/lib/agent/types'
 import type { ToolResultContent } from '@renderer/lib/api/types'
@@ -276,6 +288,140 @@ function foldContext(lines: DiffLine[], ctx: number = 2): DiffChunk[] {
   return chunks
 }
 
+function diffDisplayLineNumber(line: DiffLine): number | undefined {
+  if (line.type === 'del') return line.oldNum
+  return line.newNum ?? line.oldNum
+}
+
+function buildDiffCopyText(lines: DiffLine[]): string {
+  return lines
+    .map((line) => {
+      const lineNumber = diffDisplayLineNumber(line)
+      const marker = line.type === 'add' ? '+' : line.type === 'del' ? '-' : ' '
+      return `${lineNumber ?? ''}\t${marker}${line.text}`
+    })
+    .join('\n')
+}
+
+function CompactDiffCopyButton({ text }: { text: string }): React.JSX.Element {
+  const { t } = useTranslation(['chat', 'common'])
+  const [copied, setCopied] = React.useState(false)
+
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        void navigator.clipboard.writeText(text)
+        setCopied(true)
+        window.setTimeout(() => setCopied(false), 1500)
+      }}
+      className="rounded p-1 text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
+      title={t('action.copy', { ns: 'common' })}
+      aria-label={t('action.copy', { ns: 'common' })}
+    >
+      {copied ? <Check className="size-3 text-emerald-400" /> : <Copy className="size-3" />}
+    </button>
+  )
+}
+
+function CompactEditDiff({
+  oldStr,
+  newStr,
+  filePath
+}: {
+  oldStr: string
+  newStr: string
+  filePath: string
+}): React.JSX.Element {
+  const { t } = useTranslation('chat')
+  const lines = React.useMemo(() => computeDiff(oldStr, newStr), [oldStr, newStr])
+  const chunks = React.useMemo(() => foldContext(lines), [lines])
+  const stats = React.useMemo(() => summarizeDiff(lines), [lines])
+  const copyText = React.useMemo(() => buildDiffCopyText(lines), [lines])
+  const [expandedChunks, setExpandedChunks] = React.useState<Set<number>>(new Set())
+
+  React.useEffect(() => {
+    setExpandedChunks(new Set())
+  }, [filePath, oldStr, newStr])
+
+  const renderLine = (line: DiffLine, key: number): React.JSX.Element => {
+    const lineNumber = diffDisplayLineNumber(line)
+
+    return (
+      <div
+        key={key}
+        className={cn(
+          'grid grid-cols-[56px_minmax(0,1fr)] border-b border-zinc-900/80 text-[11px] leading-5 last:border-b-0',
+          line.type === 'add' && 'bg-emerald-500/10',
+          line.type === 'del' && 'bg-red-500/10',
+          line.type === 'keep' && 'bg-[#111214]'
+        )}
+      >
+        <span
+          className={cn(
+            'select-none border-r border-zinc-800/80 px-2 py-1 text-right',
+            line.type === 'add' && 'text-emerald-300',
+            line.type === 'del' && 'text-red-300',
+            line.type === 'keep' && 'text-zinc-600'
+          )}
+        >
+          {lineNumber ?? ''}
+        </span>
+        <span
+          className={cn(
+            'min-w-0 whitespace-pre px-3 py-1',
+            line.type === 'add' && 'text-emerald-100/90',
+            line.type === 'del' && 'text-red-100/90',
+            line.type === 'keep' && 'text-zinc-200'
+          )}
+        >
+          {line.text || ' '}
+        </span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-white/[0.06] bg-[#111214]">
+      <div className="flex items-center justify-between gap-3 border-b border-white/[0.05] bg-[#141518] px-3 py-2">
+        <div className="min-w-0 flex items-center gap-2">
+          <span
+            className="truncate text-[11px] font-medium text-sky-300"
+            title={filePath}
+            style={{ fontFamily: MONO_FONT }}
+          >
+            {fileName(filePath)}
+          </span>
+          <span className="shrink-0 text-[11px] text-emerald-400/90">+{stats.added}</span>
+          <span className="shrink-0 text-[11px] text-red-400/90">-{stats.deleted}</span>
+        </div>
+        <CompactDiffCopyButton text={copyText} />
+      </div>
+      <div className="max-h-80 overflow-auto" style={{ fontFamily: MONO_FONT }}>
+        {chunks.map((chunk, ci) => {
+          if (chunk.type === 'lines' || expandedChunks.has(ci)) {
+            return chunk.lines.map((line, li) => renderLine(line, ci * 1000 + li))
+          }
+
+          return (
+            <button
+              key={`compact-inline-collapsed-${ci}`}
+              type="button"
+              className="flex w-full items-center justify-center border-y border-zinc-800/80 bg-[#15171a]/60 px-3 py-2 text-[10px] text-zinc-500 transition-colors hover:bg-[#1a1d21] hover:text-zinc-200"
+              onClick={() => setExpandedChunks((prev) => new Set([...prev, ci]))}
+            >
+              {t('toolCall.unchangedLines', {
+                count: chunk.count,
+                defaultValue: '··· {{count}} unchanged lines ···'
+              })}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 interface TrackedDiffContent {
   beforeText: string
   afterText: string
@@ -324,12 +470,14 @@ function FileIcon({ name }: { name: string }): React.JSX.Element {
 function ChangeStats({
   name,
   input,
-  trackedChange
+  trackedChange,
+  minimal = false
 }: {
   name: string
   input: Record<string, unknown>
   trackedChange?: AgentRunFileChange
   writeOp?: 'create' | 'modify'
+  minimal?: boolean
 }): React.JSX.Element | null {
   const { t } = useTranslation('chat')
   const trackedStats = React.useMemo(() => {
@@ -350,6 +498,9 @@ function ChangeStats({
   if (trackedChange) {
     if (trackedChange.op === 'create') {
       const lines = snapshotLineTotal(trackedChange.after)
+      if (minimal) {
+        return <span className="text-green-400/70">+{lines}</span>
+      }
       return (
         <span className="flex items-center gap-1.5 text-[10px]">
           <span className="rounded bg-green-500/15 px-1.5 py-0.5 text-green-500 font-medium">
@@ -370,6 +521,9 @@ function ChangeStats({
   }
 
   if (name === 'Write') {
+    if (minimal) {
+      return <span className="text-green-400/70">+{resolvedWrite.lineTotal}</span>
+    }
     return (
       <span className="flex items-center gap-1.5 text-[10px]">
         <span className="rounded bg-green-500/15 px-1.5 py-0.5 text-green-500 font-medium">
@@ -568,7 +722,13 @@ function PendingEditPreview({ input }: { input: Record<string, unknown> }): Reac
   )
 }
 
-function TrackedEditDiff({ change }: { change: AgentRunFileChange }): React.JSX.Element {
+function TrackedEditDiff({
+  change,
+  filePath
+}: {
+  change: AgentRunFileChange
+  filePath: string
+}): React.JSX.Element {
   const { t } = useTranslation('chat')
   const [content, setContent] = React.useState<TrackedDiffContent | null>(null)
   const [isLoading, setIsLoading] = React.useState(false)
@@ -659,7 +819,9 @@ function TrackedEditDiff({ change }: { change: AgentRunFileChange }): React.JSX.
     return <SnapshotSummaryNotice before={change.before} after={change.after} />
   }
 
-  return <InlineDiff oldStr={content.beforeText} newStr={content.afterText} />
+  return (
+    <CompactEditDiff oldStr={content.beforeText} newStr={content.afterText} filePath={filePath} />
+  )
 }
 
 function PendingWritePreview({
@@ -770,6 +932,38 @@ function resolveWritePayload(input: Record<string, unknown>): ResolvedWritePaylo
   return { text, preview, lineTotal }
 }
 
+function resolveEditSummaryDiff(
+  payload: ResolvedEditPayload,
+  trackedChange?: AgentRunFileChange
+): { added: number; deleted: number; oldStr: string; newStr: string } | null {
+  if (
+    trackedChange &&
+    canRenderInlineSnapshot(trackedChange.before) &&
+    canRenderInlineSnapshot(trackedChange.after)
+  ) {
+    const oldStr = snapshotText(trackedChange.before)
+    const newStr = snapshotText(trackedChange.after)
+    return {
+      ...summarizeDiff(computeDiff(oldStr, newStr)),
+      oldStr,
+      newStr
+    }
+  }
+
+  if (payload.oldTruncated || payload.newTruncated) return null
+
+  const oldStr = payload.oldText || payload.oldPreview
+  const newStr = payload.newText || payload.newPreview
+
+  if (!oldStr && !newStr) return null
+
+  return {
+    ...summarizeDiff(computeDiff(oldStr, newStr)),
+    oldStr,
+    newStr
+  }
+}
+
 function trackedStatusLabelKey(change: AgentRunFileChange): string {
   if (change.status === 'accepted') return 'fileChange.status.accepted'
   if (change.status === 'reverted') return 'fileChange.status.reverted'
@@ -790,6 +984,13 @@ function trackedStatusTone(change: AgentRunFileChange): string {
   return change.transport === 'ssh'
     ? 'bg-sky-500/10 text-sky-600 dark:text-sky-400'
     : 'bg-blue-500/10 text-blue-600 dark:text-blue-400'
+}
+
+function trackedStatusDotTone(change: AgentRunFileChange): string {
+  if (change.status === 'accepted') return 'bg-emerald-400'
+  if (change.status === 'reverted') return 'bg-zinc-500'
+  if (change.status === 'conflicted') return 'bg-amber-400'
+  return change.transport === 'ssh' ? 'bg-sky-400' : 'bg-zinc-400'
 }
 
 // ── Main Component ───────────────────────────────────────────────
@@ -837,9 +1038,17 @@ export function FileChangeCard({
     (parsedOutput.op === 'create' || parsedOutput.op === 'modify')
       ? (parsedOutput.op as 'create' | 'modify')
       : undefined)
+  const compactActionOp: 'create' | 'modify' =
+    trackedChange?.op ?? (name === 'Write' ? (writeOp ?? 'create') : 'modify')
   const isOutputError = outputStr
     ? Boolean(parsedOutputError) || (!parsedOutput && outputStr.length > 0)
     : false
+  const hasCompactError = status === 'error' || (isOutputError && !isSuccess)
+  const compactEditDiff = React.useMemo(
+    () => resolveEditSummaryDiff(resolvedEdit, trackedChange),
+    [resolvedEdit, trackedChange]
+  )
+  const useCompactChangeLayout = (name === 'Edit' || name === 'Write') && !isActive
 
   const borderColor =
     status === 'streaming'
@@ -881,7 +1090,9 @@ export function FileChangeCard({
   return (
     <div
       className={cn(
-        'my-4 rounded-lg border overflow-hidden bg-[#111214] text-zinc-100 transition-all duration-200 shadow-[0_0_0_1px_rgba(255,255,255,0.02)]',
+        useCompactChangeLayout
+          ? 'my-0 overflow-hidden bg-transparent text-zinc-100 transition-all duration-200'
+          : 'my-3 overflow-hidden rounded-[18px] border bg-[#111214] text-zinc-100 transition-all duration-200 shadow-[0_16px_40px_rgba(0,0,0,0.18)]',
         borderColor
       )}
     >
@@ -890,41 +1101,103 @@ export function FileChangeCard({
           setCollapsed((v) => !v)
         }}
         className={cn(
-          'flex w-full items-center gap-2 border-b border-zinc-800/80 px-3 py-2.5 text-left transition-colors hover:bg-[#17191d]',
+          useCompactChangeLayout
+            ? 'group w-full px-1.5 py-0.5 text-left'
+            : 'flex w-full items-center gap-2 border-b border-zinc-800/80 px-3 py-2.5 text-left transition-colors hover:bg-[#17191d]',
           status === 'running' && 'bg-blue-500/[0.05]'
         )}
       >
-        <FileIcon name={name} />
-        <span className="text-xs font-medium truncate min-w-0 flex-1" title={filePath || undefined}>
-          {filePath ? (
-            fileName(filePath)
-          ) : (
-            <span className="text-zinc-500 italic animate-pulse">
-              {t('toolCall.receivingArgs')}
-            </span>
-          )}
-        </span>
-        <span
-          className="text-[10px] text-zinc-500 font-mono truncate max-w-[180px] hidden sm:block"
-          title={filePath}
-        >
-          {shortPath(filePath)}
-        </span>
-        <ChangeStats name={name} input={input} trackedChange={trackedChange} />
-        {trackedChange && (
-          <span
-            className={cn(
-              'rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide',
-              trackedStatusTone(trackedChange)
-            )}
+        {useCompactChangeLayout ? (
+          <div
+            className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-zinc-400 transition-colors group-hover:bg-white/[0.015] group-hover:text-zinc-100"
+            title={filePath || undefined}
           >
-            {t(trackedTransportLabelKey(trackedChange))} · {t(trackedStatusLabelKey(trackedChange))}
-          </span>
+            <span className="shrink-0 text-[10px] font-medium text-zinc-400">
+              {compactActionOp === 'create' ? t('fileChange.new') : t('fileChange.edited')}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-sky-300 transition-colors group-hover:text-sky-200">
+              {filePath ? (
+                fileName(filePath)
+              ) : (
+                <span className="text-zinc-500 italic animate-pulse">
+                  {t('toolCall.receivingArgs')}
+                </span>
+              )}
+            </span>
+            {compactEditDiff ? (
+              <>
+                <span className="shrink-0 text-[10px] font-medium text-emerald-400/90">
+                  +{compactEditDiff.added}
+                </span>
+                <span className="shrink-0 text-[10px] font-medium text-red-400/90">
+                  -{compactEditDiff.deleted}
+                </span>
+              </>
+            ) : (
+              <ChangeStats name={name} input={input} trackedChange={trackedChange} minimal />
+            )}
+            {hasCompactError ? (
+              <span
+                className="size-1.5 shrink-0 rounded-full bg-red-400"
+                title={error || parsedOutputError || t('error.label', { ns: 'common' })}
+              />
+            ) : trackedChange ? (
+              <span
+                className={cn(
+                  'size-1.5 shrink-0 rounded-full',
+                  trackedStatusDotTone(trackedChange)
+                )}
+                title={`${t(trackedTransportLabelKey(trackedChange))} / ${t(trackedStatusLabelKey(trackedChange))}`}
+              />
+            ) : null}
+            {elapsed && (
+              <span className="shrink-0 text-[9px] tabular-nums text-zinc-600">{elapsed}</span>
+            )}
+            {collapsed ? (
+              <ChevronRight className="size-3 shrink-0 text-zinc-600" />
+            ) : (
+              <ChevronDown className="size-3 shrink-0 text-zinc-600" />
+            )}
+          </div>
+        ) : (
+          <>
+            <FileIcon name={name} />
+            <span
+              className="text-xs font-medium truncate min-w-0 flex-1"
+              title={filePath || undefined}
+            >
+              {filePath ? (
+                fileName(filePath)
+              ) : (
+                <span className="text-zinc-500 italic animate-pulse">
+                  {t('toolCall.receivingArgs')}
+                </span>
+              )}
+            </span>
+            <span
+              className="text-[10px] text-zinc-500 font-mono truncate max-w-[180px] hidden sm:block"
+              title={filePath}
+            >
+              {shortPath(filePath)}
+            </span>
+            <ChangeStats name={name} input={input} trackedChange={trackedChange} />
+            {trackedChange && (
+              <span
+                className={cn(
+                  'rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide',
+                  trackedStatusTone(trackedChange)
+                )}
+              >
+                {t(trackedTransportLabelKey(trackedChange))} ·{' '}
+                {t(trackedStatusLabelKey(trackedChange))}
+              </span>
+            )}
+            {elapsed && (
+              <span className="text-[9px] text-zinc-600 tabular-nums shrink-0">{elapsed}</span>
+            )}
+            <StatusIndicator status={status} />
+          </>
         )}
-        {elapsed && (
-          <span className="text-[9px] text-zinc-600 tabular-nums shrink-0">{elapsed}</span>
-        )}
-        <StatusIndicator status={status} />
       </button>
 
       <AnimatePresence initial={false}>
@@ -934,9 +1207,16 @@ export function FileChangeCard({
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="overflow-hidden border-t border-zinc-800/80 bg-[#0f1012]"
+            className={cn(
+              'overflow-hidden',
+              useCompactChangeLayout
+                ? 'bg-transparent px-0 pb-3 pt-0.5'
+                : 'border-t border-zinc-800/80 bg-[#0f1012]'
+            )}
           >
-            {name === 'Edit' && trackedChange && <TrackedEditDiff change={trackedChange} />}
+            {name === 'Edit' && trackedChange && (
+              <TrackedEditDiff change={trackedChange} filePath={filePath} />
+            )}
             {name === 'Edit' && !trackedChange && status !== 'completed' && status !== 'error' && (
               <PendingEditPreview input={input} />
             )}
@@ -944,15 +1224,11 @@ export function FileChangeCard({
               !trackedChange &&
               status !== 'streaming' &&
               status !== 'running' &&
-              !!(
-                resolvedEdit.oldText ||
-                resolvedEdit.newText ||
-                resolvedEdit.oldPreview ||
-                resolvedEdit.newPreview
-              ) && (
-                <InlineDiff
-                  oldStr={resolvedEdit.oldText || resolvedEdit.oldPreview}
-                  newStr={resolvedEdit.newText || resolvedEdit.newPreview}
+              compactEditDiff && (
+                <CompactEditDiff
+                  oldStr={compactEditDiff.oldStr}
+                  newStr={compactEditDiff.newStr}
+                  filePath={filePath}
                 />
               )}
             {name === 'Write' &&
@@ -1016,8 +1292,14 @@ export function FileChangeCard({
         )}
       </AnimatePresence>
 
-      {trackedChange && (
-        <div className="border-t border-zinc-800/80 bg-[#15171a] px-3 py-2">
+      {trackedChange && !collapsed && (
+        <div
+          className={cn(
+            useCompactChangeLayout
+              ? 'bg-transparent px-3 py-2'
+              : 'border-t border-zinc-800/80 bg-[#15171a] px-3 py-2'
+          )}
+        >
           <div className="flex items-center justify-between gap-2">
             <p className="text-[10px] text-zinc-500">
               {trackedChange.status === 'accepted'
@@ -1032,7 +1314,10 @@ export function FileChangeCard({
               <Button
                 type="button"
                 size="xs"
-                variant="outline"
+                variant={useCompactChangeLayout ? 'ghost' : 'outline'}
+                className={
+                  useCompactChangeLayout ? 'text-emerald-300 hover:bg-white/[0.04]' : undefined
+                }
                 onClick={handleAcceptFile}
                 disabled={!isFileActionable || isAcceptingFile || isRollingBackFile}
               >
@@ -1042,7 +1327,21 @@ export function FileChangeCard({
               <Button
                 type="button"
                 size="xs"
-                variant={trackedChange.status === 'conflicted' ? 'outline' : 'destructive'}
+                variant={
+                  useCompactChangeLayout
+                    ? 'ghost'
+                    : trackedChange.status === 'conflicted'
+                      ? 'outline'
+                      : 'destructive'
+                }
+                className={
+                  useCompactChangeLayout
+                    ? cn(
+                        'hover:bg-white/[0.04]',
+                        trackedChange.status === 'conflicted' ? 'text-amber-300' : 'text-zinc-200'
+                      )
+                    : undefined
+                }
                 onClick={handleRollbackFile}
                 disabled={!isFileActionable || isAcceptingFile || isRollingBackFile}
               >
@@ -1055,9 +1354,18 @@ export function FileChangeCard({
       )}
 
       {(error || (parsedOutputError && !error)) && (
-        <div className="border-t border-destructive/20 px-3 py-2 bg-destructive/8">
+        <div
+          className={cn(
+            useCompactChangeLayout
+              ? 'px-3 py-2'
+              : 'border-t border-destructive/20 bg-destructive/8 px-3 py-2'
+          )}
+        >
           <p
-            className="text-[11px] text-destructive font-mono whitespace-pre-wrap break-words"
+            className={cn(
+              'font-mono whitespace-pre-wrap break-words text-[11px] text-destructive',
+              useCompactChangeLayout && 'text-red-300/90'
+            )}
             style={{ fontFamily: MONO_FONT }}
           >
             {error || parsedOutputError}
@@ -1065,9 +1373,18 @@ export function FileChangeCard({
         </div>
       )}
       {outputStr && !error && !parsedOutputError && isOutputError && !isSuccess && (
-        <div className="border-t border-destructive/20 px-3 py-2 bg-destructive/8">
+        <div
+          className={cn(
+            useCompactChangeLayout
+              ? 'px-3 py-2'
+              : 'border-t border-destructive/20 bg-destructive/8 px-3 py-2'
+          )}
+        >
           <p
-            className="text-[11px] text-destructive/80 font-mono whitespace-pre-wrap break-words"
+            className={cn(
+              'font-mono whitespace-pre-wrap break-words text-[11px] text-destructive/80',
+              useCompactChangeLayout && 'text-red-300/80'
+            )}
             style={{ fontFamily: MONO_FONT }}
           >
             {outputStr.length > 500 ? `${outputStr.slice(0, 500)}...` : outputStr}

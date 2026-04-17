@@ -2,7 +2,7 @@ import { ipcMain, dialog, BrowserWindow, app } from 'electron'
 import { spawn } from 'child_process'
 import * as fs from 'fs'
 import * as path from 'path'
-import { glob } from 'glob'
+import { Glob } from 'glob'
 import { createInterface } from 'readline'
 import { recordLocalTextWriteChange } from './agent-change-handlers'
 import { safeSendToWindow } from '../window-ipc'
@@ -38,6 +38,8 @@ const IMAGE_MIME_TYPES: Record<string, string> = {
 
 const MAX_FILE_READ_BYTES = 50 * 1024 * 1024 // 50 MB
 const MAX_IMAGE_READ_BYTES = 20 * 1024 * 1024 // 20 MB
+const MAX_LIST_DIR_ITEMS = 1_000
+const MAX_GLOB_MATCHES = 1_000
 
 async function assertFileSize(filePath: string, limit: number): Promise<number> {
   const stat = await fs.promises.stat(filePath)
@@ -349,6 +351,13 @@ function createGrepToolResult(args: {
     }),
     error: args.error
   }
+}
+
+function clampToolResultLimit(value: unknown, max: number): number | null {
+  if (!Number.isFinite(value)) return null
+  const normalized = Math.floor(Number(value))
+  if (normalized <= 0) return null
+  return Math.min(normalized, max)
 }
 
 function scoreFileSearchMatch(filePath: string, query: string): number {
@@ -863,30 +872,36 @@ export function registerFsHandlers(): void {
     }
   )
 
-  ipcMain.handle('fs:list-dir', async (_event, args: { path: string; ignore?: string[] }) => {
-    try {
-      const resolvedPath = path.resolve(args.path)
-      const matcher = await createLocalGitIgnoreContext(resolvedPath, args.ignore)
-      const entries = await fs.promises.readdir(resolvedPath, { withFileTypes: true })
-      const items: Array<{ name: string; type: 'directory' | 'file'; path: string }> = []
+  ipcMain.handle(
+    'fs:list-dir',
+    async (_event, args: { path: string; ignore?: string[]; limit?: number }) => {
+      try {
+        const resolvedPath = path.resolve(args.path)
+        const matcher = await createLocalGitIgnoreContext(resolvedPath, args.ignore)
+        const entries = await fs.promises.readdir(resolvedPath, { withFileTypes: true })
+        const items: Array<{ name: string; type: 'directory' | 'file'; path: string }> = []
+        const limit = clampToolResultLimit(args.limit, MAX_LIST_DIR_ITEMS)
 
-      for (const entry of entries) {
-        const entryPath = path.join(resolvedPath, entry.name)
-        if (await matcher.ignores(entryPath, entry.isDirectory())) continue
-        if (!entry.isDirectory() && !entry.isFile()) continue
+        for (const entry of entries) {
+          const entryPath = path.join(resolvedPath, entry.name)
+          if (await matcher.ignores(entryPath, entry.isDirectory())) continue
+          if (!entry.isDirectory() && !entry.isFile()) continue
 
-        items.push({
-          name: entry.name,
-          type: entry.isDirectory() ? 'directory' : 'file',
-          path: entryPath
-        })
+          items.push({
+            name: entry.name,
+            type: entry.isDirectory() ? 'directory' : 'file',
+            path: entryPath
+          })
+
+          if (limit !== null && items.length >= limit) break
+        }
+
+        return items
+      } catch (err) {
+        return { error: String(err) }
       }
-
-      return items
-    } catch (err) {
-      return { error: String(err) }
     }
-  })
+  )
 
   ipcMain.handle('fs:mkdir', async (_event, args: { path: string }) => {
     try {
@@ -957,41 +972,47 @@ export function registerFsHandlers(): void {
     }
   })
 
-  ipcMain.handle('fs:glob', async (_event, args: { pattern: string; path?: string }) => {
-    const cwd = path.resolve(args.path || process.cwd())
-    try {
-      const matcher = await createLocalGitIgnoreContext(cwd)
-      const matches = await glob(args.pattern, {
-        cwd,
-        mark: true,
-        dot: true,
-        ignore: buildGlobIgnorePatterns(args.pattern)
-      })
-      const filteredMatches: Array<{ path: string; type?: 'file' | 'directory' }> = []
+  ipcMain.handle(
+    'fs:glob',
+    async (_event, args: { pattern: string; path?: string; limit?: number }) => {
+      const cwd = path.resolve(args.path || process.cwd())
+      try {
+        const matcher = await createLocalGitIgnoreContext(cwd)
+        const filteredMatches: Array<{ path: string; type?: 'file' | 'directory' }> = []
+        const limit = clampToolResultLimit(args.limit, MAX_GLOB_MATCHES)
+        const globber = new Glob(args.pattern, {
+          cwd,
+          mark: true,
+          dot: true,
+          ignore: buildGlobIgnorePatterns(args.pattern)
+        })
 
-      for (const match of matches) {
-        const isDir = /[\\/]$/.test(match)
-        const normalizedMatch = match.replace(/[\\/]+$/, '')
-        if (!normalizedMatch) continue
-        const absolutePath = path.resolve(cwd, normalizedMatch)
-        if (await matcher.ignores(absolutePath, isDir)) continue
-        filteredMatches.push({ path: absolutePath, type: isDir ? 'directory' : 'file' })
+        for await (const match of globber) {
+          const isDir = /[\\/]$/.test(match)
+          const normalizedMatch = match.replace(/[\\/]+$/, '')
+          if (!normalizedMatch) continue
+          const absolutePath = path.resolve(cwd, normalizedMatch)
+          if (await matcher.ignores(absolutePath, isDir)) continue
+          filteredMatches.push({ path: absolutePath, type: isDir ? 'directory' : 'file' })
+
+          if (limit !== null && filteredMatches.length >= limit) break
+        }
+
+        return createGlobToolResult({
+          searchRoot: cwd,
+          pattern: args.pattern,
+          matches: filteredMatches
+        })
+      } catch (err) {
+        return createGlobToolResult({
+          searchRoot: cwd,
+          pattern: args.pattern,
+          matches: [],
+          error: String(err)
+        })
       }
-
-      return createGlobToolResult({
-        searchRoot: cwd,
-        pattern: args.pattern,
-        matches: filteredMatches
-      })
-    } catch (err) {
-      return createGlobToolResult({
-        searchRoot: cwd,
-        pattern: args.pattern,
-        matches: [],
-        error: String(err)
-      })
     }
-  })
+  )
 
   ipcMain.handle(
     'fs:search-files',

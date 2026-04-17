@@ -2565,7 +2565,6 @@ export function registerSshHandlers(): void {
               pattern: args.pattern,
               matches: [],
               error: result.stderr || 'glob failed',
-              warnings: ['SSH glob uses remote find and may be truncated'],
               maxDepth,
               truncated: false
             })
@@ -2672,15 +2671,16 @@ export function registerSshHandlers(): void {
                 parseFailed = true
               }
             }
+            const truncated = rawMatchCount >= 200
             return createSshGrepResult({
               searchRoot: cwd,
               pattern: args.pattern,
               include: args.include,
               matches,
-              truncated: rawMatchCount >= 200,
-              limitReason: rawMatchCount >= 200 ? 'max_results' : null,
+              truncated,
+              limitReason: truncated ? 'max_results' : null,
               warnings: [
-                'SSH grep uses remote rg and may be truncated by result limits',
+                ...(truncated ? ['SSH grep result truncated by remote limit'] : []),
                 ...(parseFailed ? ['Some SSH grep result lines could not be parsed'] : [])
               ]
             })

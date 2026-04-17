@@ -6,6 +6,14 @@ import type { ToolHandler, ToolContext } from './tool-types'
 
 type EolStyle = '\n' | '\r\n' | null
 
+type LsEntry = { name: string; type: string; path: string }
+type LsLimitReason = 'max_results' | 'max_output_bytes' | null
+
+const LS_PROMPT_MAX_ITEMS = 100
+const LS_BACKEND_FETCH_LIMIT = LS_PROMPT_MAX_ITEMS + 1
+const LS_PROMPT_MAX_OUTPUT_BYTES = 8 * 1024
+const textEncoder = new TextEncoder()
+
 function countOccurrences(content: string, value: string): number {
   if (!value) return 0
   return content.split(value).length - 1
@@ -127,6 +135,71 @@ export function resolveToolPath(inputPath: unknown, workingFolder?: string): str
   if (isAbsolutePath(raw)) return raw
   if (base && base.length > 0) return joinFsPath(base, raw)
   return raw
+}
+
+function estimatePromptBytes(value: unknown): number {
+  return textEncoder.encode(JSON.stringify(value)).length
+}
+
+function normalizeLsEntries(raw: unknown): { items: LsEntry[]; hasMore: boolean } {
+  const source = Array.isArray(raw)
+    ? raw
+    : raw && typeof raw === 'object' && Array.isArray((raw as { entries?: unknown[] }).entries)
+      ? (raw as { entries: unknown[] }).entries
+      : []
+  const hasMore = !!(
+    raw &&
+    typeof raw === 'object' &&
+    (raw as { hasMore?: unknown }).hasMore === true
+  )
+
+  return {
+    items: source
+      .map((item) => {
+        if (!item || typeof item !== 'object') return null
+        const name = (item as { name?: unknown }).name
+        const type = (item as { type?: unknown }).type
+        const path = (item as { path?: unknown }).path
+        if (typeof name !== 'string' || typeof type !== 'string' || typeof path !== 'string') {
+          return null
+        }
+        return { name, type, path }
+      })
+      .filter((item): item is LsEntry => !!item),
+    hasMore
+  }
+}
+
+function formatLsResultForPrompt(raw: unknown): LsEntry[] | Record<string, unknown> {
+  if (isErrorResult(raw)) return raw
+
+  const { items, hasMore } = normalizeLsEntries(raw)
+  const limitedItems: LsEntry[] = []
+  let totalBytes = 2
+  let limitReason: LsLimitReason = hasMore ? 'max_results' : null
+
+  for (const item of items) {
+    if (limitedItems.length >= LS_PROMPT_MAX_ITEMS) {
+      limitReason = 'max_results'
+      break
+    }
+
+    const candidateBytes = estimatePromptBytes(item) + 1
+    if (totalBytes + candidateBytes > LS_PROMPT_MAX_OUTPUT_BYTES) {
+      limitReason = 'max_output_bytes'
+      break
+    }
+
+    limitedItems.push(item)
+    totalBytes += candidateBytes
+  }
+
+  if (!limitReason) return limitedItems
+  return {
+    items: limitedItems,
+    truncated: true,
+    limitReason
+  }
 }
 
 function isPluginPathAllowed(
@@ -428,18 +501,18 @@ const lsHandler: ToolHandler = {
       const result = await ctx.ipc.invoke(
         IPC.SSH_FS_LIST_DIR,
         sshArgs(ctx, {
-          path: resolvedPath
+          path: resolvedPath,
+          limit: LS_BACKEND_FETCH_LIMIT
         })
       )
-      return encodeStructuredToolResult(
-        result as Array<{ name: string; type: string; path: string }>
-      )
+      return encodeStructuredToolResult(formatLsResultForPrompt(result))
     }
     const result = await ctx.ipc.invoke(IPC.FS_LIST_DIR, {
       path: resolvedPath,
-      ignore: input.ignore
+      ignore: input.ignore,
+      limit: LS_BACKEND_FETCH_LIMIT
     })
-    return encodeStructuredToolResult(result as Array<{ name: string; type: string; path: string }>)
+    return encodeStructuredToolResult(formatLsResultForPrompt(result))
   },
   requiresApproval: (input, ctx) => {
     if (ctx.channelPermissions) {

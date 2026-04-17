@@ -18,6 +18,8 @@ import { runTeammate, findNextClaimableTask } from '../teams/teammate-runner'
 import { spawnIsolatedTeamWorker } from '../teams/backend-client'
 import { updateTeamRuntimeManifest, updateTeamRuntimeMember } from '../teams/runtime-client'
 import type { TeamMember } from '../teams/types'
+import { DEFAULT_SUB_AGENT_MAX_TURNS } from './limits'
+import { getEffectiveSubAgentDisallowedTools } from './resolve-tools'
 
 const subAgentLimiter = new ConcurrencyLimiter(2)
 
@@ -188,11 +190,11 @@ function scheduleNextTask(teamName: string): void {
 function formatAgentToolScope(agent: SubAgentDefinition): string {
   const tools = agent.tools ?? []
   if (tools.length === 0) return 'Read, Glob, Grep, LS, Skill'
+  const denied = getEffectiveSubAgentDisallowedTools(agent.disallowedTools ?? [])
   if (tools.includes('*')) {
-    const denied = agent.disallowedTools ?? []
     return denied.length > 0 ? `All tools except ${denied.join(', ')}` : '*'
   }
-  return tools.join(', ')
+  return tools.filter((tool) => !denied.includes(tool)).join(', ')
 }
 
 function buildTaskDescription(agents: SubAgentDefinition[]): string {
@@ -206,7 +208,7 @@ The Task tool launches specialized agents (sub-agents) that autonomously handle 
 
 Available agent types and the tools they have access to:
 ${agentLines}
-- custom: General-purpose sub-agent with a built-in default system prompt and full tool access. Use this when none of the specialized agents above are a clean fit. You only supply the task via "prompt" — do NOT try to pass a system prompt, tools list, or permissions; those are fixed by the runtime. (Tools: *)
+- custom: General-purpose sub-agent with a built-in default system prompt and broad tool access except Task and AskUserQuestion. Use this when none of the specialized agents above are a clean fit. You only supply the task via "prompt" — do NOT try to pass a system prompt, tools list, or permissions; those are fixed by the runtime. (Tools: All tools except Task, AskUserQuestion)
 
 When using the Task tool, you MUST specify a "subagent_type" parameter to select which agent type to use.
 
@@ -445,7 +447,7 @@ export function createTaskTool(providerGetter: () => ProviderConfig): ToolHandle
                 type: 'string',
                 enum: subTypeEnum,
                 description:
-                  'The type of specialized agent to use for this task. Use "custom" for a general-purpose sub-agent with full tool access and a built-in default system prompt — you only supply the task via "prompt".'
+                  'The type of specialized agent to use for this task. Use "custom" for a general-purpose sub-agent with broad tool access except Task and AskUserQuestion and a built-in default system prompt — you only supply the task via "prompt".'
               },
               model: {
                 type: 'string',
@@ -488,7 +490,7 @@ export function createTaskTool(providerGetter: () => ProviderConfig): ToolHandle
                 type: 'string',
                 enum: subTypeEnum,
                 description:
-                  'Optional specialized background agent type to use for this teammate. Use "custom" for a general-purpose teammate with full tool access.'
+                  'Optional specialized background agent type to use for this teammate. Use "custom" for a general-purpose teammate with broad tool access except Task and AskUserQuestion.'
               },
               model: {
                 type: 'string',
@@ -536,8 +538,8 @@ export function createTaskTool(providerGetter: () => ProviderConfig): ToolHandle
             language: useSettingsStore.getState().language
           }),
           tools: ['*'],
-          disallowedTools: [],
-          maxTurns: 0,
+          disallowedTools: ['Task', 'AskUserQuestion'],
+          maxTurns: DEFAULT_SUB_AGENT_MAX_TURNS,
           ...(typeof input.model === 'string' && input.model ? { model: input.model } : {}),
           inputSchema: { type: 'object', properties: {} }
         }

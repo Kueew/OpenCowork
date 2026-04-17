@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import {
   X,
   FileText,
+  FileCode,
   Users,
   Bot,
   Terminal,
@@ -25,6 +26,7 @@ import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
 import { SubAgentExecutionDetail } from './SubAgentExecutionDetail'
 import { Input } from '@renderer/components/ui/input'
+import { ChangeReviewPanelContent } from '@renderer/components/chat/ChangeReviewSheet'
 import {
   Collapsible,
   CollapsibleContent,
@@ -686,7 +688,7 @@ function TerminalDetailView({ processId }: { processId: string }): React.JSX.Ele
 // ── Main DetailPanel ─────────────────────────────────────────────
 
 export function DetailPanel({ embedded = false }: { embedded?: boolean }): React.JSX.Element {
-  const { t } = useTranslation('layout')
+  const { t } = useTranslation(['layout', 'chat'])
   const content = useUIStore((s) => s.detailPanelContent)
   const closeDetailPanel = useUIStore((s) => s.closeDetailPanel)
 
@@ -697,11 +699,13 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean }): React
         ? t('detailPanel.subAgent')
         : content?.type === 'terminal'
           ? t('detailPanel.terminal')
-          : content?.type === 'document'
-            ? content.title
-            : content?.type === 'report'
+          : content?.type === 'change-review'
+            ? t('fileChange.reviewPanelTitle', { ns: 'chat', defaultValue: '更改审查' })
+            : content?.type === 'document'
               ? content.title
-              : t('detailPanel.details')
+              : content?.type === 'report'
+                ? content.title
+                : t('detailPanel.details')
 
   const icon =
     content?.type === 'team' ? (
@@ -710,6 +714,8 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean }): React
       <Bot className="size-4 text-violet-500" />
     ) : content?.type === 'terminal' ? (
       <Terminal className="size-4 text-emerald-500" />
+    ) : content?.type === 'change-review' ? (
+      <FileCode className="size-4 text-sky-400" />
     ) : (
       <FileText className="size-4 text-muted-foreground" />
     )
@@ -736,7 +742,12 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean }): React
       <Separator />
 
       {/* Content */}
-      <div className="min-h-0 flex-1 overflow-auto p-3">
+      <div
+        className={cn(
+          'min-h-0 flex-1 overflow-auto',
+          content?.type === 'change-review' ? 'p-0' : 'p-3'
+        )}
+      >
         <AnimatePresence mode="wait">
           {content?.type === 'team' && (
             <FadeIn key="team" className="h-full">
@@ -753,6 +764,15 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean }): React
           {content?.type === 'terminal' && (
             <FadeIn key="terminal" className="h-full">
               <TerminalDetailView processId={content.processId} />
+            </FadeIn>
+          )}
+
+          {content?.type === 'change-review' && (
+            <FadeIn key="change-review" className="h-full">
+              <ChangeReviewPanelContent
+                runId={content.runId}
+                initialChangeId={content.initialChangeId}
+              />
             </FadeIn>
           )}
 

@@ -2,6 +2,13 @@ import type { ToolDefinition } from '../../api/types'
 import type { SubAgentDefinition } from './types'
 
 const DEFAULT_SUB_AGENT_TOOLS = ['Read', 'Glob', 'Grep', 'LS', 'Skill']
+export const MANDATORY_SUB_AGENT_DISALLOWED_TOOLS = ['AskUserQuestion'] as const
+
+export function getEffectiveSubAgentDisallowedTools(
+  disallowedTools: readonly string[] = []
+): string[] {
+  return [...new Set([...MANDATORY_SUB_AGENT_DISALLOWED_TOOLS, ...disallowedTools])]
+}
 
 export interface ResolvedSubAgentTools {
   tools: ToolDefinition[]
@@ -14,7 +21,7 @@ export function resolveSubAgentTools(
 ): ResolvedSubAgentTools {
   const requestedTools = definition.tools.length > 0 ? definition.tools : DEFAULT_SUB_AGENT_TOOLS
   const requestedSet = new Set(requestedTools)
-  const disallowedSet = new Set(definition.disallowedTools)
+  const disallowedSet = new Set(getEffectiveSubAgentDisallowedTools(definition.disallowedTools))
   const allowAll = requestedSet.has('*')
 
   const availableNames = new Set(allTools.map((tool) => tool.name))

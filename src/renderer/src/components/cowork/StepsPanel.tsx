@@ -572,21 +572,13 @@ export function InlineStepsPanel({
   const { t } = useTranslation(['cowork', 'chat'])
   const data = useStepsPanelData(sessionId)
   const resolvedSessionId = useChatStore((s) => sessionId ?? s.activeSessionId)
-  const latestChangeSet = useAgentStore((s) => {
+  const runChangesByRunId = useAgentStore((s) => s.runChangesByRunId)
+  const latestChangeSet = useMemo(() => {
     if (!resolvedSessionId) return null
 
-    let nextMatch: {
-      assistantMessageId: string
-      updatedAt: number
-      changes: Array<{
-        filePath: string
-        op: 'create' | 'modify'
-        before: { text?: string; previewText?: string; lineCount?: number }
-        after: { text?: string; previewText?: string; lineCount?: number }
-      }>
-    } | null = null
+    let nextMatch: (typeof runChangesByRunId)[string] | null = null
 
-    for (const changeSet of Object.values(s.runChangesByRunId)) {
+    for (const changeSet of Object.values(runChangesByRunId)) {
       if (
         changeSet.sessionId !== resolvedSessionId ||
         changeSet.changes.length === 0 ||
@@ -598,16 +590,12 @@ export function InlineStepsPanel({
       }
 
       if (!nextMatch || changeSet.updatedAt > nextMatch.updatedAt) {
-        nextMatch = {
-          assistantMessageId: changeSet.assistantMessageId,
-          updatedAt: changeSet.updatedAt,
-          changes: changeSet.changes
-        }
+        nextMatch = changeSet
       }
     }
 
     return nextMatch
-  })
+  }, [resolvedSessionId, runChangesByRunId])
 
   const summaryTotal = data.todos.length + data.teamTasks.length
   const summaryCompleted =

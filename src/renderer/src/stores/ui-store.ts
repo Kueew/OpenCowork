@@ -107,6 +107,7 @@ export type DetailPanelContent =
   | { type: 'team' }
   | { type: 'subagent'; toolUseId?: string; text?: string }
   | { type: 'terminal'; processId: string }
+  | { type: 'change-review'; runId: string; initialChangeId?: string | null }
   | { type: 'document'; title: string; content: string }
   | { type: 'report'; title: string; data: unknown }
 
@@ -425,6 +426,8 @@ export const useUIStore = create<UIStore>((set, get) => ({
     set({
       detailPanelOpen: true,
       detailPanelContent: content,
+      previewPanelOpen: false,
+      previewPanelState: null,
       rightPanelTab: 'preview',
       rightPanelOpen: true,
       leftSidebarOpen: false

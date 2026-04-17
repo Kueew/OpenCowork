@@ -7,6 +7,8 @@ namespace OpenCowork.Agent.SubAgents;
 /// </summary>
 public sealed class SubAgentDefinition
 {
+    public const int DefaultMaxTurns = 12;
+
     [JsonPropertyName("name")]
     public required string Name { get; init; }
 
@@ -23,8 +25,8 @@ public sealed class SubAgentDefinition
     public List<string>? DisallowedTools { get; init; }
 
     /// <summary>
-    /// 0 (default) = unlimited — the sub-agent loop runs until the model stops
-    /// calling tools. Any positive value caps the number of iterations.
+    /// Non-positive values fall back to <see cref="DefaultMaxTurns"/> to avoid
+    /// runaway retry loops when a sub-agent keeps reissuing the same failing tool call.
     /// </summary>
     [JsonPropertyName("maxTurns")]
     public int MaxTurns { get; init; } = 0;
@@ -37,4 +39,7 @@ public sealed class SubAgentDefinition
 
     [JsonPropertyName("temperature")]
     public double? Temperature { get; init; }
+
+    public static int ResolveMaxTurns(int maxTurns) =>
+        maxTurns > 0 ? maxTurns : DefaultMaxTurns;
 }

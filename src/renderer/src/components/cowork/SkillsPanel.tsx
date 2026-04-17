@@ -42,23 +42,46 @@ function groupTools(
   }))
 }
 
+function subscribeToolDefinitions(listener: () => void): () => void {
+  return toolRegistry.subscribe(listener)
+}
+
+function getToolDefinitionsSnapshot(): ToolDefinition[] {
+  return toolRegistry.getDefinitions()
+}
+
+function subscribeSubAgents(listener: () => void): () => void {
+  return subAgentRegistry.subscribe(listener)
+}
+
+function getSubAgentDefinitionsSnapshot(): ReturnType<typeof subAgentRegistry.getAll> {
+  return subAgentRegistry.getAll()
+}
+
 export function SkillsPanel(): React.JSX.Element {
   const { t } = useTranslation('cowork')
   const allTools = React.useSyncExternalStore(
-    toolRegistry.subscribe.bind(toolRegistry),
-    () => toolRegistry.getDefinitions(),
-    () => toolRegistry.getDefinitions()
+    subscribeToolDefinitions,
+    getToolDefinitionsSnapshot,
+    getToolDefinitionsSnapshot
   )
   const subAgents = React.useSyncExternalStore(
-    subAgentRegistry.subscribe.bind(subAgentRegistry),
-    () => subAgentRegistry.getAll(),
-    () => subAgentRegistry.getAll()
+    subscribeSubAgents,
+    getSubAgentDefinitionsSnapshot,
+    getSubAgentDefinitionsSnapshot
   )
   const teamToolsEnabled = useSettingsStore((s) => s.teamToolsEnabled)
 
   // Regular tools only (exclude Task and Team tools from the main list)
-  const tools = allTools.filter((t) => t.name !== 'Task' && !TEAM_TOOL_NAMES.has(t.name))
-  const teamTools = allTools.filter((t) => TEAM_TOOL_NAMES.has(t.name))
+  const tools = React.useMemo(
+    () => allTools.filter((t) => t.name !== 'Task' && !TEAM_TOOL_NAMES.has(t.name)),
+    [allTools]
+  )
+  const teamTools = React.useMemo(
+    () => allTools.filter((t) => TEAM_TOOL_NAMES.has(t.name)),
+    [allTools]
+  )
+  const groups = React.useMemo(() => groupTools(tools), [tools])
 
   if (tools.length === 0 && subAgents.length === 0) {
     return (
@@ -69,8 +92,6 @@ export function SkillsPanel(): React.JSX.Element {
       </div>
     )
   }
-
-  const groups = groupTools(tools)
 
   return (
     <div className="space-y-4 max-h-[calc(100vh-200px)] overflow-y-auto">

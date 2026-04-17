@@ -25,7 +25,7 @@ export interface SubAgentDefinition {
   tools: string[]
   /** Tools explicitly denied for this SubAgent even when tools='*'. */
   disallowedTools: string[]
-  /** Max LLM turns before forced stop. <= 0 means unlimited. */
+  /** Max LLM turns before forced stop. Non-positive values fall back to a safety cap. */
   maxTurns: number
   /** Optional initial task prefix appended before runtime input. */
   initialPrompt?: string

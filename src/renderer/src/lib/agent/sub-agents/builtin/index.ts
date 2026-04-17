@@ -6,6 +6,7 @@ import { useProviderStore } from '@renderer/stores/provider-store'
 import type { ProviderConfig } from '../../../api/types'
 import type { SubAgentDefinition } from '../types'
 import { ipcClient } from '../../../ipc/ipc-client'
+import { resolveSubAgentMaxTurns } from '../limits'
 
 /** Shape returned by the agents:list IPC handler */
 interface AgentInfo {
@@ -32,7 +33,7 @@ function toDefinition(info: AgentInfo): SubAgentDefinition {
     icon: info.icon,
     tools: info.tools ?? info.allowedTools ?? ['Read', 'Glob', 'Grep', 'LS', 'Bash'],
     disallowedTools: info.disallowedTools ?? [],
-    maxTurns: info.maxTurns ?? info.maxIterations ?? 0,
+    maxTurns: resolveSubAgentMaxTurns(info.maxTurns ?? info.maxIterations),
     initialPrompt: info.initialPrompt,
     background: info.background,
     model: info.model,

@@ -44,6 +44,11 @@ public sealed class SubAgentRunner
         SubmitReportTool.ToolName
     };
 
+    private static readonly HashSet<string> MandatoryDisallowedTools = new(StringComparer.Ordinal)
+    {
+        "AskUserQuestion"
+    };
+
     private static Dictionary<string, ToolHandler> MergeInlineHandlers(
         Dictionary<string, ToolHandler>? existing,
         ToolHandler extra)
@@ -207,7 +212,7 @@ public sealed class SubAgentRunner
             Tools = tools,
             ToolRegistry = _toolRegistry,
             ToolContext = innerToolContext,
-            MaxIterations = definition.MaxTurns,
+            MaxIterations = SubAgentDefinition.ResolveMaxTurns(definition.MaxTurns),
             EnableParallelToolExecution = true,
             CaptureFinalMessages = messages => capturedFinalMessages = messages
         };
@@ -571,19 +576,16 @@ public sealed class SubAgentRunner
     {
         var allTools = _toolRegistry.GetDefinitions();
         invalidTools = new List<string>();
+        var disallowed = definition.DisallowedTools is { Count: > 0 }
+            ? new HashSet<string>(definition.DisallowedTools, StringComparer.Ordinal)
+            : new HashSet<string>(StringComparer.Ordinal);
+        disallowed.UnionWith(MandatoryDisallowedTools);
 
         if (definition.Tools is null || definition.Tools.Count == 0)
-            return allTools;
+            return allTools.Where(t => !disallowed.Contains(t.Name)).ToList();
 
         if (definition.Tools.Count == 1 && definition.Tools[0] == "*")
-        {
-            if (definition.DisallowedTools is { Count: > 0 })
-            {
-                var disallowed = new HashSet<string>(definition.DisallowedTools);
-                return allTools.Where(t => !disallowed.Contains(t.Name)).ToList();
-            }
-            return allTools;
-        }
+            return allTools.Where(t => !disallowed.Contains(t.Name)).ToList();
 
         var allowedNames = new HashSet<string>(definition.Tools);
         invalidTools = definition.Tools
@@ -592,11 +594,7 @@ public sealed class SubAgentRunner
             .ToList();
         var resolved = allTools.Where(t => allowedNames.Contains(t.Name)).ToList();
 
-        if (definition.DisallowedTools is { Count: > 0 })
-        {
-            var disallowed = new HashSet<string>(definition.DisallowedTools);
-            resolved = resolved.Where(t => !disallowed.Contains(t.Name)).ToList();
-        }
+        resolved = resolved.Where(t => !disallowed.Contains(t.Name)).ToList();
 
         return resolved;
     }

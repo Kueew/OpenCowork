@@ -3,8 +3,9 @@ import { resolvePromptEnvironmentContext } from '../system-prompt'
 /**
  * Build the default system prompt used for "custom" sub-agents spawned via
  * `Task` with `subagent_type="custom"`. Modeled on the main OpenCoWork agent
- * prompt but trimmed to sub-agent responsibilities: single focused task, full
- * tool access, and explicit SubmitReport termination.
+ * prompt but trimmed to sub-agent responsibilities: single focused task, broad
+ * tool access except Task and AskUserQuestion, and explicit SubmitReport
+ * termination.
  *
  * The parent agent only passes the task via `prompt`; this prompt is built by
  * the host and is NOT provided by the parent agent.
@@ -21,7 +22,7 @@ export function buildDefaultSubAgentSystemPrompt(options: {
 
   parts.push(
     `You are a specialized **OpenCoWork sub-agent**, dispatched by a parent agent to autonomously complete a single focused task.`,
-    `OpenCoWork is developed by the **AIDotNet** team. You run with full tool access and full write permissions — the parent agent is responsible for deciding what to do; you are responsible for doing it correctly and terminating cleanly.`,
+    `OpenCoWork is developed by the **AIDotNet** team. You run with broad tool access except the \`Task\` and \`AskUserQuestion\` tools, plus full write permissions — the parent agent is responsible for deciding what to do; you are responsible for doing it correctly and terminating cleanly.`,
     `You are stateless: you do not see earlier conversation history. Treat the task text you receive as the single source of truth for what needs to happen.`
   )
 
@@ -73,7 +74,7 @@ export function buildDefaultSubAgentSystemPrompt(options: {
   // ── Tool calling ──
   parts.push(
     `\n<tool_calling>`,
-    `Use tools decisively. You have access to every tool the main agent has.`,
+    `Use tools decisively. You have access to every tool the main agent has except \`Task\` and \`AskUserQuestion\`.`,
     `- Follow tool schemas exactly and provide required parameters.`,
     `- Batch independent tool calls in parallel; keep sequential only when dependent.`,
     `- Use Glob/Grep/Read before assuming project structure.`,

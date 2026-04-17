@@ -5,8 +5,13 @@ import type { SubAgentRunConfig, SubAgentResult } from './types'
 import { createSubAgentPromptMessage } from './input-message'
 import { buildRuntimeCompression } from '../context-compression-runtime'
 import { resolveSubAgentTools } from './resolve-tools'
-import { buildToolResultMessage, requestFallbackReport, runSharedAgentRuntime } from '../shared-runtime'
+import {
+  buildToolResultMessage,
+  requestFallbackReport,
+  runSharedAgentRuntime
+} from '../shared-runtime'
 import { createSubmitReportTool, SUBMIT_REPORT_TOOL_NAME } from './submit-report-tool'
+import { resolveSubAgentMaxTurns } from './limits'
 
 const READ_ONLY_SET = new Set([
   'Read',
@@ -67,7 +72,7 @@ export async function runSubAgent(config: SubAgentRunConfig): Promise<SubAgentRe
   const compression = buildRuntimeCompression(innerProvider, innerAbort.signal)
 
   const loopConfig: AgentLoopConfig = {
-    maxIterations: definition.maxTurns,
+    maxIterations: resolveSubAgentMaxTurns(definition.maxTurns),
     provider: innerProvider,
     tools: innerTools,
     systemPrompt: definition.systemPrompt,

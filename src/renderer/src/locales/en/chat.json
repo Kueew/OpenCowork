@@ -583,6 +583,7 @@
   "fileChange": {
     "new": "new",
     "deleted": "deleted",
+    "edited": "edited",
     "fileWillBeDeleted": "File will be deleted",
     "moreLines": "+{{count}} more lines",
     "unchangedLines": "··· {{count}} unchanged lines ···",
@@ -604,6 +605,14 @@
     "bulkActionsHint": "You can handle files one by one below, or apply bulk actions here.",
     "conflictedHint": "Some files changed after the agent finished, so only safe files were reverted.",
     "runSummary": "{{files}} files changed · {{pending}} pending",
+    "filesChanged": "{{count}} files changed",
+    "openReview": "Review changes",
+    "reviewPanelTitle": "Change review",
+    "reviewPanelDescription": "Review the changed files from this run, switch between them, and confirm or undo each change.",
+    "reviewFileList": "Files",
+    "reviewEmpty": "No file changes to review",
+    "reviewEmptyHint": "This panel shows the changed files and their diffs for the current run.",
+    "loadDiffFailed": "Failed to load full diff",
     "transport": {
       "local": "Local",
       "ssh": "SSH"

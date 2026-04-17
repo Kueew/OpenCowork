@@ -16,15 +16,20 @@ import { buildRuntimeCompression } from '../context-compression-runtime'
 import { subAgentRegistry } from '../sub-agents/registry'
 import { resolveSubAgentTools } from '../sub-agents/resolve-tools'
 import { requestFallbackReport, runSharedAgentRuntime } from '../shared-runtime'
-import { appendTeamRuntimeMessage, updateTeamRuntimeManifest, updateTeamRuntimeMember } from './runtime-client'
+import {
+  appendTeamRuntimeMessage,
+  updateTeamRuntimeManifest,
+  updateTeamRuntimeMember
+} from './runtime-client'
 import { requestTeammatePermission, stopWorkerPermissionPoller } from './permission-bridge'
 import { requestPlanApproval, stopWorkerPlanApprovalPoller } from './plan-approval-bridge'
 import { buildTeammateAddendum } from './prompts'
 import { startWorkerInboxPoller, stopWorkerInboxPoller } from './worker-inbox'
+import { DEFAULT_SUB_AGENT_MAX_TURNS, resolveSubAgentMaxTurns } from '../sub-agents/limits'
 
 const teammateAbortControllers = new Map<string, AbortController>()
 const teammateShutdownRequested = new Set<string>()
-const DEFAULT_TEAMMATE_MAX_ITERATIONS = 0
+const DEFAULT_TEAMMATE_MAX_ITERATIONS = DEFAULT_SUB_AGENT_MAX_TURNS
 const MAX_REPORT_LENGTH = 4000
 const READ_ONLY_TOOLS = new Set(['Read', 'LS', 'Glob', 'Grep', 'TaskList', 'TaskGet', 'TeamStatus'])
 
@@ -122,9 +127,7 @@ export async function runTeammate(options: RunTeammateOptions): Promise<void> {
   teammateAbortControllers.set(memberId, abortController)
 
   const leadOnlyTools = new Set(['TeamCreate', 'TeamDelete', 'TaskCreate'])
-  const baseToolDefs = toolRegistry
-    .getDefinitions()
-    .filter((tool) => !leadOnlyTools.has(tool.name))
+  const baseToolDefs = toolRegistry.getDefinitions().filter((tool) => !leadOnlyTools.has(tool.name))
   const agentDefinition = agentName ? subAgentRegistry.get(agentName) : undefined
   const toolDefs = agentDefinition
     ? resolveSubAgentTools(agentDefinition, baseToolDefs).tools
@@ -288,7 +291,18 @@ async function runSingleTaskLoop(opts: {
   toolDefs: ReturnType<typeof toolRegistry.getDefinitions>
   messageQueue?: MessageQueue
 }): Promise<SingleTaskResult> {
-  const { memberId, memberName, prompt, taskId, model, agentName, workingFolder, abortController, toolDefs, messageQueue } = opts
+  const {
+    memberId,
+    memberName,
+    prompt,
+    taskId,
+    model,
+    agentName,
+    workingFolder,
+    abortController,
+    toolDefs,
+    messageQueue
+  } = opts
 
   const settings = useSettingsStore.getState()
   const providerState = useProviderStore.getState()
@@ -299,7 +313,8 @@ async function runSingleTaskLoop(opts: {
   }
 
   const activeConfig = providerState.getActiveProviderConfig()
-  const effectiveModel = model && model !== 'default' ? model : (activeConfig?.model ?? settings.model)
+  const effectiveModel =
+    model && model !== 'default' ? model : (activeConfig?.model ?? settings.model)
   const effectiveMaxTokens = useProviderStore
     .getState()
     .getEffectiveMaxTokens(settings.maxTokens, effectiveModel)
@@ -320,20 +335,28 @@ async function runSingleTaskLoop(opts: {
       }
 
   if (toolDefs.length === 0) {
-    throw new Error(agentName ? `No tools available for teammate agent "${agentName}".` : 'No tools available for teammate.')
+    throw new Error(
+      agentName
+        ? `No tools available for teammate agent "${agentName}".`
+        : 'No tools available for teammate.'
+    )
   }
 
   const team = useTeamStore.getState().activeTeam
   const sessionId = team?.sessionId
   const taskInfo = taskId && team ? team.tasks.find((task) => task.id === taskId) : null
   const agentDefinition = agentName ? subAgentRegistry.get(agentName) : undefined
-  const effectivePrompt = agentDefinition?.initialPrompt ? `${agentDefinition.initialPrompt}\n\n${prompt}` : prompt
+  const effectivePrompt = agentDefinition?.initialPrompt
+    ? `${agentDefinition.initialPrompt}\n\n${prompt}`
+    : prompt
 
   const coordinationPrompt = buildTeammateAddendum({
     memberName,
     teamName: team?.name ?? 'team',
     prompt: effectivePrompt,
-    task: taskInfo ? { id: taskInfo.id, subject: taskInfo.subject, description: taskInfo.description } : null,
+    task: taskInfo
+      ? { id: taskInfo.id, subject: taskInfo.subject, description: taskInfo.description }
+      : null,
     workingFolder,
     language: settings.language,
     permissionMode: team?.permissionMode
@@ -345,7 +368,9 @@ async function runSingleTaskLoop(opts: {
 
   const compression = buildRuntimeCompression(providerConfig, abortController.signal)
   const loopConfig: AgentLoopConfig = {
-    maxIterations: agentDefinition?.maxTurns ?? DEFAULT_TEAMMATE_MAX_ITERATIONS,
+    maxIterations: resolveSubAgentMaxTurns(
+      agentDefinition?.maxTurns ?? DEFAULT_TEAMMATE_MAX_ITERATIONS
+    ),
     provider: providerConfig,
     tools: toolDefs,
     systemPrompt,
@@ -389,7 +414,9 @@ async function runSingleTaskLoop(opts: {
     })
 
     if (!approval.approved) {
-      const rejectedOutput = approval.feedback ? `${planText}\n\nLead feedback: ${approval.feedback}` : planText
+      const rejectedOutput = approval.feedback
+        ? `${planText}\n\nLead feedback: ${approval.feedback}`
+        : planText
       return {
         iterations: planRuntime.iterations,
         toolCalls: planRuntime.toolCallCount,
@@ -552,7 +579,11 @@ async function runSingleTaskLoop(opts: {
   // transcript with a synthetic "generate a detailed report" user message.
   // Without this the lead agent loses all visibility into what the teammate did.
   let resolvedOutput = runtime.finalOutput
-  if (!resolvedOutput.trim() && runtime.finalMessages.length > 0 && !abortController.signal.aborted) {
+  if (
+    !resolvedOutput.trim() &&
+    runtime.finalMessages.length > 0 &&
+    !abortController.signal.aborted
+  ) {
     const fallback = await requestFallbackReport({
       capturedMessages: runtime.finalMessages,
       loopConfig,

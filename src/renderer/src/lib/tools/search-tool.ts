@@ -40,6 +40,12 @@ type GrepToolResult = {
   error?: string
 }
 
+const PROMPT_SEARCH_MAX_MATCHES = 50
+const PROMPT_SEARCH_FETCH_LIMIT = PROMPT_SEARCH_MAX_MATCHES + 1
+const PROMPT_SEARCH_MAX_OUTPUT_BYTES = 8 * 1024
+const PROMPT_GREP_MAX_LINE_LENGTH = 160
+const textEncoder = new TextEncoder()
+
 function isAbsolutePath(p: string): boolean {
   if (!p) return false
   if (p.startsWith('/') || p.startsWith('\\')) return true
@@ -161,9 +167,9 @@ function normalizeGlobResult(
         ? rawMeta.backend
         : options.backend,
     pattern: typeof rawMeta?.pattern === 'string' ? rawMeta.pattern : options.pattern,
-    searchRoot:
-      typeof rawMeta?.searchRoot === 'string' ? rawMeta.searchRoot : options.searchRoot,
-    pathStyle: rawMeta?.pathStyle === 'relative_to_search_root' ? 'relative_to_search_root' : 'absolute',
+    searchRoot: typeof rawMeta?.searchRoot === 'string' ? rawMeta.searchRoot : options.searchRoot,
+    pathStyle:
+      rawMeta?.pathStyle === 'relative_to_search_root' ? 'relative_to_search_root' : 'absolute',
     truncated: rawMeta?.truncated === true,
     timedOut: rawMeta?.timedOut === true,
     limitReason: normalizeLimitReason(rawMeta?.limitReason),
@@ -202,43 +208,134 @@ function normalizeGlobResult(
   }
 }
 
+function estimatePromptBytes(value: unknown): number {
+  return textEncoder.encode(JSON.stringify(value)).length
+}
+
+function normalizePromptGrepText(text: string): string {
+  const normalized = text.trim()
+  if (normalized.length <= PROMPT_GREP_MAX_LINE_LENGTH) return normalized
+  return `${normalized.slice(0, PROMPT_GREP_MAX_LINE_LENGTH - 1)}…`
+}
+
+function limitGlobResultForPrompt(result: GlobToolResult): GlobToolResult {
+  const matches: Array<{ path: string; type?: 'file' | 'directory' }> = []
+  let totalBytes = 2
+  let limitReason: SearchLimitReason = null
+
+  for (const item of result.matches) {
+    if (matches.length >= PROMPT_SEARCH_MAX_MATCHES) {
+      limitReason = 'max_results'
+      break
+    }
+
+    const candidateBytes = estimatePromptBytes(item.path) + 1
+    if (totalBytes + candidateBytes > PROMPT_SEARCH_MAX_OUTPUT_BYTES) {
+      limitReason = 'max_output_bytes'
+      break
+    }
+
+    matches.push(item)
+    totalBytes += candidateBytes
+  }
+
+  if (!limitReason) return result
+  return {
+    ...result,
+    matches,
+    meta: {
+      ...result.meta,
+      truncated: true,
+      limitReason: result.meta.limitReason ?? limitReason
+    }
+  }
+}
+
+function limitGrepResultForPrompt(result: GrepToolResult): GrepToolResult {
+  const matches: Array<{ path: string; line: number; text: string }> = []
+  let totalBytes = 2
+  let limitReason: SearchLimitReason = null
+
+  for (const item of result.matches) {
+    if (matches.length >= PROMPT_SEARCH_MAX_MATCHES) {
+      limitReason = 'max_results'
+      break
+    }
+
+    const normalizedItem = {
+      ...item,
+      text: normalizePromptGrepText(item.text)
+    }
+    const candidateBytes =
+      estimatePromptBytes({
+        file: normalizedItem.path,
+        line: normalizedItem.line,
+        text: normalizedItem.text
+      }) + 1
+    if (totalBytes + candidateBytes > PROMPT_SEARCH_MAX_OUTPUT_BYTES) {
+      limitReason = 'max_output_bytes'
+      break
+    }
+
+    matches.push(normalizedItem)
+    totalBytes += candidateBytes
+  }
+
+  if (!limitReason && matches.length === result.matches.length) {
+    return { ...result, matches }
+  }
+
+  return {
+    ...result,
+    matches,
+    meta: {
+      ...result.meta,
+      truncated: result.meta.truncated || limitReason !== null,
+      limitReason: result.meta.limitReason ?? limitReason
+    }
+  }
+}
+
 function shouldUseCompactSearchPayload(meta: SearchMeta, error?: string): boolean {
   return !error && !meta.truncated && !meta.timedOut && (meta.warnings?.length ?? 0) === 0
 }
 
 function formatGlobResultForPrompt(result: GlobToolResult): Record<string, unknown> | unknown[] {
-  if (shouldUseCompactSearchPayload(result.meta, result.error)) {
-    return result.matches.map((item) => item.path)
+  const limitedResult = limitGlobResultForPrompt(result)
+
+  if (shouldUseCompactSearchPayload(limitedResult.meta, limitedResult.error)) {
+    return limitedResult.matches.map((item) => item.path)
   }
 
   return {
-    matches: result.matches.map((item) => item.path),
-    truncated: result.meta.truncated,
-    timedOut: result.meta.timedOut,
-    limitReason: result.meta.limitReason,
-    warnings: result.meta.warnings,
-    error: result.error
+    matches: limitedResult.matches.map((item) => item.path),
+    truncated: limitedResult.meta.truncated,
+    timedOut: limitedResult.meta.timedOut,
+    limitReason: limitedResult.meta.limitReason,
+    warnings: limitedResult.meta.warnings,
+    error: limitedResult.error
   }
 }
 
 function formatGrepResultForPrompt(result: GrepToolResult): Record<string, unknown> | unknown[] {
-  const compactMatches = result.matches.map((item) => ({
+  const limitedResult = limitGrepResultForPrompt(result)
+  const compactMatches = limitedResult.matches.map((item) => ({
     file: item.path,
     line: item.line,
     text: item.text
   }))
 
-  if (shouldUseCompactSearchPayload(result.meta, result.error)) {
+  if (shouldUseCompactSearchPayload(limitedResult.meta, limitedResult.error)) {
     return compactMatches
   }
 
   return {
     matches: compactMatches,
-    truncated: result.meta.truncated,
-    timedOut: result.meta.timedOut,
-    limitReason: result.meta.limitReason,
-    warnings: result.meta.warnings,
-    error: result.error
+    truncated: limitedResult.meta.truncated,
+    timedOut: limitedResult.meta.timedOut,
+    limitReason: limitedResult.meta.limitReason,
+    warnings: limitedResult.meta.warnings,
+    error: limitedResult.error
   }
 }
 
@@ -293,9 +390,9 @@ function normalizeGrepResult(
         : options.backend,
     pattern: typeof rawMeta?.pattern === 'string' ? rawMeta.pattern : options.pattern,
     include: typeof rawMeta?.include === 'string' ? rawMeta.include : options.include,
-    searchRoot:
-      typeof rawMeta?.searchRoot === 'string' ? rawMeta.searchRoot : options.searchRoot,
-    pathStyle: rawMeta?.pathStyle === 'relative_to_search_root' ? 'relative_to_search_root' : 'absolute',
+    searchRoot: typeof rawMeta?.searchRoot === 'string' ? rawMeta.searchRoot : options.searchRoot,
+    pathStyle:
+      rawMeta?.pathStyle === 'relative_to_search_root' ? 'relative_to_search_root' : 'absolute',
     truncated: rawMeta?.truncated === true || raw.truncated === true,
     timedOut: rawMeta?.timedOut === true || raw.timedOut === true,
     limitReason: normalizeLimitReason(rawMeta?.limitReason ?? raw.limitReason),
@@ -359,7 +456,8 @@ const globHandler: ToolHandler = {
       const result = await ctx.ipc.invoke(IPC.SSH_FS_GLOB, {
         connectionId: ctx.sshConnectionId,
         pattern: input.pattern,
-        path: resolvedPath
+        path: resolvedPath,
+        limit: PROMPT_SEARCH_FETCH_LIMIT
       })
       return encodeStructuredToolResult(
         formatGlobResultForPrompt(
@@ -373,7 +471,8 @@ const globHandler: ToolHandler = {
     }
     const result = await ctx.ipc.invoke(IPC.FS_GLOB, {
       pattern: input.pattern,
-      path: resolvedPath
+      path: resolvedPath,
+      limit: PROMPT_SEARCH_FETCH_LIMIT
     })
     return encodeStructuredToolResult(
       formatGlobResultForPrompt(
@@ -413,7 +512,8 @@ const grepHandler: ToolHandler = {
         connectionId: ctx.sshConnectionId,
         pattern: input.pattern,
         path: resolvedPath,
-        include: input.include
+        include: input.include,
+        limit: PROMPT_SEARCH_FETCH_LIMIT
       })
       return encodeStructuredToolResult(
         formatGrepResultForPrompt(
@@ -429,7 +529,8 @@ const grepHandler: ToolHandler = {
     const result = await ctx.ipc.invoke(IPC.FS_GREP, {
       pattern: input.pattern,
       path: resolvedPath,
-      include: input.include
+      include: input.include,
+      limit: PROMPT_SEARCH_FETCH_LIMIT
     })
     return encodeStructuredToolResult(
       formatGrepResultForPrompt(

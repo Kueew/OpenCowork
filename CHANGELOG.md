@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.1] - 2026-04-16
+
+### Added
+
+- Added dedicated sub-agent limits to cap tool use, read scope, and runtime behavior for safer agent execution.
+- Added change review sheet and file-change utility helpers to support richer file diff review flows in the chat UI.
+
+### Changed
+
+- Refined sub-agent creation, resolution, runner, and default prompt flows to better enforce tool availability and execution constraints.
+- Updated filesystem and search tool handling for sub-agents and teammate runners to align with the new execution limits.
+- Improved skills and steps side panels, plus chat review card interactions, for clearer review workflows.
+- Standardized English and Chinese chat locale copy for the updated sub-agent and review experience.
+
+### Fixed
+
+- Fixed sub-agent and runtime protocol behavior in the .NET sidecar to keep agent execution consistent.
+- Fixed streaming and review card state handling in the renderer when file changes transition across statuses.
+
 ## [0.9.0] - 2026-04-16
 
 ### Added

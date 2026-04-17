@@ -568,6 +568,7 @@
   "fileChange": {
     "new": "新建",
     "deleted": "已删除",
+    "edited": "已编辑",
     "fileWillBeDeleted": "文件将被删除",
     "moreLines": "+{{count}} 行更多",
     "unchangedLines": "··· {{count}} 行未变更 ···",
@@ -589,6 +590,14 @@
     "bulkActionsHint": "你可以在下方逐个处理文件，也可以在这里直接执行批量操作。",
     "conflictedHint": "有些文件在 Agent 结束后又被改动过，所以只回滚了安全可恢复的文件。",
     "runSummary": "共改动 {{files}} 个文件 · {{pending}} 个待处理",
+    "filesChanged": "{{count}} 个文件已更改",
+    "openReview": "查看更改",
+    "reviewPanelTitle": "更改审查",
+    "reviewPanelDescription": "右侧查看本次运行涉及的文件列表，左侧切换文件，逐个确认或撤回改动。",
+    "reviewFileList": "文件列表",
+    "reviewEmpty": "暂无可查看的文件变更",
+    "reviewEmptyHint": "这里会展示本次运行涉及的文件列表和 diff。",
+    "loadDiffFailed": "加载完整 diff 失败",
     "transport": {
       "local": "本地",
       "ssh": "SSH"

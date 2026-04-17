@@ -37,6 +37,7 @@ public sealed class AgentRuntimeService
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _activeRuns = new();
     private readonly ConcurrentDictionary<string, DateTimeOffset> _readFileHistory = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, Channel<StreamEvent>> _bridgedProviderStreams = new();
+    private readonly ConcurrentDictionary<string, LastTaskInvocation> _lastTaskInvocationBySession = new(StringComparer.Ordinal);
 
     private sealed record ShellCommandExecutionResult(
         int ExitCode,
@@ -47,6 +48,12 @@ public sealed class AgentRuntimeService
         long SpawnMs,
         bool TimedOut,
         bool Aborted);
+
+    private sealed record LastTaskInvocation(
+        string RunId,
+        string Key,
+        string Output,
+        string ToolUseId);
 
     private static readonly string[] SupportedCapabilities =
     [
@@ -112,6 +119,36 @@ public sealed class AgentRuntimeService
             return DefaultMaxParallelTools;
 
         return Math.Clamp(value, MinMaxParallelTools, MaxMaxParallelTools);
+    }
+
+    private static string NormalizeTaskPrompt(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        return string.Join(" ", value.Trim().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    private static string GetNormalizedTaskPrompt(Dictionary<string, JsonElement> input, string key)
+    {
+        if (!input.TryGetValue(key, out var value) || value.ValueKind != JsonValueKind.String)
+            return string.Empty;
+
+        return NormalizeTaskPrompt(value.GetString());
+    }
+
+    private static string BuildTaskDedupKey(Dictionary<string, JsonElement> input)
+    {
+        var subType = GetOptionalString(input, "subagent_type") ?? string.Empty;
+        var prompt = GetNormalizedTaskPrompt(input, "prompt");
+        if (string.IsNullOrEmpty(prompt))
+            prompt = GetNormalizedTaskPrompt(input, "query");
+        if (string.IsNullOrEmpty(prompt))
+            prompt = GetNormalizedTaskPrompt(input, "task");
+        if (string.IsNullOrEmpty(prompt))
+            prompt = GetNormalizedTaskPrompt(input, "target");
+
+        return $"{subType}::{prompt}";
     }
 
     public async Task<AgentRunResult> StartRunAsync(AgentRunParams input, CancellationToken ct)
@@ -958,7 +995,7 @@ public sealed class AgentRuntimeService
                 Description = """
 Launch a new agent to handle complex, multi-step tasks autonomously.
 
-The Task tool launches specialized agents (sub-agents) that autonomously handle complex tasks. Each agent type has its own focused system prompt and tool allowlist. Use "custom" for a general-purpose sub-agent with full tool access and a built-in default system prompt — you only supply the task via "prompt".
+The Task tool launches specialized agents (sub-agents) that autonomously handle complex tasks. Each agent type has its own focused system prompt and tool allowlist. Use "custom" for a general-purpose sub-agent with broad tool access except Task and AskUserQuestion and a built-in default system prompt — you only supply the task via "prompt".
 
 When using the Task tool, you MUST specify a "subagent_type" parameter to select which agent type to use.
 
@@ -976,7 +1013,7 @@ Usage notes:
 - The sub-agent's outputs should generally be trusted.
 - Set "run_in_background": true to spawn a teammate that runs independently. Your turn ends after spawning; you will be notified automatically when the teammate finishes. Background mode requires an active team (TeamCreate).
 """,
-                InputSchema = ParseSchema("""{"type":"object","properties":{"subagent_type":{"type":"string","description":"The sub-agent type to use. Use \"custom\" for a general-purpose sub-agent with full tool access and a built-in default system prompt — you only supply the task via prompt."},"description":{"type":"string","description":"A short (3-5 word) description of the task"},"prompt":{"type":"string","description":"The task for the agent to perform"},"model":{"type":"string","description":"Optional model override for this agent."},"resume":{"type":"string"},"readonly":{"type":"boolean"},"attachments":{"type":"array","items":{"type":"string"}},"run_in_background":{"type":"boolean","description":"Set to true to run this agent in the background as a teammate. Requires an active team (TeamCreate)."}},"required":["subagent_type","description","prompt"]}""")
+                InputSchema = ParseSchema("""{"type":"object","properties":{"subagent_type":{"type":"string","description":"The sub-agent type to use. Use \"custom\" for a general-purpose sub-agent with broad tool access except Task and AskUserQuestion and a built-in default system prompt — you only supply the task via prompt."},"description":{"type":"string","description":"A short (3-5 word) description of the task"},"prompt":{"type":"string","description":"The task for the agent to perform"},"model":{"type":"string","description":"Optional model override for this agent."},"resume":{"type":"string"},"readonly":{"type":"boolean"},"attachments":{"type":"array","items":{"type":"string"}},"run_in_background":{"type":"boolean","description":"Set to true to run this agent in the background as a teammate. Requires an active team (TeamCreate)."}},"required":["subagent_type","description","prompt"]}""")
             },
             Execute = ExecuteTaskToolAsync,
             RequiresApproval = (input, _) => GetOptionalBool(input, "run_in_background") == true
@@ -1113,7 +1150,7 @@ Usage notes:
 
         return $"""
 You are a specialized **OpenCoWork sub-agent**, dispatched by a parent agent to autonomously complete a single focused task.
-OpenCoWork is developed by the **AIDotNet** team. You run with full tool access and full write permissions — the parent agent is responsible for deciding what to do; you are responsible for doing it correctly and terminating cleanly.
+OpenCoWork is developed by the **AIDotNet** team. You run with broad tool access except the `Task` and `AskUserQuestion` tools, plus full write permissions — the parent agent is responsible for deciding what to do; you are responsible for doing it correctly and terminating cleanly.
 You are stateless: you do not see earlier conversation history. Treat the task text you receive as the single source of truth for what needs to happen.
 
 ## Environment
@@ -1130,7 +1167,7 @@ Be terse and direct. Focus on the task. Do not narrate, do not ask the parent fo
 </communication_style>
 
 <tool_calling>
-Use tools decisively. You have access to every tool the main agent has.
+Use tools decisively. You have access to every tool the main agent has except `Task` and `AskUserQuestion`.
 - Follow tool schemas exactly and provide required parameters.
 - Batch independent tool calls in parallel; keep sequential only when dependent.
 - Use Glob/Grep/Read before assuming project structure.
@@ -1497,8 +1534,8 @@ When the task is complete you MUST call the `SubmitReport` tool exactly once to 
                 Description = GetOptionalString(input, "description") ?? "Custom sub-agent",
                 SystemPrompt = BuildDefaultCustomSubAgentSystemPrompt(ctx.WorkingFolder),
                 Tools = new List<string> { "*" },
-                DisallowedTools = new List<string>(),
-                MaxTurns = 0,
+                DisallowedTools = new List<string> { "Task", "AskUserQuestion" },
+                MaxTurns = SubAgentDefinition.DefaultMaxTurns,
                 Model = GetOptionalString(input, "model")
             };
         }
@@ -1520,9 +1557,30 @@ When the task is complete you MUST call the `SubmitReport` tool exactly once to 
         if (ctx.ProviderConfig is null)
             throw new InvalidOperationException("Provider config is unavailable for sub-agent execution.");
 
+        var runScopeId = ctx.AgentRunId ?? ctx.SessionId;
+        var currentToolUseId = ctx.CurrentToolUseId ?? string.Empty;
+        var dedupKey = BuildTaskDedupKey(input);
+        if (_lastTaskInvocationBySession.TryGetValue(ctx.SessionId, out var lastInvocation)
+            && string.Equals(lastInvocation.RunId, runScopeId, StringComparison.Ordinal)
+            && string.Equals(lastInvocation.Key, dedupKey, StringComparison.Ordinal)
+            && !string.Equals(lastInvocation.ToolUseId, currentToolUseId, StringComparison.Ordinal))
+        {
+            return new ToolResultContent
+            {
+                Content = BuildJsonObject(new Dictionary<string, JsonNode?>
+                {
+                    ["error"] = JsonValue.Create(
+                        $"Duplicate Task call blocked: the previous Task invocation to \"{subAgentName}\" used an identical prompt and already returned a report. " +
+                        "Do NOT re-launch the same sub-agent with the same prompt. Use the previous report below to continue your work, or call Task with a different sub-agent " +
+                        "or a materially different prompt if you need new information."),
+                    ["previous_report"] = JsonValue.Create(lastInvocation.Output)
+                })
+            };
+        }
+
         var provider = CreateProvider(ctx.ProviderConfig, ctx.AgentRunId ?? ctx.SessionId);
-        // Custom sub-agents are defined inline by the parent agent and run with
-        // all permissions by default — auto-approve every tool call they make.
+        // Custom sub-agents are defined inline by the parent agent and
+        // auto-approve every tool call they are still allowed to make.
         ApprovalHandler approvalHandler = isCustom
             ? (_ => Task.FromResult(true))
             : CreateApprovalHandler(ctx.AgentRunId ?? ctx.SessionId, ctx.SessionId, ct);
@@ -1541,6 +1599,12 @@ When the task is complete you MUST call the `SubmitReport` tool exactly once to 
                 })
             };
         }
+
+        _lastTaskInvocationBySession[ctx.SessionId] = new LastTaskInvocation(
+            runScopeId,
+            dedupKey,
+            result.Result.Output,
+            currentToolUseId);
 
         return new ToolResultContent
         {
@@ -1590,7 +1654,7 @@ When the task is complete you MUST call the `SubmitReport` tool exactly once to 
             SystemPrompt = systemPromptValue.GetString(),
             Tools = tools.ToList(),
             DisallowedTools = (GetOptionalStringArray(element, "disallowedTools") ?? Array.Empty<string>()).ToList(),
-            MaxTurns = maxTurns,
+            MaxTurns = SubAgentDefinition.ResolveMaxTurns(maxTurns),
             InitialPrompt = GetString(element, "initialPrompt"),
             Model = GetString(element, "model"),
             Temperature = GetOptionalDouble(element, "temperature")
