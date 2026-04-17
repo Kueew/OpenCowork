@@ -106,6 +106,10 @@ const MINUTE_MS = 60 * 1000
 const HOUR_MS = 60 * MINUTE_MS
 const DAY_MS = 24 * HOUR_MS
 const WEEK_MS = 7 * DAY_MS
+const SIDEBAR_TREE_ROW_CLASS = 'min-h-8 rounded-lg'
+const SIDEBAR_TREE_ACTION_BUTTON_CLASS = 'size-6 rounded-md'
+const SIDEBAR_TREE_LABEL_CLASS = 'text-[13px] leading-5'
+const SIDEBAR_TREE_META_CLASS = 'text-[10px]'
 
 type FolderPickerTarget =
   | { type: 'create'; projectName: string; preferredSection?: 'local' | 'ssh' }
@@ -844,41 +848,42 @@ export function WorkspaceSidebar(): React.JSX.Element {
           <button
             type="button"
             className={cn(
-              'group/session flex min-h-5 w-full items-center gap-1 rounded-md px-1 py-0.5 text-left transition-colors',
+              'group/session flex w-full items-center gap-1.5 px-1.5 py-1 text-left transition-colors',
+              SIDEBAR_TREE_ROW_CLASS,
               active
                 ? 'bg-accent/90 text-accent-foreground'
                 : 'text-foreground/80 hover:bg-muted/45 hover:text-foreground'
             )}
             onClick={() => openSession(session.id)}
           >
-            <span className="inline-flex size-3 shrink-0 items-center justify-center">
+            <span className="inline-flex size-3.5 shrink-0 items-center justify-center">
               {session.pinned ? (
-                <Pin className="size-3 text-amber-500" />
+                <Pin className="size-3.5 text-amber-500" />
               ) : (
-                <span className="size-1.5 rounded-full bg-muted-foreground/35" />
+                <span className="size-2 rounded-full bg-muted-foreground/35" />
               )}
             </span>
-            <span className="min-w-0 flex-1 truncate text-[12px] font-medium leading-4">
+            <span className={cn('min-w-0 flex-1 truncate font-medium', SIDEBAR_TREE_LABEL_CLASS)}>
               {session.title}
             </span>
             <span className="ml-auto flex shrink-0 items-center gap-1">
-              {isRunning && <Loader2 className="size-3 shrink-0 animate-spin text-primary" />}
+              {isRunning && <Loader2 className="size-3.5 shrink-0 animate-spin text-primary" />}
               {blockedCount > 0 && (
-                <span className="rounded-full bg-amber-500/12 px-1 py-0.5 text-[8px] font-medium text-amber-600 dark:text-amber-400">
+                <span className="rounded-full bg-amber-500/12 px-1.5 py-0.5 text-[9px] font-medium text-amber-600 dark:text-amber-400">
                   {blockedCount > 99 ? '99+' : blockedCount}
                 </span>
               )}
               {unreadCount > 0 && (
-                <span className="rounded-full bg-sky-500/12 px-1 py-0.5 text-[8px] font-medium text-sky-600 dark:text-sky-400">
+                <span className="rounded-full bg-sky-500/12 px-1.5 py-0.5 text-[9px] font-medium text-sky-600 dark:text-sky-400">
                   {unreadCount > 99 ? '99+' : unreadCount}
                 </span>
               )}
               {pendingCount > 0 && (
-                <span className="rounded-full bg-primary/12 px-1 py-0.5 text-[8px] font-medium text-primary">
+                <span className="rounded-full bg-primary/12 px-1.5 py-0.5 text-[9px] font-medium text-primary">
                   {pendingCount > 99 ? '99+' : pendingCount}
                 </span>
               )}
-              <span className="text-[9px] text-muted-foreground/70">
+              <span className={cn('text-muted-foreground/70', SIDEBAR_TREE_META_CLASS)}>
                 {formatRelativeTime(session.updatedAt, locale)}
               </span>
             </span>
@@ -1217,7 +1222,8 @@ export function WorkspaceSidebar(): React.JSX.Element {
                     <div key={project.id} className="space-y-1">
                       <div
                         className={cn(
-                          'group/project flex items-center gap-1 rounded-lg px-1 py-0.5 transition-colors',
+                          'group/project flex items-center gap-1.5 px-1.5 py-1 transition-colors',
+                          SIDEBAR_TREE_ROW_CLASS,
                           isProjectActive
                             ? 'bg-accent/80 text-accent-foreground'
                             : 'hover:bg-muted/40'
@@ -1226,7 +1232,10 @@ export function WorkspaceSidebar(): React.JSX.Element {
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="size-4 shrink-0 rounded-sm text-muted-foreground hover:text-foreground"
+                          className={cn(
+                            SIDEBAR_TREE_ACTION_BUTTON_CLASS,
+                            'shrink-0 text-muted-foreground hover:text-foreground'
+                          )}
                           onClick={() => toggleProjectCollapsed(project.id)}
                           title={
                             isCollapsed
@@ -1235,25 +1244,30 @@ export function WorkspaceSidebar(): React.JSX.Element {
                           }
                         >
                           {isCollapsed ? (
-                            <ChevronRight className="size-2.5" />
+                            <ChevronRight className="size-3.5" />
                           ) : (
-                            <ChevronDown className="size-2.5" />
+                            <ChevronDown className="size-3.5" />
                           )}
                         </Button>
 
                         <button
                           type="button"
-                          className="min-w-0 flex-1 rounded-md px-0.5 py-0.5 text-left"
+                          className="min-w-0 flex-1 rounded-md px-1 py-1 text-left"
                           onClick={() => navigateProjectView(project.id)}
                         >
                           <div className="flex min-w-0 items-center gap-1.5">
-                            <span className="truncate text-[11px] font-semibold leading-4 text-foreground">
+                            <span
+                              className={cn(
+                                'truncate font-semibold text-foreground',
+                                SIDEBAR_TREE_LABEL_CLASS
+                              )}
+                            >
                               {project.name}
                             </span>
                             {project.sshConnectionId ? (
                               <Badge
                                 variant="secondary"
-                                className="h-3.5 rounded-md px-1 text-[8px] leading-none"
+                                className="h-5 rounded-md px-1.5 text-[9px] leading-none"
                               >
                                 SSH
                               </Badge>
@@ -1261,19 +1275,20 @@ export function WorkspaceSidebar(): React.JSX.Element {
                           </div>
                         </button>
 
-                        <div className="relative flex h-5 w-[72px] shrink-0 items-center justify-end overflow-hidden">
+                        <div className="relative flex h-8 w-[96px] shrink-0 items-center justify-end overflow-hidden">
                           <div
                             className={cn(
-                              'absolute inset-0 flex items-center justify-end gap-1 text-[9px] text-muted-foreground transition-opacity',
+                              'absolute inset-0 flex items-center justify-end gap-1 text-muted-foreground transition-opacity',
+                              SIDEBAR_TREE_META_CLASS,
                               isProjectActive
                                 ? 'pointer-events-none opacity-0'
                                 : 'opacity-100 group-hover/project:opacity-0'
                             )}
                           >
                             {group.isRunning ? (
-                              <Loader2 className="size-3 animate-spin text-primary" />
+                              <Loader2 className="size-3.5 animate-spin text-primary" />
                             ) : null}
-                            {project.pinned ? <Pin className="size-3 text-amber-500" /> : null}
+                            {project.pinned ? <Pin className="size-3.5 text-amber-500" /> : null}
                             <span>{group.sessions.length}</span>
                           </div>
 
@@ -1288,30 +1303,30 @@ export function WorkspaceSidebar(): React.JSX.Element {
                             <Button
                               variant="ghost"
                               size="icon"
-                              className="size-4 rounded-sm"
+                              className={SIDEBAR_TREE_ACTION_BUTTON_CLASS}
                               onClick={() => handleCreateSession(project.id)}
                               title={t('sidebar.newChat')}
                             >
-                              <Plus className="size-2.5" />
+                              <Plus className="size-3.5" />
                             </Button>
                             <Button
                               variant="ghost"
                               size="icon"
-                              className="size-4 rounded-sm"
+                              className={SIDEBAR_TREE_ACTION_BUTTON_CLASS}
                               onClick={() => navigateProjectView(project.id)}
                               title={t('sidebar.openProject')}
                             >
-                              <FolderOpen className="size-2.5" />
+                              <FolderOpen className="size-3.5" />
                             </Button>
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
                                 <Button
                                   variant="ghost"
                                   size="icon"
-                                  className="size-4 rounded-sm"
+                                  className={SIDEBAR_TREE_ACTION_BUTTON_CLASS}
                                   title={tCommon('action.more', { defaultValue: 'More' })}
                                 >
-                                  <MoreHorizontal className="size-2.5" />
+                                  <MoreHorizontal className="size-3.5" />
                                 </Button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end" className="w-52">
@@ -1651,4 +1666,3 @@ export function WorkspaceSidebar(): React.JSX.Element {
     </>
   )
 }
-

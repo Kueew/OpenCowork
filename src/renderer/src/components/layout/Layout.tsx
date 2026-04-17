@@ -1122,7 +1122,10 @@ export function Layout({ updateInfo, onOpenUpdateDialog }: LayoutProps): React.J
                                   undefined,
                                   undefined,
                                   undefined,
-                                  options
+                                  {
+                                    ...options,
+                                    clearCompletedTasksOnTurnStart: true
+                                  }
                                 )
                               }
                               onStop={stopStreaming}

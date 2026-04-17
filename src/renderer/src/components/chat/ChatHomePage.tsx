@@ -105,7 +105,10 @@ export function ChatHomePage(): React.JSX.Element {
     const sessionId = chatStore.createSession(mode, activeProject?.id ?? undefined, options)
     chatStore.setActiveSession(sessionId)
     useUIStore.getState().navigateToSession()
-    void sendMessage(text, images, undefined, sessionId, undefined, undefined, options)
+    void sendMessage(text, images, undefined, sessionId, undefined, undefined, {
+      ...options,
+      clearCompletedTasksOnTurnStart: true
+    })
   }
 
   const updateHomeProjectDirectory = React.useCallback(
