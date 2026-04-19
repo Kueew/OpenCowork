@@ -101,7 +101,7 @@ function InlineChangePreview({ change }: { change: AggregatedFileChange }): Reac
 
   if (isLoading && !loadedContent && shouldLoadFullContent) {
     return (
-      <div className="flex items-center gap-2 px-4 py-5 text-[11px] text-zinc-500">
+      <div className="flex items-center gap-2 px-4 py-5 text-[11px] text-muted-foreground">
         <Loader2 className="size-3.5 animate-spin text-emerald-400" />
         {t('thinking.thinkingEllipsis')}
       </div>
@@ -109,13 +109,13 @@ function InlineChangePreview({ change }: { change: AggregatedFileChange }): Reac
   }
 
   if (loadError && !loadedContent && shouldLoadFullContent) {
-    return <div className="px-4 py-5 text-[11px] text-red-300/90">{loadError}</div>
+    return <div className="px-4 py-5 text-[11px] text-destructive">{loadError}</div>
   }
 
   if (change.op === 'create') {
     return (
-      <div className="border-t border-white/[0.06] bg-[#111214] px-3 py-3">
-        <div className="flex items-center gap-3 px-4 py-2 text-[10px] text-zinc-500">
+      <div className="border-t border-border/60 bg-muted/15 px-3 py-3">
+        <div className="flex items-center gap-3 px-4 py-2 text-[10px] text-muted-foreground">
           <span>{t('fileChange.lineCount', { count: lineCount(afterText) })}</span>
         </div>
         <CodeDiffViewer chunks={diffChunks} mode="inline" showModeToggle={false} />
@@ -124,7 +124,7 @@ function InlineChangePreview({ change }: { change: AggregatedFileChange }): Reac
   }
 
   return (
-    <div className="border-t border-white/[0.06] bg-[#111214] px-3 py-3">
+    <div className="border-t border-border/60 bg-muted/15 px-3 py-3">
       <CodeDiffViewer chunks={diffChunks} mode="inline" showModeToggle={false} />
     </div>
   )
@@ -197,19 +197,23 @@ export function RunChangeReviewCard({
   }
 
   return (
-    <div className="mt-3 overflow-hidden rounded-xl border border-white/[0.06] bg-[#242628] text-zinc-100 shadow-[0_10px_24px_rgba(0,0,0,0.2)]">
+    <div className="mt-3 overflow-hidden rounded-xl border border-border/70 bg-background/80 text-foreground shadow-sm">
       <div className="flex items-center justify-between gap-2 px-3 py-2.5">
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-          <h3 className="text-[11px] font-medium text-zinc-50">
+          <h3 className="text-[11px] font-medium text-foreground">
             {t('fileChange.filesChanged', { count: aggregatedChanges.length })}
           </h3>
-          <span className="text-[12px] font-medium text-emerald-300">+{summary.added}</span>
-          <span className="text-[12px] font-medium text-red-300">-{summary.deleted}</span>
+          <span className="text-[12px] font-medium text-emerald-600 dark:text-emerald-300">
+            +{summary.added}
+          </span>
+          <span className="text-[12px] font-medium text-red-600 dark:text-red-300">
+            -{summary.deleted}
+          </span>
         </div>
 
         <button
           type="button"
-          className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-zinc-300 transition-colors hover:bg-white/[0.05] hover:text-zinc-50 disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
           onClick={() => void handleRollback()}
           disabled={!actionable || isRollingBack}
         >
@@ -222,31 +226,31 @@ export function RunChangeReviewCard({
         </button>
       </div>
 
-      <div className="border-t border-white/[0.06]">
+      <div className="border-t border-border/60">
         {aggregatedChanges.map((change) => {
           const stats = summariesByChangeId[change.id] ?? { added: 0, deleted: 0 }
           const expanded = expandedChangeId === change.id
 
           return (
-            <div key={change.id} className="border-b border-white/[0.06] last:border-b-0">
+            <div key={change.id} className="border-b border-border/60 last:border-b-0">
               <div className="flex items-stretch">
                 <button
                   type="button"
                   onClick={() =>
                     setExpandedChangeId((current) => (current === change.id ? null : change.id))
                   }
-                  className="group flex min-w-0 flex-1 items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-white/[0.025]"
+                  className="group flex min-w-0 flex-1 items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-muted/30"
                   title={change.filePath}
                 >
                   <span
-                    className="min-w-0 flex-1 truncate text-[11px] text-zinc-100 transition-colors group-hover:text-white"
+                    className="min-w-0 flex-1 truncate text-[11px] text-foreground/90 transition-colors group-hover:text-foreground"
                     style={{ fontFamily: MONO_FONT }}
                   >
                     {change.filePath}
                   </span>
                   <div className="flex shrink-0 items-center gap-1.5 text-[10px] font-medium">
-                    <span className="text-emerald-300">+{stats.added}</span>
-                    <span className="text-red-300">-{stats.deleted}</span>
+                    <span className="text-emerald-600 dark:text-emerald-300">+{stats.added}</span>
+                    <span className="text-red-600 dark:text-red-300">-{stats.deleted}</span>
                   </div>
                 </button>
 
@@ -254,7 +258,7 @@ export function RunChangeReviewCard({
                   {expanded ? (
                     <button
                       type="button"
-                      className="rounded p-1 text-zinc-500 transition-colors hover:bg-white/[0.05] hover:text-zinc-200"
+                      className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
                       onClick={() => handleOpenReviewForChange(change.lastChangeId)}
                       title={t('fileChange.openReview', { defaultValue: 'Open review' })}
                       aria-label={t('fileChange.openReview', { defaultValue: 'Open review' })}
@@ -264,7 +268,7 @@ export function RunChangeReviewCard({
                   ) : null}
                   <button
                     type="button"
-                    className="rounded p-1 text-zinc-500 transition-colors hover:bg-white/[0.05] hover:text-zinc-200"
+                    className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
                     onClick={() =>
                       setExpandedChangeId((current) => (current === change.id ? null : change.id))
                     }

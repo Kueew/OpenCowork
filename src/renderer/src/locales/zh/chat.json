@@ -72,7 +72,7 @@
     "sshConnected": "已连接",
     "queueTitle": "排队消息",
     "queuePausedHint": "已暂停，点击继续发送",
-    "queueRunningHint": "当前任务结束后按顺序发送",
+    "queueRunningHint": "当前回合结束后按顺序发送",
     "queueResume": "继续发送",
     "queueEditing": "编辑排队消息",
     "queueImageCount": "{{count}} 张图片",
@@ -292,7 +292,9 @@
     "unchangedLines": "··· {{count}} 行未变更 ···",
     "clickToInsert": "点击插入：{{path}}",
     "exitCode": "退出码 {{code}}",
+    "success": "成功",
     "noOutputYet": "[暂无输出]",
+    "shell": "Shell",
     "openSession": "打开终端",
     "sendCtrlC": "发送 Ctrl+C",
     "stopProcess": "停止进程",
@@ -303,6 +305,13 @@
       "stopped": "已停止",
       "error": "错误",
       "exited": "已退出"
+    },
+    "compactPrefix": {
+      "bash": "已运行",
+      "read": "已读取",
+      "grep": "已搜索",
+      "glob": "已匹配",
+      "ls": "已列出"
     },
     "imagePlugin": {
       "title": "图片插件",
@@ -524,6 +533,15 @@
   "assistantMessage": {
     "changedFiles_one": "编辑了 {{count}} 个文件",
     "changedFiles_other": "编辑了 {{count}} 个文件",
+    "createdFiles_one": "已创建 {{count}} 个文件",
+    "createdFiles_other": "已创建 {{count}} 个文件",
+    "editedFiles_one": "已编辑 {{count}} 个文件",
+    "editedFiles_other": "已编辑 {{count}} 个文件",
+    "deletedFiles_one": "已删除 {{count}} 个文件",
+    "deletedFiles_other": "已删除 {{count}} 个文件",
+    "ranCommandsInline": "ran {{count}} commands",
+    "summarySeparator": "，",
+    "moreKinds": "+{{count}}",
     "showWorkspace": "展开工作空间（{{count}} 个工具执行）",
     "collapseWorkspace": "收起工作空间（{{count}} 个工具执行）",
     "showToolCalls": "显示 {{count}} 个工具调用",
@@ -570,9 +588,11 @@
     "grepResults": "命中 {{matches}} 条，涉及 {{files}} 个文件{{suffix}}",
     "globResults": "找到 {{count}} 个路径{{suffix}}",
     "listedDirs": "列出了 {{count}} 个目录",
-    "ranCommands": "执行了 {{count}} 个命令"
+    "ranCommands": "执行了 {{count}} 个命令",
+    "ranCommandsTitle": "Ran {{count}} commands"
   },
   "fileChange": {
+    "created": "已创建",
     "new": "新建",
     "deleted": "已删除",
     "edited": "已编辑",

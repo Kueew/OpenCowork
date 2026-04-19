@@ -1,14 +1,42 @@
 import * as React from 'react'
 import { useTheme } from 'next-themes'
+import PrismLight from 'react-syntax-highlighter/dist/esm/prism-light'
+import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import prismBash from 'react-syntax-highlighter/dist/esm/languages/prism/bash'
+import prismC from 'react-syntax-highlighter/dist/esm/languages/prism/c'
+import prismCpp from 'react-syntax-highlighter/dist/esm/languages/prism/cpp'
+import prismCsharp from 'react-syntax-highlighter/dist/esm/languages/prism/csharp'
+import prismCss from 'react-syntax-highlighter/dist/esm/languages/prism/css'
+import prismDart from 'react-syntax-highlighter/dist/esm/languages/prism/dart'
+import prismDocker from 'react-syntax-highlighter/dist/esm/languages/prism/docker'
+import prismGo from 'react-syntax-highlighter/dist/esm/languages/prism/go'
+import prismGraphql from 'react-syntax-highlighter/dist/esm/languages/prism/graphql'
+import prismIni from 'react-syntax-highlighter/dist/esm/languages/prism/ini'
+import prismJava from 'react-syntax-highlighter/dist/esm/languages/prism/java'
+import prismJavascript from 'react-syntax-highlighter/dist/esm/languages/prism/javascript'
+import prismJson from 'react-syntax-highlighter/dist/esm/languages/prism/json'
+import prismJsx from 'react-syntax-highlighter/dist/esm/languages/prism/jsx'
+import prismKotlin from 'react-syntax-highlighter/dist/esm/languages/prism/kotlin'
+import prismLess from 'react-syntax-highlighter/dist/esm/languages/prism/less'
+import prismLua from 'react-syntax-highlighter/dist/esm/languages/prism/lua'
+import prismMakefile from 'react-syntax-highlighter/dist/esm/languages/prism/makefile'
+import prismMarkdown from 'react-syntax-highlighter/dist/esm/languages/prism/markdown'
+import prismMarkup from 'react-syntax-highlighter/dist/esm/languages/prism/markup'
+import prismPhp from 'react-syntax-highlighter/dist/esm/languages/prism/php'
+import prismPython from 'react-syntax-highlighter/dist/esm/languages/prism/python'
+import prismR from 'react-syntax-highlighter/dist/esm/languages/prism/r'
+import prismRuby from 'react-syntax-highlighter/dist/esm/languages/prism/ruby'
+import prismRust from 'react-syntax-highlighter/dist/esm/languages/prism/rust'
+import prismScss from 'react-syntax-highlighter/dist/esm/languages/prism/scss'
+import prismSql from 'react-syntax-highlighter/dist/esm/languages/prism/sql'
+import prismSwift from 'react-syntax-highlighter/dist/esm/languages/prism/swift'
+import prismToml from 'react-syntax-highlighter/dist/esm/languages/prism/toml'
+import prismTsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx'
+import prismTypescript from 'react-syntax-highlighter/dist/esm/languages/prism/typescript'
+import prismYaml from 'react-syntax-highlighter/dist/esm/languages/prism/yaml'
 
-type AsyncLightHighlighter = React.ComponentType<Record<string, unknown>> & {
+type SyntaxHighlighterComponent = React.ComponentType<Record<string, unknown>> & {
   registerLanguage?: (name: string, grammar: unknown) => void
-}
-
-interface HighlighterRuntime {
-  Highlighter: AsyncLightHighlighter
-  darkStyle: Record<string, React.CSSProperties>
-  lightStyle: Record<string, React.CSSProperties>
 }
 
 const LANGUAGE_ALIASES: Record<string, string> = {
@@ -26,87 +54,51 @@ const LANGUAGE_ALIASES: Record<string, string> = {
   text: 'plaintext'
 }
 
-const LANGUAGE_LOADERS: Record<string, () => Promise<{ default: unknown }>> = {
-  typescript: () => import('react-syntax-highlighter/dist/esm/languages/prism/typescript'),
-  javascript: () => import('react-syntax-highlighter/dist/esm/languages/prism/javascript'),
-  python: () => import('react-syntax-highlighter/dist/esm/languages/prism/python'),
-  bash: () => import('react-syntax-highlighter/dist/esm/languages/prism/bash'),
-  json: () => import('react-syntax-highlighter/dist/esm/languages/prism/json'),
-  css: () => import('react-syntax-highlighter/dist/esm/languages/prism/css'),
-  scss: () => import('react-syntax-highlighter/dist/esm/languages/prism/scss'),
-  less: () => import('react-syntax-highlighter/dist/esm/languages/prism/less'),
-  jsx: () => import('react-syntax-highlighter/dist/esm/languages/prism/jsx'),
-  tsx: () => import('react-syntax-highlighter/dist/esm/languages/prism/tsx'),
-  markdown: () => import('react-syntax-highlighter/dist/esm/languages/prism/markdown'),
-  yaml: () => import('react-syntax-highlighter/dist/esm/languages/prism/yaml'),
-  rust: () => import('react-syntax-highlighter/dist/esm/languages/prism/rust'),
-  go: () => import('react-syntax-highlighter/dist/esm/languages/prism/go'),
-  sql: () => import('react-syntax-highlighter/dist/esm/languages/prism/sql'),
-  graphql: () => import('react-syntax-highlighter/dist/esm/languages/prism/graphql'),
-  c: () => import('react-syntax-highlighter/dist/esm/languages/prism/c'),
-  csharp: () => import('react-syntax-highlighter/dist/esm/languages/prism/csharp'),
-  cpp: () => import('react-syntax-highlighter/dist/esm/languages/prism/cpp'),
-  java: () => import('react-syntax-highlighter/dist/esm/languages/prism/java'),
-  kotlin: () => import('react-syntax-highlighter/dist/esm/languages/prism/kotlin'),
-  ruby: () => import('react-syntax-highlighter/dist/esm/languages/prism/ruby'),
-  php: () => import('react-syntax-highlighter/dist/esm/languages/prism/php'),
-  swift: () => import('react-syntax-highlighter/dist/esm/languages/prism/swift'),
-  docker: () => import('react-syntax-highlighter/dist/esm/languages/prism/docker'),
-  makefile: () => import('react-syntax-highlighter/dist/esm/languages/prism/makefile'),
-  r: () => import('react-syntax-highlighter/dist/esm/languages/prism/r'),
-  lua: () => import('react-syntax-highlighter/dist/esm/languages/prism/lua'),
-  dart: () => import('react-syntax-highlighter/dist/esm/languages/prism/dart'),
-  toml: () => import('react-syntax-highlighter/dist/esm/languages/prism/toml'),
-  ini: () => import('react-syntax-highlighter/dist/esm/languages/prism/ini'),
-  markup: () => import('react-syntax-highlighter/dist/esm/languages/prism/markup')
+const LANGUAGE_GRAMMARS: Record<string, unknown> = {
+  typescript: prismTypescript,
+  javascript: prismJavascript,
+  python: prismPython,
+  bash: prismBash,
+  json: prismJson,
+  css: prismCss,
+  scss: prismScss,
+  less: prismLess,
+  jsx: prismJsx,
+  tsx: prismTsx,
+  markdown: prismMarkdown,
+  yaml: prismYaml,
+  rust: prismRust,
+  go: prismGo,
+  sql: prismSql,
+  graphql: prismGraphql,
+  c: prismC,
+  csharp: prismCsharp,
+  cpp: prismCpp,
+  java: prismJava,
+  kotlin: prismKotlin,
+  ruby: prismRuby,
+  php: prismPhp,
+  swift: prismSwift,
+  docker: prismDocker,
+  makefile: prismMakefile,
+  r: prismR,
+  lua: prismLua,
+  dart: prismDart,
+  toml: prismToml,
+  ini: prismIni,
+  markup: prismMarkup
 }
 
-let runtimePromise: Promise<HighlighterRuntime> | null = null
-const loadedLanguages = new Set<string>()
-const loadingLanguages = new Map<string, Promise<void>>()
+const Highlighter = PrismLight as unknown as SyntaxHighlighterComponent
+
+for (const [language, grammar] of Object.entries(LANGUAGE_GRAMMARS)) {
+  Highlighter.registerLanguage?.(language, grammar)
+}
 
 function normalizeLanguage(language?: string): string {
   if (!language) return 'plaintext'
   const normalized = language.toLowerCase().trim()
   return LANGUAGE_ALIASES[normalized] ?? normalized
-}
-
-async function ensureRuntime(): Promise<HighlighterRuntime> {
-  if (runtimePromise) return runtimePromise
-  runtimePromise = Promise.all([
-    import('react-syntax-highlighter/dist/esm/prism-async-light'),
-    import('react-syntax-highlighter/dist/esm/styles/prism')
-  ]).then(([highlighterMod, styleMod]) => ({
-    Highlighter: highlighterMod.default as unknown as AsyncLightHighlighter,
-    darkStyle: styleMod.oneDark,
-    lightStyle: styleMod.oneLight
-  }))
-  return runtimePromise
-}
-
-async function ensureLanguageLoaded(language: string): Promise<void> {
-  if (loadedLanguages.has(language)) return
-  if (loadingLanguages.has(language)) {
-    await loadingLanguages.get(language)
-    return
-  }
-
-  const load = async (): Promise<void> => {
-    const loader = LANGUAGE_LOADERS[language]
-    if (!loader) return
-    const runtime = await ensureRuntime()
-    if (loadedLanguages.has(language)) return
-    const languageModule = await loader()
-    runtime.Highlighter.registerLanguage?.(language, languageModule.default)
-    loadedLanguages.add(language)
-  }
-
-  const promise = load()
-    .catch(() => {})
-    .finally(() => loadingLanguages.delete(language))
-
-  loadingLanguages.set(language, promise)
-  await promise
 }
 
 type LazySyntaxHighlighterProps = Record<string, unknown> & {
@@ -126,27 +118,11 @@ export function LazySyntaxHighlighter({
   ...rest
 }: LazySyntaxHighlighterProps): React.JSX.Element {
   const { resolvedTheme } = useTheme()
-  const [runtime, setRuntime] = React.useState<HighlighterRuntime | null>(null)
   const normalizedLanguage = normalizeLanguage(language)
-  const canHighlight = normalizedLanguage !== 'plaintext' && normalizedLanguage in LANGUAGE_LOADERS
+  const canHighlight =
+    normalizedLanguage !== 'plaintext' && Object.hasOwn(LANGUAGE_GRAMMARS, normalizedLanguage)
 
-  React.useEffect(() => {
-    if (!canHighlight) return
-    let cancelled = false
-    ensureRuntime().then((loaded) => {
-      if (!cancelled) setRuntime(loaded)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [canHighlight])
-
-  React.useEffect(() => {
-    if (!runtime || !canHighlight) return
-    void ensureLanguageLoaded(normalizedLanguage)
-  }, [runtime, normalizedLanguage, canHighlight])
-
-  if (!runtime || !canHighlight) {
+  if (!canHighlight) {
     return (
       <pre
         className={className ?? 'text-xs'}
@@ -172,11 +148,10 @@ export function LazySyntaxHighlighter({
     )
   }
 
-  const Highlighter = runtime.Highlighter
   return (
     <Highlighter
       language={normalizedLanguage}
-      style={resolvedTheme === 'light' ? runtime.lightStyle : runtime.darkStyle}
+      style={resolvedTheme === 'light' ? oneLight : oneDark}
       className={className}
       customStyle={customStyle}
       codeTagProps={codeTagProps}

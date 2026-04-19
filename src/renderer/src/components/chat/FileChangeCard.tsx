@@ -547,7 +547,12 @@ function ChangeStats({
     if (trackedChange.op === 'create') {
       const lines = snapshotLineTotal(trackedChange.after)
       if (minimal) {
-        return <span className="text-green-400/70">+{lines}</span>
+        return (
+          <span className="flex items-center gap-1 text-[10px]">
+            <span className="text-green-400/70">+{lines}</span>
+            <span className="text-red-400/70">-0</span>
+          </span>
+        )
       }
       return (
         <span className="flex items-center gap-1.5 text-[10px]">
@@ -570,7 +575,12 @@ function ChangeStats({
 
   if (name === 'Write') {
     if (minimal) {
-      return <span className="text-green-400/70">+{resolvedWrite.lineTotal}</span>
+      return (
+        <span className="flex items-center gap-1 text-[10px]">
+          <span className="text-green-400/70">+{resolvedWrite.lineTotal}</span>
+          <span className="text-red-400/70">-0</span>
+        </span>
+      )
     }
     return (
       <span className="flex items-center gap-1.5 text-[10px]">
@@ -595,6 +605,7 @@ function ChangeStats({
     )
   }
   if (name === 'Delete') {
+    if (minimal) return null
     return (
       <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-[10px] text-red-400 font-medium">
         {t('fileChange.deleted')}
@@ -1112,8 +1123,10 @@ export function FileChangeCard({
     (parsedOutput.op === 'create' || parsedOutput.op === 'modify')
       ? (parsedOutput.op as 'create' | 'modify')
       : undefined)
-  const compactActionOp: 'create' | 'modify' =
-    trackedChange?.op ?? (name === 'Write' ? (writeOp ?? 'create') : 'modify')
+  const compactActionOp: 'create' | 'modify' | 'delete' =
+    name === 'Delete'
+      ? 'delete'
+      : (trackedChange?.op ?? (name === 'Write' ? (writeOp ?? 'create') : 'modify'))
   const isOutputError = outputStr
     ? Boolean(parsedOutputError) || (!parsedOutput && outputStr.length > 0)
     : false
@@ -1122,7 +1135,8 @@ export function FileChangeCard({
     () => resolveEditSummaryDiff(resolvedEdit, trackedChange),
     [resolvedEdit, trackedChange]
   )
-  const useCompactChangeLayout = name === 'Edit' || (name === 'Write' && !isActive)
+  const useCompactChangeLayout =
+    name === 'Edit' || name === 'Delete' || (name === 'Write' && !isActive)
   const canRenderTrackedWriteDiff =
     !!trackedChange &&
     trackedChange.op === 'modify' &&
@@ -1249,7 +1263,11 @@ export function FileChangeCard({
             title={filePath || undefined}
           >
             <span className="shrink-0 text-[10px] font-medium text-zinc-400">
-              {compactActionOp === 'create' ? t('fileChange.new') : t('fileChange.edited')}
+              {compactActionOp === 'create'
+                ? t('fileChange.created')
+                : compactActionOp === 'delete'
+                  ? t('fileChange.deleted')
+                  : t('fileChange.edited')}
             </span>
             <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-sky-300 transition-colors group-hover:text-sky-200">
               {filePath ? (

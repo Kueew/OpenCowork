@@ -73,7 +73,7 @@
     "sshConnected": "Connected",
     "queueTitle": "Queued messages",
     "queuePausedHint": "Paused — click to resume",
-    "queueRunningHint": "Sent in order after the current task finishes",
+    "queueRunningHint": "Sent in order after the current turn completes",
     "queueResume": "Resume",
     "queueEditing": "Edit queued message",
     "queueImageCount": "{{count}} images",
@@ -307,7 +307,9 @@
     "unchangedLines": "··· {{count}} unchanged lines ···",
     "clickToInsert": "Click to insert: {{path}}",
     "exitCode": "exit {{code}}",
+    "success": "Success",
     "noOutputYet": "[no output yet]",
+    "shell": "Shell",
     "openSession": "Open terminal",
     "sendCtrlC": "Send Ctrl+C",
     "stopProcess": "Stop process",
@@ -318,6 +320,13 @@
       "stopped": "stopped",
       "error": "error",
       "exited": "exited"
+    },
+    "compactPrefix": {
+      "bash": "Ran",
+      "read": "Read",
+      "grep": "Searched",
+      "glob": "Matched",
+      "ls": "Listed"
     },
     "imagePlugin": {
       "title": "Image Plugin",
@@ -539,6 +548,15 @@
   "assistantMessage": {
     "changedFiles_one": "Edited {{count}} file",
     "changedFiles_other": "Edited {{count}} files",
+    "createdFiles_one": "Created {{count}} file",
+    "createdFiles_other": "Created {{count}} files",
+    "editedFiles_one": "Edited {{count}} file",
+    "editedFiles_other": "Edited {{count}} files",
+    "deletedFiles_one": "Deleted {{count}} file",
+    "deletedFiles_other": "Deleted {{count}} files",
+    "ranCommandsInline": "ran {{count}} commands",
+    "summarySeparator": ", ",
+    "moreKinds": "+{{count}}",
     "showWorkspace": "Expand workspace ({{count}} tool executions)",
     "collapseWorkspace": "Collapse workspace ({{count}} tool executions)",
     "showToolCalls": "Show {{count}} tool calls",
@@ -585,9 +603,11 @@
     "grepResults": "{{matches}} matches in {{files}} files{{suffix}}",
     "globResults": "Found {{count}} paths{{suffix}}",
     "listedDirs": "Listed {{count}} directories",
-    "ranCommands": "Ran {{count}} commands"
+    "ranCommands": "Ran {{count}} commands",
+    "ranCommandsTitle": "Ran {{count}} commands"
   },
   "fileChange": {
+    "created": "created",
     "new": "new",
     "deleted": "deleted",
     "edited": "edited",

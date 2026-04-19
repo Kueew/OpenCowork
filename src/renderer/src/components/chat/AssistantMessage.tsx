@@ -13,6 +13,8 @@ import {
 import {
   Copy,
   Check,
+  ChevronDown,
+  ChevronRight,
   ChevronsDownUp,
   ChevronsUpDown,
   Bug,
@@ -85,6 +87,8 @@ import {
 import { LazySyntaxHighlighter } from './LazySyntaxHighlighter'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@renderer/components/ui/dialog'
 import { aggregateDisplayableRunFileChanges } from './file-change-utils'
+import type { AggregatedFileChange } from './file-change-utils'
+import { decodeStructuredToolResult } from '@renderer/lib/tools/tool-result-format'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -164,32 +168,103 @@ function isWorkspaceOnlyToolMessage(blocks: ContentBlock[] | null): boolean {
 
 function summarizeWorkspaceTools(
   blocks: ContentBlock[] | null,
-  t: (key: string, options?: Record<string, unknown>) => string
+  t: (key: string, options?: Record<string, unknown>) => string,
+  options: {
+    aggregatedChanges?: AggregatedFileChange[]
+    toolResults?: Map<string, { content: ToolResultContent; isError?: boolean }>
+    liveToolCallMap?: Map<string, ToolCallState> | null
+  } = {}
 ): string {
   if (!blocks) return ''
 
   const counts = new Map<string, number>()
-  const changedPaths = new Set<string>()
-  let changedCalls = 0
+  const createdPaths = new Set<string>()
+  const editedPaths = new Set<string>()
+  const deletedPaths = new Set<string>()
+
+  const toolResultText = (content: ToolResultContent | undefined): string | null => {
+    if (!content) return null
+    if (typeof content === 'string') return content
+    const text = content
+      .filter((block) => block.type === 'text')
+      .map((block) => (block.type === 'text' ? block.text : ''))
+      .join('\n')
+      .trim()
+    return text || null
+  }
+
+  const inferWriteKind = (
+    block: Extract<ContentBlock, { type: 'tool_use' }>
+  ): 'create' | 'edit' => {
+    const output =
+      options.liveToolCallMap?.get(block.id)?.output ?? options.toolResults?.get(block.id)?.content
+    const outputText = toolResultText(output)
+    if (outputText) {
+      const decoded = decodeStructuredToolResult(outputText)
+      if (isRecord(decoded) && decoded.op === 'modify') {
+        return 'edit'
+      }
+    }
+    return 'create'
+  }
+
+  for (const change of options.aggregatedChanges ?? []) {
+    if (change.op === 'create') {
+      createdPaths.add(change.filePath)
+    } else {
+      editedPaths.add(change.filePath)
+    }
+  }
 
   for (const block of blocks) {
     if (block.type !== 'tool_use' || !isWorkspaceCollapsibleTool(block.name)) continue
     counts.set(block.name, (counts.get(block.name) ?? 0) + 1)
-    if (block.name === 'Write' || block.name === 'Edit' || block.name === 'Delete') {
-      changedCalls++
-      const filePath = block.input.file_path ?? block.input.path
-      if (typeof filePath === 'string' && filePath.trim()) changedPaths.add(filePath)
+
+    const filePath = block.input.file_path ?? block.input.path
+    if (typeof filePath !== 'string' || !filePath.trim()) continue
+
+    if (block.name === 'Delete') {
+      deletedPaths.add(filePath)
+      continue
+    }
+
+    if ((options.aggregatedChanges?.length ?? 0) > 0) continue
+
+    if (block.name === 'Edit') {
+      editedPaths.add(filePath)
+      continue
+    }
+
+    if (block.name === 'Write') {
+      if (inferWriteKind(block) === 'edit') {
+        editedPaths.add(filePath)
+      } else {
+        createdPaths.add(filePath)
+      }
     }
   }
 
   const parts: string[] = []
-  const changedFileCount = changedPaths.size || changedCalls
-  if (changedFileCount > 0) {
+  const createdCount = createdPaths.size
+  const editedCount = editedPaths.size
+  const deletedCount = deletedPaths.size
+  const changedFileCount = createdCount + editedCount + deletedCount
+
+  if (createdCount > 0) {
+    parts.push(t('assistantMessage.createdFiles', { count: createdCount }))
+  }
+  if (editedCount > 0) {
+    parts.push(t('assistantMessage.editedFiles', { count: editedCount }))
+  }
+  if (deletedCount > 0) {
+    parts.push(t('assistantMessage.deletedFiles', { count: deletedCount }))
+  }
+  if (parts.length === 0 && changedFileCount > 0) {
     parts.push(t('assistantMessage.changedFiles', { count: changedFileCount }))
   }
 
   const toolSummaryMap: Array<[string, string, Record<string, unknown>]> = [
-    ['Bash', 'toolGroup.ranCommands', {}],
+    ['Bash', 'assistantMessage.ranCommandsInline', {}],
     ['Read', 'toolGroup.readFiles', {}],
     ['Grep', 'toolGroup.searchedPatterns', {}],
     ['Glob', 'toolGroup.globResults', { suffix: '' }],
@@ -208,14 +283,26 @@ function summarizeWorkspaceTools(
   parts.push(...fallbackEntries.map(([name, count]) => `${name}${count > 1 ? ` x${count}` : ''}`))
 
   const visibleParts = parts.slice(0, 3)
-  const summary = visibleParts.join(', ')
+  const summary = visibleParts.join(t('assistantMessage.summarySeparator', { defaultValue: ', ' }))
   const hiddenKinds = parts.length - visibleParts.length
 
-  return hiddenKinds > 0 ? `${summary}, +${hiddenKinds}` : summary
+  return hiddenKinds > 0
+    ? `${summary}${t('assistantMessage.summarySeparator', { defaultValue: ', ' })}${t(
+        'assistantMessage.moreKinds',
+        {
+          count: hiddenKinds,
+          defaultValue: `+${hiddenKinds}`
+        }
+      )}`
+    : summary
 }
 
 function stripThinkTagMarkers(text: string): string {
   return text.replace(/<\s*\/?\s*think\s*>/gi, '')
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
 function toFiniteNumber(value: unknown): number | null {
@@ -926,10 +1013,11 @@ export function AssistantMessage({
     msgId ? !!s.generatingImageMessages[msgId] : false
   )
   const runChangeSet = useAgentStore((s) => (msgId ? s.runChangesByRunId[msgId] : undefined))
-  const visibleRunChangeCount = useMemo(
-    () => (runChangeSet ? aggregateDisplayableRunFileChanges(runChangeSet.changes).length : 0),
+  const visibleRunChanges = useMemo(
+    () => (runChangeSet ? aggregateDisplayableRunFileChanges(runChangeSet.changes) : []),
     [runChangeSet]
   )
+  const visibleRunChangeCount = visibleRunChanges.length
   const refreshRunChanges = useAgentStore((s) => s.refreshRunChanges)
 
   const stringSegments = useMemo(
@@ -1001,8 +1089,13 @@ export function AssistantMessage({
     [normalizedContent]
   )
   const workspaceSummary = useMemo(
-    () => summarizeWorkspaceTools(normalizedContent, t),
-    [normalizedContent, t]
+    () =>
+      summarizeWorkspaceTools(normalizedContent, t, {
+        aggregatedChanges: visibleRunChanges,
+        toolResults,
+        liveToolCallMap: effectiveLiveToolCallMap
+      }),
+    [effectiveLiveToolCallMap, normalizedContent, t, toolResults, visibleRunChanges]
   )
   const defaultToolsCollapsed = workspaceOnlyToolMessage && workspaceToolCount > 0
   const showWorkspaceToggle = workspaceToolCount >= 2 || defaultToolsCollapsed
@@ -1355,34 +1448,19 @@ export function AssistantMessage({
                 collapsed: !toolsCollapsed
               })
             }
-            className="flex w-full items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/20 px-3 py-2 text-left transition-colors hover:bg-muted/30"
+            className="group flex w-full items-center gap-1.5 px-0.5 py-0.5 text-left text-[12px] text-zinc-500 transition-colors hover:text-zinc-100"
           >
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5 text-xs font-medium text-foreground/90">
-                {toolsCollapsed ? (
-                  <ChevronsUpDown className="size-3.5 shrink-0" />
-                ) : (
-                  <ChevronsDownUp className="size-3.5 shrink-0" />
-                )}
-                <span>
-                  {workspaceOnlyToolMessage && workspaceSummary
-                    ? workspaceSummary
-                    : toolsCollapsed
-                      ? t('assistantMessage.showWorkspace', { count: workspaceToolCount })
-                      : t('assistantMessage.collapseWorkspace', { count: workspaceToolCount })}
-                </span>
-              </div>
-              {!workspaceOnlyToolMessage && toolsCollapsed && workspaceSummary ? (
-                <div className="mt-1 truncate text-[11px] text-muted-foreground">
-                  {workspaceSummary}
-                </div>
-              ) : null}
-            </div>
-            {!workspaceOnlyToolMessage ? (
-              <span className="shrink-0 text-[10px] text-muted-foreground/70">
-                {workspaceToolCount}
-              </span>
-            ) : null}
+            <span className="min-w-0 truncate font-medium text-zinc-400 transition-colors group-hover:text-zinc-100">
+              {workspaceSummary ||
+                (toolsCollapsed
+                  ? t('assistantMessage.showWorkspace', { count: workspaceToolCount })
+                  : t('assistantMessage.collapseWorkspace', { count: workspaceToolCount }))}
+            </span>
+            {toolsCollapsed ? (
+              <ChevronRight className="size-3 shrink-0 text-zinc-600 transition-colors group-hover:text-zinc-400" />
+            ) : (
+              <ChevronDown className="size-3 shrink-0 text-zinc-600 transition-colors group-hover:text-zinc-400" />
+            )}
           </button>
         )}
         {renderItems.map((item) => {

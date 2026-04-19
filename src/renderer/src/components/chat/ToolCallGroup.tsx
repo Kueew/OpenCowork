@@ -4,7 +4,6 @@ import { ChevronRight, ChevronDown, Loader2 } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import type { ToolCallStatus } from '@renderer/lib/agent/types'
 import type { ToolResultContent } from '@renderer/lib/api/types'
-import { ToolStatusDot } from './ToolCallCard'
 import { inputSummary, summarizeSearchToolOutput } from './tool-call-summary'
 
 interface ToolCallGroupItem {
@@ -75,7 +74,10 @@ function groupSummaryLabel(
     return t('toolGroup.listedDirs', { count })
   }
   if (toolName === 'Bash') {
-    return t('toolGroup.ranCommands', { count })
+    return t('toolGroup.ranCommandsTitle', {
+      count,
+      defaultValue: t('toolGroup.ranCommands', { count })
+    })
   }
   return `${toolName} × ${count}`
 }
@@ -94,18 +96,19 @@ export function ToolCallGroup({
   const summaryLabel = groupSummaryLabel(toolName, items, t)
 
   return (
-    <div className="my-1">
+    <div className="my-0.5">
       <button
         onClick={() => setExpanded((v) => !v)}
-        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+        className="group flex items-center gap-1.5 text-left text-[12px] text-zinc-500 transition-colors hover:text-zinc-100"
       >
-        <ToolStatusDot status={status} />
-        <span className="font-medium">{summaryLabel}</span>
+        <span className="font-medium text-zinc-400 transition-colors group-hover:text-zinc-100">
+          {summaryLabel}
+        </span>
         {isActive && <Loader2 className="size-3 animate-spin text-blue-400/70" />}
         {expanded ? (
-          <ChevronDown className="size-3 text-muted-foreground/40" />
+          <ChevronDown className="size-3 text-zinc-600 transition-colors group-hover:text-zinc-400" />
         ) : (
-          <ChevronRight className="size-3 text-muted-foreground/40" />
+          <ChevronRight className="size-3 text-zinc-600 transition-colors group-hover:text-zinc-400" />
         )}
       </button>
 
@@ -116,7 +119,7 @@ export function ToolCallGroup({
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="mt-0.5 pl-5 border-l border-border/30 overflow-hidden"
+            className="mt-1 overflow-hidden pl-3"
           >
             {children}
           </motion.div>

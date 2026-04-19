@@ -531,26 +531,14 @@ function ShellTextPane({
   const isLong = text.length > 1000
   const displayed = isLong && !expanded ? `...\n${text.slice(-1000)}` : text
   return (
-    <div className="space-y-1">
-      <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted-foreground/50">
-        <span
-          className={cn(
-            'inline-flex rounded px-1 py-0.5',
-            tone === 'error'
-              ? 'bg-red-500/10 text-red-700/85 dark:text-red-300/80'
-              : 'bg-muted text-foreground/70 dark:bg-zinc-800/70 dark:text-zinc-300/70'
-          )}
-        >
-          {title}
-        </span>
-        <span>{text.split('\n').length} lines</span>
+    <div className="space-y-1.5">
+      <div className={cn('text-[10px]', tone === 'error' ? 'text-red-300/80' : 'text-zinc-500')}>
+        {title}
       </div>
       <pre
         className={cn(
-          'whitespace-pre-wrap break-words text-[11px]',
-          tone === 'error'
-            ? 'text-red-700/85 dark:text-red-200/85'
-            : 'text-foreground/80 dark:text-zinc-300/80'
+          'whitespace-pre-wrap break-words text-[11px] leading-5',
+          tone === 'error' ? 'text-red-200/90' : 'text-zinc-200'
         )}
       >
         {displayed}
@@ -603,7 +591,6 @@ function BashOutputBlock({
   const processId = parsed?.processId ? String(parsed.processId) : null
   const process = useAgentStore((s) => (processId ? s.backgroundProcesses[processId] : undefined))
 
-  const summary = parsed?.summary ?? null
   const stdoutText = process ? process.output : (parsed?.stdout ?? parsed?.output ?? '')
   const stderrText = process ? '' : (parsed?.stderr ?? '')
   const hasStructuredStreams = !process && !!parsed && (Boolean(stdoutText) || Boolean(stderrText))
@@ -632,118 +619,72 @@ function BashOutputBlock({
   }, [text, exitCode, isProcessRunning])
 
   return (
-    <div>
-      <div className="mb-1 flex items-center gap-1.5">
-        <span className="text-[10px] font-medium text-zinc-400">{t('Bash')}</span>
-        {statusText && (
-          <span
-            className={cn(
-              'text-[9px] font-mono px-1 rounded',
-              process?.status === 'running'
-                ? 'bg-blue-500/10 text-blue-400/70'
-                : process?.status === 'error'
-                  ? 'bg-red-500/10 text-red-400/70'
-                  : 'bg-muted text-muted-foreground dark:bg-zinc-500/15 dark:text-zinc-300/70'
-            )}
-          >
-            {statusText}
-          </span>
-        )}
-        {exitCode !== undefined && (
-          <span
-            className={cn(
-              'text-[9px] font-mono px-1 rounded',
-              exitCode === 0 ? 'bg-green-500/10 text-green-400/70' : 'bg-red-500/10 text-red-400/70'
-            )}
-          >
-            {t('toolCall.exitCode', { code: exitCode })}
-          </span>
-        )}
-        {processId && <span className="text-[9px] text-muted-foreground/30">{processId}</span>}
-        <span className="text-[9px] text-zinc-500">{lineCount} lines</span>
-        <CopyBtn text={text} />
-      </div>
-      <div
-        ref={scrollRef}
-        className="max-h-72 overflow-auto rounded-xl border border-white/[0.06] bg-[#111214] text-[11px] font-mono text-zinc-300"
-        style={{ fontFamily: MONO_FONT }}
-      >
-        {text ? (
-          <div className="px-3 py-2 space-y-2">
-            {summary && (
-              <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground/50">
-                <span className="rounded bg-muted px-1 py-0.5 dark:bg-zinc-800/80">
-                  {summary.mode ?? 'full'}
-                </span>
-                {summary.noisy && (
-                  <span className="rounded bg-amber-500/10 px-1 py-0.5 text-amber-700/85 dark:text-amber-300/80">
-                    noise reduced
-                  </span>
-                )}
-                {typeof summary.totalLines === 'number' && (
-                  <span className="rounded bg-muted/70 px-1 py-0.5 dark:bg-zinc-800/60">
-                    {summary.totalLines} lines
-                  </span>
-                )}
-                {summary.shell && (
-                  <span className="rounded bg-muted/70 px-1 py-0.5 dark:bg-zinc-800/60">
-                    {summary.shell.split(/[\\/]/).pop()}
-                  </span>
-                )}
-                {typeof summary.totalMs === 'number' && (
-                  <span className="rounded bg-muted/70 px-1 py-0.5 dark:bg-zinc-800/60">
-                    total {summary.totalMs}ms
-                  </span>
-                )}
-                {typeof summary.spawnMs === 'number' && (
-                  <span className="rounded bg-muted/70 px-1 py-0.5 dark:bg-zinc-800/60">
-                    spawn {summary.spawnMs}ms
-                  </span>
-                )}
-                {typeof summary.firstChunkMs === 'number' && (
-                  <span className="rounded bg-muted/70 px-1 py-0.5 dark:bg-zinc-800/60">
-                    first output {summary.firstChunkMs}ms
-                  </span>
-                )}
-                {typeof summary.errorLikeLines === 'number' && summary.errorLikeLines > 0 && (
-                  <span className="rounded bg-red-500/10 px-1 py-0.5 text-red-700/85 dark:text-red-300/80">
-                    {summary.errorLikeLines} error-like
-                  </span>
-                )}
-                {typeof summary.warningLikeLines === 'number' && summary.warningLikeLines > 0 && (
-                  <span className="rounded bg-amber-500/10 px-1 py-0.5 text-amber-700/85 dark:text-amber-300/80">
-                    {summary.warningLikeLines} warning-like
-                  </span>
-                )}
-                {summary.timedOut && (
-                  <span className="rounded bg-red-500/10 px-1 py-0.5 text-red-700/85 dark:text-red-300/80">
-                    timed out
-                  </span>
-                )}
-                {summary.aborted && (
-                  <span className="rounded bg-muted/70 px-1 py-0.5 dark:bg-zinc-800/60">
-                    aborted
-                  </span>
-                )}
-              </div>
-            )}
-            {hasStructuredStreams ? (
-              <>
+    <div className="space-y-2">
+      <div className="overflow-hidden rounded-[14px] border border-white/[0.06] bg-[#2b2b2d] shadow-[0_12px_24px_rgba(0,0,0,0.18)]">
+        <div className="flex items-center justify-between gap-2 px-3 py-2">
+          <span className="text-[12px] font-medium text-zinc-100">{t('toolCall.shell')}</span>
+          <div className="flex items-center gap-1.5">
+            {processId ? <span className="text-[9px] text-zinc-500">{processId}</span> : null}
+            <CopyBtn text={text} />
+          </div>
+        </div>
+        <div
+          ref={scrollRef}
+          className="max-h-72 overflow-auto border-t border-white/[0.05] px-3 py-2.5 text-[11px] font-mono text-zinc-200"
+          style={{ fontFamily: MONO_FONT }}
+        >
+          {text ? (
+            hasStructuredStreams ? (
+              <div className="space-y-3">
                 <ShellTextPane title="stderr" text={stderrText} expanded={expanded} tone="error" />
                 <ShellTextPane
                   title={stderrText ? 'stdout' : 'output'}
                   text={stdoutText}
                   expanded={expanded}
                 />
-              </>
+              </div>
             ) : (
-              <pre className="whitespace-pre-wrap break-words text-zinc-300">{displayed}</pre>
-            )}
+              <pre className="whitespace-pre-wrap break-words leading-5 text-zinc-200">
+                {displayed}
+              </pre>
+            )
+          ) : (
+            <pre className="whitespace-pre-wrap break-words text-zinc-500">
+              {t('toolCall.noOutputYet')}
+            </pre>
+          )}
+        </div>
+        {(statusText || exitCode !== undefined || lineCount > 0) && (
+          <div className="flex items-center justify-between gap-2 border-t border-white/[0.05] px-3 py-2">
+            <span className="text-[10px] text-zinc-500">{lineCount} lines</span>
+            <div className="flex items-center gap-2 text-[11px]">
+              {statusText && exitCode === undefined && (
+                <span
+                  className={cn(
+                    process?.status === 'running'
+                      ? 'text-blue-300/80'
+                      : process?.status === 'error'
+                        ? 'text-red-300/85'
+                        : 'text-zinc-400'
+                  )}
+                >
+                  {statusText}
+                </span>
+              )}
+              {exitCode !== undefined ? (
+                exitCode === 0 ? (
+                  <span className="inline-flex items-center gap-1 text-zinc-300">
+                    <Check className="size-3 text-zinc-400" />
+                    {t('toolCall.success')}
+                  </span>
+                ) : (
+                  <span className="text-zinc-400">
+                    {t('toolCall.exitCode', { code: exitCode })}
+                  </span>
+                )
+              ) : null}
+            </div>
           </div>
-        ) : (
-          <pre className="px-3 py-2 whitespace-pre-wrap break-words text-zinc-500">
-            {t('toolCall.noOutputYet')}
-          </pre>
         )}
       </div>
 
@@ -893,9 +834,7 @@ function normalizeSearchMeta(decoded: unknown): SearchOutputMeta {
   }
 }
 
-function parseLegacyGrepMatch(
-  value: unknown
-): { file: string; line: number; text: string } | null {
+function parseLegacyGrepMatch(value: unknown): { file: string; line: number; text: string } | null {
   if (typeof value !== 'string') return null
   const match = value.match(/^(.+?):(\d+):(.*)$/)
   if (!match) return null
@@ -2050,6 +1989,23 @@ function compactToolTitle(name: string, input: Record<string, unknown>, fallback
   return fallback || name
 }
 
+function compactToolPrefixKey(name: string): string | null {
+  switch (name) {
+    case 'Bash':
+      return 'toolCall.compactPrefix.bash'
+    case 'Read':
+      return 'toolCall.compactPrefix.read'
+    case 'Grep':
+      return 'toolCall.compactPrefix.grep'
+    case 'Glob':
+      return 'toolCall.compactPrefix.glob'
+    case 'LS':
+      return 'toolCall.compactPrefix.ls'
+    default:
+      return null
+  }
+}
+
 export function ToolCallCard({
   toolUseId,
   name,
@@ -2081,7 +2037,7 @@ export function ToolCallCard({
     name === 'Write' && status !== 'streaming' && status !== 'running' && !!input.content
   const elapsed =
     startedAt && completedAt ? ((completedAt - startedAt) / 1000).toFixed(1) + 's' : null
-  const useCompactToolHeader = !isActive && name === 'Glob'
+  const useCompactToolHeader = !isActive && ['Bash', 'Read', 'Grep', 'Glob', 'LS'].includes(name)
   const compactPrimary = React.useMemo(
     () => compactToolPrimaryText(name, input, summary ?? undefined),
     [input, name, summary]
@@ -2090,6 +2046,8 @@ export function ToolCallCard({
     () => compactToolTitle(name, input, summary ?? undefined),
     [input, name, summary]
   )
+  const compactPrefixKey = compactToolPrefixKey(name)
+  const compactHeaderError = Boolean(displayError) || (status === 'error' && !!outputError)
 
   return (
     <div
@@ -2110,17 +2068,28 @@ export function ToolCallCard({
       >
         {useCompactToolHeader ? (
           <div
-            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-zinc-400 transition-colors group-hover:bg-white/[0.015] group-hover:text-zinc-100"
+            className="flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-zinc-400 transition-colors group-hover:bg-white/[0.015] group-hover:text-zinc-100"
             title={compactTitle}
           >
-            <span className="shrink-0 text-[10px] font-medium text-zinc-400">{t(name)}</span>
-            <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-sky-300 transition-colors group-hover:text-sky-200">
+            {compactPrefixKey ? (
+              <span className="shrink-0 text-[11px] font-medium text-zinc-400">
+                {t(compactPrefixKey)}
+              </span>
+            ) : (
+              <span className="shrink-0 text-[10px] font-medium text-zinc-400">{t(name)}</span>
+            )}
+            <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-zinc-200 transition-colors group-hover:text-zinc-100">
               {compactPrimary || t('toolCall.receivingArgs')}
             </span>
+            {compactHeaderError ? (
+              <span
+                className="size-1.5 shrink-0 rounded-full bg-red-400"
+                title={displayError ?? outputError ?? t('error.label')}
+              />
+            ) : null}
             {elapsed && (
               <span className="shrink-0 text-[9px] tabular-nums text-zinc-600">{elapsed}</span>
             )}
-            <ToolStatusDot status={status} />
             {open ? (
               <ChevronDown className="size-3 shrink-0 text-zinc-600" />
             ) : (
