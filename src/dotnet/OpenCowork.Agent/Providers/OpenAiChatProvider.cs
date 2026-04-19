@@ -56,26 +56,56 @@ public sealed class OpenAiChatProvider : ILlmProvider
         };
 
         var client = _httpFactory.GetClient(allowInsecureTls: config.AllowInsecureTls ?? true);
+        var circuitKey = SseStreamReader.BuildTransportCircuitKey(
+            config.ProviderBuiltinId ?? config.Type,
+            baseUrl);
 
-        using var response = await SseStreamReader.SendStreamingRequestAsync(
-            client, url, "POST", headers, bodyBytes, ct);
-
-        if (!response.IsSuccessStatusCode)
+        HttpRequestException? transportError = null;
+        HttpResponseMessage? response = null;
+        try
         {
-            var errorBody = await response.Content.ReadAsStringAsync(ct);
+            response = await SseStreamReader.SendStreamingRequestAsync(
+                client,
+                url,
+                "POST",
+                headers,
+                bodyBytes,
+                ct,
+                circuitKey);
+        }
+        catch (HttpRequestException ex) when (!ct.IsCancellationRequested)
+        {
+            transportError = ex;
+        }
+
+        if (transportError is not null)
+        {
+            yield return new StreamEvent
+            {
+                Type = "error",
+                Error = SseStreamReader.CreateTransportError(transportError)
+            };
+            yield break;
+        }
+
+        using var ownedResponse = response!;
+
+        if (!ownedResponse.IsSuccessStatusCode)
+        {
+            var errorBody = await ownedResponse.Content.ReadAsStringAsync(ct);
             yield return new StreamEvent
             {
                 Type = "error",
                 Error = new StreamEventError
                 {
-                    Type = $"http_{(int)response.StatusCode}",
-                    Message = $"HTTP {(int)response.StatusCode}: {errorBody[..Math.Min(2000, errorBody.Length)]}"
+                    Type = $"http_{(int)ownedResponse.StatusCode}",
+                    Message = $"HTTP {(int)ownedResponse.StatusCode}: {errorBody[..Math.Min(2000, errorBody.Length)]}"
                 }
             };
             yield break;
         }
 
-        await using var stream = await response.Content.ReadAsStreamAsync(ct);
+        await using var stream = await ownedResponse.Content.ReadAsStreamAsync(ct);
 
         // Tool call accumulators (by tool call key)
         var toolIds = new Dictionary<string, string>();

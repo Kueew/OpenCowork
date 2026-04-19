@@ -308,6 +308,7 @@ public sealed class OpenAiResponsesProvider : ILlmProvider
                                 websocketHeaders,
                                 warmupRequest.PayloadBytes,
                                 config,
+                                contextWindowBodyBytes: null,
                                 transport: "websocket",
                                 fallbackReason: fallbackReason,
                                 reusedConnection: reusedConnection,
@@ -422,6 +423,9 @@ public sealed class OpenAiResponsesProvider : ILlmProvider
                             websocketHeaders,
                             preparedRequest.PayloadBytes,
                             config,
+                            contextWindowBodyBytes: preparedRequest.RequestKind == "incremental"
+                                ? OpenAiResponsesWebSocketProtocol.BuildCreatePayload(preparedRequest.FullRequest)
+                                : null,
                             transport: "websocket",
                             fallbackReason: fallbackReason,
                             reusedConnection: reusedConnection,
@@ -526,6 +530,7 @@ public sealed class OpenAiResponsesProvider : ILlmProvider
             };
 
             ResponsesHttpErrorException? httpError = null;
+            HttpRequestException? transportError = null;
             await using var httpStream = StreamMappedItemsAsync(
                 ReadOpenAiResponsesHttpItemsAsync(url, headers, bodyBytes, config, ct),
                 ct).GetAsyncEnumerator(ct);
@@ -541,6 +546,11 @@ public sealed class OpenAiResponsesProvider : ILlmProvider
 
                     httpEvent = httpStream.Current;
                 }
+                catch (HttpRequestException ex) when (!ct.IsCancellationRequested)
+                {
+                    transportError = ex;
+                    break;
+                }
                 catch (ResponsesHttpErrorException ex) when (!ct.IsCancellationRequested)
                 {
                     httpError = ex;
@@ -548,6 +558,16 @@ public sealed class OpenAiResponsesProvider : ILlmProvider
                 }
 
                 yield return httpEvent;
+            }
+
+            if (transportError is not null)
+            {
+                yield return new StreamEvent
+                {
+                    Type = "error",
+                    Error = SseStreamReader.CreateTransportError(transportError)
+                };
+                yield break;
             }
 
             if (httpError is not null)
@@ -572,6 +592,7 @@ public sealed class OpenAiResponsesProvider : ILlmProvider
         Dictionary<string, string> headers,
         byte[] bodyBytes,
         ProviderConfig config,
+        byte[]? contextWindowBodyBytes = null,
         string? transport = null,
         string? fallbackReason = null,
         bool? reusedConnection = null,
@@ -591,6 +612,9 @@ public sealed class OpenAiResponsesProvider : ILlmProvider
             Method = method,
             Headers = maskedHeaders,
             Body = Encoding.UTF8.GetString(bodyBytes),
+            ContextWindowBody = contextWindowBodyBytes is not null
+                ? Encoding.UTF8.GetString(contextWindowBodyBytes)
+                : null,
             Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             ProviderId = config.ProviderId,
             ProviderBuiltinId = config.ProviderBuiltinId,
@@ -878,8 +902,11 @@ public sealed class OpenAiResponsesProvider : ILlmProvider
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var client = _httpFactory.GetClient(allowInsecureTls: config.AllowInsecureTls ?? true);
+        var circuitKey = SseStreamReader.BuildTransportCircuitKey(
+            config.ProviderBuiltinId ?? config.Type,
+            config.BaseUrl ?? url);
         using var response = await SseStreamReader.SendStreamingRequestAsync(
-            client, url, "POST", headers, bodyBytes, ct);
+            client, url, "POST", headers, bodyBytes, ct, circuitKey);
 
         if (!response.IsSuccessStatusCode)
         {

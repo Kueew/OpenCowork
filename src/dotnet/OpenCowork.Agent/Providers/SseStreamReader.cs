@@ -1,6 +1,8 @@
+using System.Collections.Concurrent;
 using System.Net.ServerSentEvents;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using OpenCowork.Agent.Engine;
 
 namespace OpenCowork.Agent.Providers;
 
@@ -12,6 +14,31 @@ namespace OpenCowork.Agent.Providers;
 /// </summary>
 public static class SseStreamReader
 {
+    private sealed record TransportCircuitState(DateTimeOffset ExpiresAt, string Reason);
+
+    private sealed class TransportCircuitOpenException : HttpRequestException
+    {
+        public DateTimeOffset ExpiresAt { get; }
+        public string CircuitKey { get; }
+        public string Reason { get; }
+
+        public TransportCircuitOpenException(
+            string message,
+            string circuitKey,
+            DateTimeOffset expiresAt,
+            string reason,
+            Exception? innerException = null)
+            : base(message, innerException)
+        {
+            CircuitKey = circuitKey;
+            ExpiresAt = expiresAt;
+            Reason = reason;
+        }
+    }
+
+    private static readonly ConcurrentDictionary<string, TransportCircuitState> TransportCircuitBreakers = new(StringComparer.Ordinal);
+    private static readonly TimeSpan TransportCircuitBreakDuration = TimeSpan.FromMinutes(1);
+
     /// <summary>
     /// Read SSE events from an HTTP response stream, deserializing each event's
     /// data payload directly from the raw byte span using source-generated JSON.
@@ -46,19 +73,45 @@ public static class SseStreamReader
     }
 
     /// <summary>
-    /// Max number of retry attempts for transient streaming request failures
-    /// (HTTP 500/429 and retryable SSL/EOF transport errors).
-    /// Total requests sent = 1 initial + up to MaxRetryAttempts retries.
+    /// Max number of retry attempts for retryable HTTP status failures
+    /// (currently HTTP 500/429).
     /// </summary>
-    private const int MaxRetryAttempts = 10;
+    private const int MaxHttpStatusRetryAttempts = 10;
+
+    /// <summary>
+    /// Max number of retry attempts for retryable transport failures before
+    /// opening a short-lived transport circuit for the same provider endpoint.
+    /// </summary>
+    private const int MaxTransportRetryAttempts = 3;
 
     private static readonly Random RetryJitter = new();
+
+    public static string BuildTransportCircuitKey(string scope, string url)
+    {
+        var normalizedScope = string.IsNullOrWhiteSpace(scope) ? "unknown" : scope.Trim();
+
+        if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            return $"{normalizedScope}::{uri.GetLeftPart(UriPartial.Authority)}";
+
+        return $"{normalizedScope}::{url}";
+    }
+
+    public static StreamEventError CreateTransportError(HttpRequestException ex)
+    {
+        return new StreamEventError
+        {
+            Type = ex is TransportCircuitOpenException
+                ? "transport_circuit_open"
+                : "transport_error",
+            Message = ex.Message
+        };
+    }
 
     /// <summary>
     /// Create an HttpRequestMessage configured for SSE streaming.
     /// Uses ResponseHeadersRead to avoid buffering the response body.
-    /// Transparently retries on HTTP 429/500 and retryable SSL/EOF transport failures
-    /// with exponential backoff + jitter, up to <see cref="MaxRetryAttempts"/> times.
+    /// Transparently retries on HTTP 429/500 and retryable transport failures
+    /// with exponential backoff + jitter, then opens a short-lived circuit.
     /// Honors the Retry-After header when present.
     /// </summary>
     public static async Task<HttpResponseMessage> SendStreamingRequestAsync(
@@ -67,9 +120,24 @@ public static class SseStreamReader
         string method,
         Dictionary<string, string> headers,
         byte[]? body,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? circuitKey = null)
     {
-        var attempt = 0;
+        var normalizedCircuitKey = string.IsNullOrWhiteSpace(circuitKey)
+            ? BuildTransportCircuitKey("default", url)
+            : circuitKey.Trim();
+
+        if (TryGetTransportCircuitState(normalizedCircuitKey, out var openCircuit))
+        {
+            throw new TransportCircuitOpenException(
+                BuildOpenCircuitMessage(method, url, openCircuit),
+                normalizedCircuitKey,
+                openCircuit.ExpiresAt,
+                openCircuit.Reason);
+        }
+
+        var httpStatusAttempt = 0;
+        var transportAttempt = 0;
         while (true)
         {
             var request = new HttpRequestMessage(
@@ -90,13 +158,24 @@ public static class SseStreamReader
             {
                 response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
             }
-            catch (HttpRequestException ex) when (attempt < MaxRetryAttempts && IsRetryableTransportException(ex))
+            catch (HttpRequestException ex) when (IsRetryableTransportException(ex))
             {
                 request.Dispose();
-                var delay = ComputeRetryDelay(attempt);
-                attempt++;
-                await Task.Delay(delay, ct);
-                continue;
+                if (transportAttempt < MaxTransportRetryAttempts)
+                {
+                    var delay = ComputeRetryDelay(transportAttempt);
+                    transportAttempt++;
+                    await Task.Delay(delay, ct);
+                    continue;
+                }
+
+                var state = OpenTransportCircuit(normalizedCircuitKey, ex);
+                throw new TransportCircuitOpenException(
+                    BuildOpenCircuitMessage(method, url, state),
+                    normalizedCircuitKey,
+                    state.ExpiresAt,
+                    state.Reason,
+                    ex);
             }
             catch (HttpRequestException ex)
             {
@@ -110,15 +189,17 @@ public static class SseStreamReader
             }
 
             var status = (int)response.StatusCode;
-            if ((status == 500 || status == 429) && attempt < MaxRetryAttempts)
+            if ((status == 500 || status == 429) && httpStatusAttempt < MaxHttpStatusRetryAttempts)
             {
-                var delay = ComputeRetryDelay(attempt, response);
+                var delay = ComputeRetryDelay(httpStatusAttempt, response);
                 response.Dispose();
                 request.Dispose();
-                attempt++;
+                httpStatusAttempt++;
                 await Task.Delay(delay, ct);
                 continue;
             }
+
+            ResetTransportCircuit(normalizedCircuitKey);
 
             // Caller owns the response from here on. The request message must
             // live as long as the response stream, so we deliberately do not
@@ -166,23 +247,79 @@ public static class SseStreamReader
             return false;
 
         return EnumerateExceptionChain(ex).Any(static candidate =>
-            candidate is IOException ioEx && HasTransientSslTransportMessage(ioEx.Message)
-            || candidate is HttpRequestException httpEx && HasTransientSslTransportMessage(httpEx.Message));
+            candidate is IOException ioEx && HasRetryableTransportMessage(ioEx.Message)
+            || candidate is HttpRequestException httpEx && HasRetryableTransportMessage(httpEx.Message));
     }
 
-    private static bool HasTransientSslTransportMessage(string? message)
+    private static bool HasRetryableTransportMessage(string? message)
     {
         if (string.IsNullOrWhiteSpace(message))
             return false;
 
         return message.Contains("The SSL connection could not be established", StringComparison.OrdinalIgnoreCase)
-            || message.Contains("Received an unexpected EOF or 0 bytes from the transport stream", StringComparison.OrdinalIgnoreCase);
+            || message.Contains("Received an unexpected EOF or 0 bytes from the transport stream", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("The response ended prematurely", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("ResponseEnded", StringComparison.OrdinalIgnoreCase);
     }
 
     private static IEnumerable<Exception> EnumerateExceptionChain(Exception ex)
     {
         for (Exception? current = ex; current is not null; current = current.InnerException)
             yield return current;
+    }
+
+    private static bool TryGetTransportCircuitState(string circuitKey, out TransportCircuitState state)
+    {
+        if (TransportCircuitBreakers.TryGetValue(circuitKey, out state!))
+        {
+            if (state.ExpiresAt > DateTimeOffset.UtcNow)
+                return true;
+
+            TransportCircuitBreakers.TryRemove(circuitKey, out _);
+        }
+
+        state = null!;
+        return false;
+    }
+
+    private static TransportCircuitState OpenTransportCircuit(string circuitKey, HttpRequestException ex)
+    {
+        var state = new TransportCircuitState(
+            DateTimeOffset.UtcNow.Add(TransportCircuitBreakDuration),
+            NormalizeTransportFailureReason(ex));
+        TransportCircuitBreakers[circuitKey] = state;
+        return state;
+    }
+
+    private static void ResetTransportCircuit(string circuitKey)
+    {
+        TransportCircuitBreakers.TryRemove(circuitKey, out _);
+    }
+
+    private static string NormalizeTransportFailureReason(HttpRequestException ex)
+    {
+        foreach (var candidate in EnumerateExceptionChain(ex))
+        {
+            if (string.IsNullOrWhiteSpace(candidate.Message))
+                continue;
+
+            if (HasRetryableTransportMessage(candidate.Message))
+                return candidate.Message.Trim();
+        }
+
+        return string.IsNullOrWhiteSpace(ex.Message)
+            ? ex.GetType().Name
+            : ex.Message.Trim();
+    }
+
+    private static string BuildOpenCircuitMessage(
+        string method,
+        string url,
+        TransportCircuitState state)
+    {
+        var remaining = state.ExpiresAt - DateTimeOffset.UtcNow;
+        var remainingSeconds = Math.Max(1, (int)Math.Ceiling(remaining.TotalSeconds));
+        return $"Failed to send {method} {url}: transport circuit is open for {remainingSeconds}s after repeated transport failures. Last error: {state.Reason}";
     }
 
     private static TimeSpan CapDelay(TimeSpan delay)
