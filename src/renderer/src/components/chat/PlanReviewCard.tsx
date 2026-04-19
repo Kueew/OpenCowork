@@ -62,7 +62,7 @@ function parsePlanReviewPayload(output: ToolResultContent | undefined): PlanRevi
   }
 }
 
-function getStatusAppearance(status: PlanStatus | 'awaiting_review'): {
+function getStatusAppearance(status: PlanStatus): {
   badgeClassName: string
   labelKey: string
   defaultValue: string
@@ -117,19 +117,12 @@ export function PlanReviewCard({ output, status, isLive }: PlanReviewCardProps):
     activeSessionId ? Boolean(s.streamingMessages[activeSessionId]) : false
   )
   const plan = usePlanStore((s) => (payload?.planId ? s.plans[payload.planId] : undefined))
-  const pendingReviewPlanId = usePlanStore((s) =>
-    activeSessionId ? (s.pendingReviewBySession[activeSessionId] ?? null) : null
-  )
   const isRunning = useAgentStore((s) => s.isSessionActive(activeSessionId)) || hasStreamingMessage
 
   const isProcessing = !payload && (status === 'running' || status === 'streaming' || isLive)
   const isError = status === 'error' || isStructuredToolErrorText(outputText)
-  const isAwaitingReview = Boolean(
-    payload?.awaitingUserReview && pendingReviewPlanId === payload.planId
-  )
-  const displayStatus: PlanStatus | 'awaiting_review' = isAwaitingReview
-    ? 'awaiting_review'
-    : (plan?.status ?? 'drafting')
+  const displayStatus: PlanStatus =
+    plan?.status ?? (payload?.awaitingUserReview ? 'awaiting_review' : 'drafting')
   const statusAppearance = getStatusAppearance(displayStatus)
 
   if (isProcessing) {
@@ -194,11 +187,13 @@ export function PlanReviewCard({ output, status, isLive }: PlanReviewCardProps):
       ) : null}
 
       <div className="mt-4 flex items-center gap-2">
-        {isAwaitingReview && (
+        {displayStatus === 'awaiting_review' && (
           <Button
             size="sm"
             className="h-8 gap-1.5 bg-emerald-600 text-white hover:bg-emerald-700"
-            onClick={() => sendImplementPlan(payload.planId)}
+            onClick={() => {
+              void sendImplementPlan(payload.planId)
+            }}
             disabled={isRunning}
           >
             {isRunning ? (
@@ -209,7 +204,7 @@ export function PlanReviewCard({ output, status, isLive }: PlanReviewCardProps):
             {t('planReview.implement', { defaultValue: '实施此计划' })}
           </Button>
         )}
-        {!isAwaitingReview && plan?.status === 'implementing' && (
+        {displayStatus === 'implementing' && (
           <div className="flex items-center gap-2 text-xs text-blue-600 dark:text-blue-300">
             <Loader2 className="size-3.5 animate-spin" />
             <span>
@@ -217,7 +212,7 @@ export function PlanReviewCard({ output, status, isLive }: PlanReviewCardProps):
             </span>
           </div>
         )}
-        {!isAwaitingReview && plan?.status === 'approved' && (
+        {displayStatus === 'approved' && (
           <div className="flex items-center gap-2 text-xs text-emerald-600 dark:text-emerald-300">
             <CheckCircle2 className="size-3.5" />
             <span>{t('planReview.approvedHint', { defaultValue: '该计划已批准。' })}</span>

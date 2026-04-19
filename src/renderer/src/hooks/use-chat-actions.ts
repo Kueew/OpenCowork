@@ -1,6 +1,7 @@
 import { useCallback, useEffect } from 'react'
 import { nanoid } from 'nanoid'
 import { toast } from 'sonner'
+import i18n from '@renderer/locales'
 import { useChatStore } from '@renderer/stores/chat-store'
 import {
   clampMaxParallelToolCalls,
@@ -46,13 +47,14 @@ import {
   PLAN_MODE_ALLOWED_TOOLS,
   createPlanModeInlineToolHandlers
 } from '@renderer/lib/tools/plan-tool'
-import { usePlanStore } from '@renderer/stores/plan-store'
+import { usePlanStore, type Plan } from '@renderer/stores/plan-store'
 import { useTaskStore } from '@renderer/stores/task-store'
 import { generateSessionTitle } from '@renderer/lib/api/generate-title'
 import {
   RESPONSES_SESSION_SCOPE_AGENT_MAIN,
   withResponsesSessionScope
 } from '@renderer/lib/api/responses-session-policy'
+import { createProvider } from '@renderer/lib/api/provider'
 import type {
   UnifiedMessage,
   ProviderConfig,
@@ -65,6 +67,7 @@ import type {
   ToolResultContent
 } from '@renderer/lib/api/types'
 import { setLastDebugInfo, setRequestTraceInfo } from '@renderer/lib/debug-store'
+import { estimateTokens } from '@renderer/lib/format-tokens'
 import {
   QUEUED_IMAGE_ONLY_TEXT,
   cloneImageAttachments,
@@ -87,7 +90,10 @@ import { ApiStreamError } from '@renderer/lib/ipc/api-stream'
 import { recordUsageEvent } from '@renderer/lib/usage-analytics'
 import {
   compressMessages,
+  isCompactSummaryLikeMessage,
+  mergeCompressedMessagesIntoConversation,
   resolveCompressionContextLength,
+  resolveCompressionReservedOutputBudget,
   resolveCompressionThreshold
 } from '@renderer/lib/agent/context-compression'
 import { runAgentLoop } from '@renderer/lib/agent/agent-loop'
@@ -111,6 +117,7 @@ import {
 import type { CompressionConfig } from '@renderer/lib/agent/context-compression'
 import { useChannelStore } from '@renderer/stores/channel-store'
 import { useAppPluginStore } from '@renderer/stores/app-plugin-store'
+import { confirm } from '@renderer/components/ui/confirm-dialog'
 import {
   registerPluginTools,
   unregisterPluginTools,
@@ -214,6 +221,7 @@ type MessageSource = 'team' | 'queued' | 'continue'
 export interface SendMessageOptions {
   longRunningMode?: boolean
   clearCompletedTasksOnTurnStart?: boolean
+  skipPendingPlanRevision?: boolean
 }
 
 interface QueuedSessionMessage {
@@ -567,6 +575,95 @@ function normalizeUsageForPersistence(usage: TokenUsage, contextLength?: number)
     ...usage,
     contextTokens: usage.contextTokens ?? usage.inputTokens,
     ...(normalizedContextLength > 0 ? { contextLength: normalizedContextLength } : {})
+  }
+}
+
+function shouldUseEstimatedContextTokens(debugInfo?: RequestDebugInfo | null): boolean {
+  return debugInfo?.transport === 'websocket' && debugInfo.websocketRequestKind === 'incremental'
+}
+
+function serializeContextEstimatePayload(value: unknown): string {
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value ?? '')
+  }
+}
+
+function estimateContextTokensForRequest(args: {
+  messages: UnifiedMessage[]
+  tools: ToolDefinition[]
+  providerConfig: ProviderConfig
+}): number {
+  if (args.messages.length === 0) return 0
+
+  try {
+    const provider = createProvider(args.providerConfig)
+    const payload = {
+      systemPrompt: args.providerConfig.systemPrompt ?? '',
+      messages: provider.formatMessages(args.messages),
+      ...(args.tools.length > 0 ? { tools: provider.formatTools(args.tools) } : {})
+    }
+    return estimateTokens(serializeContextEstimatePayload(payload))
+  } catch (error) {
+    console.warn('[ChatActions] Failed to estimate request context tokens', error)
+    return 0
+  }
+}
+
+function estimateCurrentIterationContextTokens(args: {
+  sessionId: string
+  assistantMessageId: string
+  tools: ToolDefinition[]
+  providerConfig: ProviderConfig
+}): number {
+  const session = useChatStore.getState().sessions.find((item) => item.id === args.sessionId)
+  if (!session) return 0
+
+  const requestMessages =
+    session.messages.length > 0 &&
+    session.messages[session.messages.length - 1]?.id === args.assistantMessageId
+      ? session.messages.slice(0, -1)
+      : session.messages
+
+  return estimateContextTokensForRequest({
+    messages: requestMessages,
+    tools: args.tools,
+    providerConfig: args.providerConfig
+  })
+}
+
+function normalizeUsageWithEstimatedContext(args: {
+  usage: TokenUsage
+  contextLength?: number
+  debugInfo?: RequestDebugInfo | null
+  estimatedContextTokens?: number
+}): TokenUsage {
+  const normalized = normalizeUsageForPersistence(args.usage, args.contextLength)
+  const estimatedContextTokens = args.estimatedContextTokens ?? 0
+  if (shouldUseEstimatedContextTokens(args.debugInfo) && estimatedContextTokens > 0) {
+    normalized.contextTokens = Math.max(
+      normalized.contextTokens ?? normalized.inputTokens,
+      estimatedContextTokens
+    )
+  }
+  return normalized
+}
+
+function buildStreamingContextUsage(
+  contextTokens: number,
+  contextLength?: number
+): TokenUsage | null {
+  if (!Number.isFinite(contextTokens) || contextTokens <= 0) {
+    return null
+  }
+
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    contextTokens,
+    ...(typeof contextLength === 'number' && contextLength > 0 ? { contextLength } : {})
   }
 }
 
@@ -1118,6 +1215,58 @@ export function resetTeamAutoTrigger(): void {
   pendingLeadMessages.length = 0
   _autoTriggerCount = 0
   _autoTriggerPaused = true
+}
+
+function ensurePlanAwaitingReview(planId: string): Plan | null {
+  const plan = usePlanStore.getState().plans[planId]
+  if (!plan) return null
+
+  if (plan.status !== 'awaiting_review') {
+    toast.error(
+      i18n.t('plan.awaitingReviewRequired', {
+        ns: 'cowork',
+        defaultValue: 'This plan is no longer awaiting review.'
+      })
+    )
+    return null
+  }
+
+  return plan
+}
+
+function hasSameMessageIdSequence(left: UnifiedMessage[], right: UnifiedMessage[]): boolean {
+  return (
+    left.length === right.length && left.every((message, index) => message.id === right[index]?.id)
+  )
+}
+
+async function confirmPlanExecution(options?: { newSession?: boolean }): Promise<boolean> {
+  const newSession = options?.newSession === true
+
+  return confirm({
+    title: i18n.t(
+      newSession ? 'plan.confirmExecuteInNewSessionTitle' : 'plan.confirmExecuteTitle',
+      {
+        ns: 'cowork',
+        defaultValue: newSession
+          ? 'Execute approved plan in a new session?'
+          : 'Execute approved plan?'
+      }
+    ),
+    description: i18n.t(
+      newSession ? 'plan.confirmExecuteInNewSessionDesc' : 'plan.confirmExecuteDesc',
+      {
+        ns: 'cowork',
+        defaultValue: newSession
+          ? 'This will create a new session and start implementation from the approved plan.'
+          : 'This will start implementation in the current session.'
+      }
+    ),
+    confirmLabel: i18n.t(newSession ? 'plan.executeInNewSession' : 'plan.confirmExecute', {
+      ns: 'cowork',
+      defaultValue: newSession ? 'New Session Execute' : 'Confirm Execute'
+    })
+  })
 }
 
 /**
@@ -2046,9 +2195,10 @@ export function useChatActions(): {
       }
 
       const pendingReviewPlan =
-        source === undefined ? usePlanStore.getState().getPendingReviewPlan(sessionId) : undefined
+        source === undefined && !options?.skipPendingPlanRevision
+          ? usePlanStore.getState().getPendingReviewPlan(sessionId)
+          : undefined
       if (pendingReviewPlan) {
-        usePlanStore.getState().clearPendingReview(sessionId)
         usePlanStore.getState().rejectPlan(pendingReviewPlan.id)
         usePlanStore.getState().setActivePlan(pendingReviewPlan.id)
         useUIStore.getState().enterPlanMode(sessionId)
@@ -2693,7 +2843,8 @@ export function useChatActions(): {
                   enabled: true,
                   contextLength: compressionContextLength,
                   threshold: resolveCompressionThreshold(resolvedModelConfig),
-                  preCompressThreshold: 0.65
+                  preCompressThreshold: 0.65,
+                  reservedOutputBudget: resolveCompressionReservedOutputBudget(resolvedModelConfig)
                 }
               : null
 
@@ -3354,17 +3505,29 @@ export function useChatActions(): {
                   thinkingDone = true
                   completeRuntimeThinking(sessionId!, assistantMsgId)
                 }
+                const estimatedContextTokens = shouldUseEstimatedContextTokens(lastRequestDebugInfo)
+                  ? estimateCurrentIterationContextTokens({
+                      sessionId: sessionId!,
+                      assistantMessageId: assistantMsgId,
+                      tools: effectiveToolDefs,
+                      providerConfig: agentProviderConfig
+                    })
+                  : 0
+                const normalizedUsage = event.usage
+                  ? normalizeUsageWithEstimatedContext({
+                      usage: event.usage,
+                      contextLength: compressionContextLength,
+                      debugInfo: lastRequestDebugInfo,
+                      estimatedContextTokens
+                    })
+                  : null
                 if (event.usage) {
-                  const normalizedUsage = normalizeUsageForPersistence(
-                    event.usage,
-                    compressionContextLength
-                  )
-                  mergeUsage(accumulatedUsage, normalizedUsage)
+                  mergeUsage(accumulatedUsage, normalizedUsage!)
                   // contextTokens = last API call's input tokens (overwrite, not accumulate)
                   accumulatedUsage.contextTokens =
-                    normalizedUsage.contextTokens ?? normalizedUsage.inputTokens
-                  if (normalizedUsage.contextLength) {
-                    accumulatedUsage.contextLength = normalizedUsage.contextLength
+                    normalizedUsage!.contextTokens ?? normalizedUsage!.inputTokens
+                  if (normalizedUsage!.contextLength) {
+                    accumulatedUsage.contextLength = normalizedUsage!.contextLength
                   }
                 }
                 if (event.timing) {
@@ -3380,17 +3543,13 @@ export function useChatActions(): {
                   })
                 }
                 if (event.usage) {
-                  const normalizedUsage = normalizeUsageForPersistence(
-                    event.usage,
-                    compressionContextLength
-                  )
                   void recordUsageEvent({
                     sessionId,
                     messageId: assistantMsgId,
                     sourceKind: 'agent',
                     providerId: currentUsageProviderId,
                     modelId: currentUsageModelId,
-                    usage: normalizedUsage,
+                    usage: normalizedUsage!,
                     timing: event.timing,
                     debugInfo: lastRequestDebugInfo,
                     providerResponseId: event.providerResponseId,
@@ -3427,6 +3586,13 @@ export function useChatActions(): {
                   preRunTaskSnapshot,
                   verificationPassIndex
                 })
+                if (
+                  event.messages &&
+                  event.messages.length > 0 &&
+                  (event.reason === 'completed' || event.reason === 'max_iterations')
+                ) {
+                  chatStore.replaceSessionMessages(sessionId!, event.messages)
+                }
                 break
               }
 
@@ -3437,20 +3603,43 @@ export function useChatActions(): {
                   currentUsageProviderId = event.debugInfo.providerId ?? currentUsageProviderId
                   currentUsageModelId = event.debugInfo.model ?? currentUsageModelId
                   setLastDebugInfo(assistantMsgId, event.debugInfo)
+                  if (shouldUseEstimatedContextTokens(lastRequestDebugInfo)) {
+                    const provisionalUsage = buildStreamingContextUsage(
+                      estimateCurrentIterationContextTokens({
+                        sessionId: sessionId!,
+                        assistantMessageId: assistantMsgId,
+                        tools: effectiveToolDefs,
+                        providerConfig: agentProviderConfig
+                      }),
+                      compressionContextLength
+                    )
+                    if (provisionalUsage) {
+                      updateRuntimeMessage(sessionId!, assistantMsgId, { usage: provisionalUsage })
+                    }
+                  }
                 }
                 break
 
               case 'context_compression_start':
-                if (isSessionForeground(sessionId!)) {
-                  toast.info('正在压缩上下文...', { description: '历史消息将被压缩为记忆摘要' })
-                }
                 break
 
               case 'context_compressed':
-                if (isSessionForeground(sessionId!)) {
-                  toast.success('上下文已压缩', {
-                    description: `${event.originalCount} 条消息 → ${event.newCount} 条（核心信息已保留）`
-                  })
+                {
+                  const compressedMessages = event.messages
+                  const currentMessages =
+                    useChatStore.getState().sessions.find((item) => item.id === sessionId)
+                      ?.messages ?? []
+                  const mergedMessages = compressedMessages
+                    ? mergeCompressedMessagesIntoConversation(currentMessages, compressedMessages)
+                    : null
+                  const nextVisibleMessages = mergedMessages ?? compressedMessages ?? null
+                  const shouldPersistMergedMessages =
+                    !!nextVisibleMessages &&
+                    !hasSameMessageIdSequence(currentMessages, nextVisibleMessages)
+
+                  if (shouldPersistMergedMessages) {
+                    chatStore.replaceSessionMessages(sessionId!, nextVisibleMessages)
+                  }
                 }
                 break
 
@@ -4062,11 +4251,10 @@ export function useChatActions(): {
       return
     }
 
-    // Limitation 3: check if there's already a compressed summary as the 2nd message — avoid double-compressing too soon
-    const hasRecentSummary =
-      messages.length > 1 &&
-      typeof messages[1]?.content === 'string' &&
-      messages[1].content.startsWith('[Context Memory')
+    // Limitation 3: detect recent compressed summaries in both new and legacy top-of-session layouts.
+    const hasRecentSummary = messages
+      .slice(0, 3)
+      .some((message) => isCompactSummaryLikeMessage(message))
     if (hasRecentSummary && messages.length < MIN_MESSAGES + 4) {
       toast.error('无法压缩', { description: '上次压缩后消息过少，请继续对话后再尝试' })
       return
@@ -4134,8 +4322,6 @@ export function useChatActions(): {
       }
     }
 
-    toast.info('正在压缩上下文...', { description: '使用主模型生成详细记忆摘要' })
-
     try {
       const { messages: compressed, result } = await compressMessages(
         messages,
@@ -4149,9 +4335,6 @@ export function useChatActions(): {
         return
       }
       chatStore.replaceSessionMessages(sessionId, compressed)
-      toast.success('上下文已压缩', {
-        description: `${result.originalCount} 条消息 → ${result.newCount} 条（核心信息已保留）`
-      })
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err)
       console.error('[Manual Compress Error]', err)
@@ -4192,68 +4375,110 @@ function buildPlanRevisionPrompt(
  * Trigger plan implementation by sending a message to the agent.
  * Called from PlanPanel "Implement" button — bypasses the input box.
  */
-export function sendImplementPlan(planId: string): void {
+export async function sendImplementPlan(planId: string): Promise<void> {
   if (!_sendMessageFn) return
 
-  const plan = usePlanStore.getState().plans[planId]
+  const plan = ensurePlanAwaitingReview(planId)
   if (!plan) return
+
+  const confirmed = await confirmPlanExecution()
+  if (!confirmed) return
+
+  const latestPlan = ensurePlanAwaitingReview(planId)
+  if (!latestPlan) return
 
   const chatStore = useChatStore.getState()
   const uiStore = useUIStore.getState()
-  const session = chatStore.sessions.find((item) => item.id === plan.sessionId)
+  const session = chatStore.sessions.find((item) => item.id === latestPlan.sessionId)
   const isAcpSession =
     session?.mode === 'acp' ||
-    (chatStore.activeSessionId === plan.sessionId && uiStore.mode === 'acp')
+    (chatStore.activeSessionId === latestPlan.sessionId && uiStore.mode === 'acp')
   const shouldSwitchToCodeMode =
     session?.mode === 'clarify' ||
-    (chatStore.activeSessionId === plan.sessionId && uiStore.mode === 'clarify')
-
-  usePlanStore.getState().clearPendingReview(plan.sessionId)
-  usePlanStore.getState().approvePlan(planId)
-  usePlanStore.getState().startImplementing(planId)
+    (chatStore.activeSessionId === latestPlan.sessionId && uiStore.mode === 'clarify')
+  const previousMode = session?.mode ?? null
+  const previousUiMode = chatStore.activeSessionId === latestPlan.sessionId ? uiStore.mode : null
 
   if (shouldSwitchToCodeMode) {
-    chatStore.updateSessionMode(plan.sessionId, 'code')
-    if (chatStore.activeSessionId === plan.sessionId) {
+    chatStore.updateSessionMode(latestPlan.sessionId, 'code')
+    if (chatStore.activeSessionId === latestPlan.sessionId) {
       uiStore.setMode('code')
     }
   }
 
-  uiStore.exitPlanMode(plan.sessionId)
+  uiStore.exitPlanMode(latestPlan.sessionId)
 
-  const basePrompt = plan.filePath
-    ? `Execute the approved plan from this file:\n${plan.filePath}`
+  const basePrompt = latestPlan.filePath
+    ? `Execute the approved plan from this file:\n${latestPlan.filePath}`
     : 'Execute the approved plan'
 
-  _sendMessageFn(
-    isAcpSession
-      ? [
-          basePrompt,
-          'Stay in ACP mode. Do not directly edit files or run implementation commands yourself.',
-          'Break the plan into concrete tasks, keep task tracking up to date, and delegate implementation through Task / sub-agents / teammates.',
-          'Review sub-agent outputs, continue delegation until the approved plan is completed, and report progress plus remaining risks after each wave.'
-        ].join('\n')
-      : basePrompt
-  )
+  try {
+    await _sendMessageFn(
+      isAcpSession
+        ? [
+            basePrompt,
+            'Stay in ACP mode. Do not directly edit files or run implementation commands yourself.',
+            'Break the plan into concrete tasks, keep task tracking up to date, and delegate implementation through Task / sub-agents / teammates.',
+            'Review sub-agent outputs, continue delegation until the approved plan is completed, and report progress plus remaining risks after each wave.'
+          ].join('\n')
+        : basePrompt,
+      undefined,
+      undefined,
+      latestPlan.sessionId,
+      undefined,
+      undefined,
+      { skipPendingPlanRevision: true }
+    )
+
+    usePlanStore.getState().beginImplementation(planId)
+  } catch (error) {
+    if (shouldSwitchToCodeMode && previousMode) {
+      chatStore.updateSessionMode(latestPlan.sessionId, previousMode)
+      if (chatStore.activeSessionId === latestPlan.sessionId && previousUiMode) {
+        uiStore.setMode(previousUiMode)
+      }
+    }
+    toast.error(
+      i18n.t('plan.executeFailed', {
+        ns: 'cowork',
+        defaultValue: 'Failed to start plan execution.'
+      }),
+      {
+        description: error instanceof Error ? error.message : String(error)
+      }
+    )
+  }
 }
 
-export function sendImplementPlanInNewSession(planId: string): void {
+export async function sendImplementPlanInNewSession(planId: string): Promise<void> {
   if (!_sendMessageFn) return
 
-  const plan = usePlanStore.getState().plans[planId]
-  if (!plan?.filePath) return
+  const plan = ensurePlanAwaitingReview(planId)
+  if (!plan) return
+  if (!plan.filePath) {
+    toast.error(
+      i18n.t('plan.missingPlanFile', {
+        ns: 'cowork',
+        defaultValue: 'The approved plan file is missing.'
+      })
+    )
+    return
+  }
+
+  const confirmed = await confirmPlanExecution({ newSession: true })
+  if (!confirmed) return
+
+  const latestPlan = ensurePlanAwaitingReview(planId)
+  if (!latestPlan?.filePath) return
 
   const chatStore = useChatStore.getState()
   const uiStore = useUIStore.getState()
   const providerStore = useProviderStore.getState()
-  const sourceSession = chatStore.sessions.find((item) => item.id === plan.sessionId)
+  const sourceSession = chatStore.sessions.find((item) => item.id === latestPlan.sessionId)
   if (!sourceSession) return
 
-  usePlanStore.getState().approvePlan(planId)
-  uiStore.exitPlanMode(plan.sessionId)
-
   const newSessionId = chatStore.createSession('code', sourceSession.projectId)
-  chatStore.updateSessionTitle(newSessionId, plan.title)
+  chatStore.updateSessionTitle(newSessionId, latestPlan.title)
 
   if (sourceSession.workingFolder) {
     chatStore.setWorkingFolder(newSessionId, sourceSession.workingFolder)
@@ -4270,17 +4495,33 @@ export function sendImplementPlanInNewSession(planId: string): void {
     }
   }
 
-  void ipcClient
-    .invoke(IPC.FS_READ_FILE, { path: plan.filePath })
-    .then((result) => {
-      if (typeof result !== 'string' || !result.trim()) return
-      void _sendMessageFn?.(result, undefined, undefined, newSessionId)
-    })
-    .catch(() => {
-      toast.error('Failed to read plan file', {
-        description: plan.filePath
-      })
-    })
+  try {
+    const result = await ipcClient.invoke(IPC.FS_READ_FILE, { path: latestPlan.filePath })
+    if (typeof result !== 'string' || !result.trim()) {
+      throw new Error(
+        i18n.t('plan.missingPlanFile', {
+          ns: 'cowork',
+          defaultValue: 'The approved plan file is missing.'
+        })
+      )
+    }
+
+    await _sendMessageFn(result, undefined, undefined, newSessionId)
+
+    usePlanStore.getState().approvePlan(planId)
+    uiStore.exitPlanMode(latestPlan.sessionId)
+  } catch (error) {
+    toast.error(
+      i18n.t('plan.executeFailed', {
+        ns: 'cowork',
+        defaultValue: 'Failed to start plan execution.'
+      }),
+      {
+        description: error instanceof Error ? error.message : latestPlan.filePath
+      }
+    )
+    useChatStore.getState().deleteSession(newSessionId)
+  }
 }
 
 /**
@@ -4294,7 +4535,6 @@ export function sendPlanRevision(planId: string, feedback: string): void {
   if (!plan) return
 
   // 1. Mark plan as rejected
-  usePlanStore.getState().clearPendingReview(plan.sessionId)
   usePlanStore.getState().rejectPlan(planId)
   usePlanStore.getState().setActivePlan(planId)
 
@@ -4388,6 +4628,7 @@ async function runSimpleChat(
 
     let thinkingDone = false
     let hasThinkingDelta = false
+    let lastRequestDebugInfo: RequestDebugInfo | undefined
     for await (const event of stream) {
       if (signal.aborted) break
 
@@ -4468,12 +4709,20 @@ async function runSimpleChat(
             completeRuntimeThinking(sessionId, assistantMsgId)
           }
           if (event.usage) {
-            const normalizedUsage = normalizeUsageForPersistence(
-              event.usage,
-              chatModelConfig?.contextLength
+            const normalizedUsage = normalizeUsageWithEstimatedContext({
+              usage: event.usage,
+              contextLength: chatModelConfig?.contextLength
                 ? resolveCompressionContextLength(chatModelConfig)
-                : undefined
-            )
+                : undefined,
+              debugInfo: lastRequestDebugInfo,
+              estimatedContextTokens: shouldUseEstimatedContextTokens(lastRequestDebugInfo)
+                ? estimateContextTokensForRequest({
+                    messages: requestMessages,
+                    tools: [],
+                    providerConfig: config
+                  })
+                : 0
+            })
             updateRuntimeMessage(sessionId, assistantMsgId, {
               usage: normalizedUsage,
               ...(event.providerResponseId ? { providerResponseId: event.providerResponseId } : {})
@@ -4486,6 +4735,7 @@ async function runSimpleChat(
               modelId: config.model,
               usage: normalizedUsage,
               timing: event.timing,
+              debugInfo: lastRequestDebugInfo,
               providerResponseId: event.providerResponseId
             })
           }
@@ -4493,12 +4743,30 @@ async function runSimpleChat(
         case 'request_debug':
           streamDeltaBuffer.flushNow()
           if (event.debugInfo) {
-            setLastDebugInfo(assistantMsgId, {
+            lastRequestDebugInfo = {
               ...event.debugInfo,
               providerId: config.providerId,
               providerBuiltinId: config.providerBuiltinId,
               model: config.model
+            }
+            setLastDebugInfo(assistantMsgId, {
+              ...lastRequestDebugInfo
             })
+            if (shouldUseEstimatedContextTokens(lastRequestDebugInfo)) {
+              const provisionalUsage = buildStreamingContextUsage(
+                estimateContextTokensForRequest({
+                  messages: requestMessages,
+                  tools: [],
+                  providerConfig: config
+                }),
+                chatModelConfig?.contextLength
+                  ? resolveCompressionContextLength(chatModelConfig)
+                  : undefined
+              )
+              if (provisionalUsage) {
+                updateRuntimeMessage(sessionId, assistantMsgId, { usage: provisionalUsage })
+              }
+            }
           }
           break
         case 'error': {

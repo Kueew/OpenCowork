@@ -285,6 +285,7 @@ export function getDb(): Database.Database {
       session_id TEXT NOT NULL,
       role TEXT NOT NULL,
       content TEXT NOT NULL,
+      meta TEXT,
       created_at INTEGER NOT NULL,
       usage TEXT,
       sort_order INTEGER NOT NULL,
@@ -363,6 +364,7 @@ export function getDb(): Database.Database {
   }
 
   ensureColumn(db, 'sessions', 'message_count', 'INTEGER NOT NULL DEFAULT 0')
+  ensureColumn(db, 'messages', 'meta', 'TEXT')
   db.exec(
     `UPDATE sessions
         SET message_count = (

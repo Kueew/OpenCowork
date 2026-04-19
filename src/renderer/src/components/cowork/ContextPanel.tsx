@@ -36,6 +36,14 @@ import {
 } from '@renderer/lib/format-tokens'
 import { ipcClient } from '@renderer/lib/ipc/ipc-client'
 import { useChatActions } from '@renderer/hooks/use-chat-actions'
+import {
+  getCompressionTriggerTokens,
+  getEffectiveContextWindow,
+  getPreCompressionTriggerTokens,
+  resolveCompressionContextLength,
+  resolveCompressionReservedOutputBudget,
+  resolveCompressionThreshold
+} from '@renderer/lib/agent/context-compression'
 
 export function ContextPanel(): React.JSX.Element {
   const { t } = useTranslation('cowork')
@@ -92,15 +100,32 @@ export function ContextPanel(): React.JSX.Element {
       activeModelId: s.activeModelId
     }))
   )
+  const resolvedProviderId = activeSession?.providerId ?? providerState.activeProviderId
+  const resolvedModelId = activeSession?.modelId ?? providerState.activeModelId
   const activeProvider =
-    providerState.providers.find((provider) => provider.id === providerState.activeProviderId) ??
-    null
+    providerState.providers.find((provider) => provider.id === resolvedProviderId) ?? null
   const activeModelCfg =
-    activeProvider?.models.find((model) => model.id === providerState.activeModelId) ?? null
+    activeProvider?.models.find((model) => model.id === resolvedModelId) ?? null
   const fallbackProvider = useSettingsStore((s) => s.provider)
   const fallbackModel = useSettingsStore((s) => s.model)
   const provider = activeProvider?.name ?? fallbackProvider
   const model = activeModelCfg?.name ?? fallbackModel
+  const compressionConfig = activeModelCfg
+    ? {
+        enabled: true,
+        contextLength: resolveCompressionContextLength(activeModelCfg),
+        threshold: resolveCompressionThreshold(activeModelCfg),
+        preCompressThreshold: 0.65,
+        reservedOutputBudget: resolveCompressionReservedOutputBudget(activeModelCfg)
+      }
+    : null
+  const compressionWindow = compressionConfig ? getEffectiveContextWindow(compressionConfig) : null
+  const manualCompressionTrigger = compressionConfig
+    ? getPreCompressionTriggerTokens(compressionConfig)
+    : null
+  const autoCompressionTrigger = compressionConfig
+    ? getCompressionTriggerTokens(compressionConfig)
+    : null
   const runningCommands = runningCommandIdsSig
     ? runningCommandIdsSig.split('\u0000').reduce(
         (list, id) => {
@@ -382,13 +407,14 @@ export function ContextPanel(): React.JSX.Element {
                 }
                 const cost = calculateCost(totalUsage, activeModelCfg)
                 const totalTokens = getBillableTotalTokens(totalUsage, activeModelCfg?.type)
-                const ctxLimit = activeModelCfg?.contextLength ?? null
                 // Context window = last API call's input tokens (stored as contextTokens, not accumulated)
                 // Fallback to inputTokens for older messages that don't have contextTokens
                 const lastUsage = [...activeSession.messages].reverse().find((m) => m.usage)?.usage
                 const ctxUsed = lastUsage?.contextTokens ?? lastUsage?.inputTokens ?? 0
-                const pct =
-                  ctxLimit && ctxUsed > 0 ? Math.min((ctxUsed / ctxLimit) * 100, 100) : null
+                const ctxLimit =
+                  lastUsage?.contextLength ?? compressionConfig?.contextLength ?? null
+                const ctxGaugeLimit = compressionWindow ?? ctxLimit
+                const pct = ctxGaugeLimit ? Math.min((ctxUsed / ctxGaugeLimit) * 100, 100) : null
                 const barColor =
                   pct === null
                     ? ''
@@ -427,9 +453,10 @@ export function ContextPanel(): React.JSX.Element {
                     {pct !== null && (
                       <div className="mt-1 space-y-0.5">
                         <div className="flex items-center justify-between text-[9px] text-muted-foreground/40">
-                          <span>{tCommon('contextWindow')}</span>
+                          <span>{t('compressionBudget', { defaultValue: '压缩预算' })}</span>
                           <span>
-                            {formatTokens(ctxUsed)} / {formatTokens(ctxLimit!)} ({pct.toFixed(0)}%)
+                            {formatTokens(ctxUsed)} / {formatTokens(ctxGaugeLimit!)} (
+                            {pct.toFixed(0)}%)
                           </span>
                         </div>
                         <div className="h-1.5 w-full rounded-full bg-muted/40 overflow-hidden">
@@ -438,74 +465,107 @@ export function ContextPanel(): React.JSX.Element {
                             style={{ width: `${pct}%` }}
                           />
                         </div>
+                        {manualCompressionTrigger && autoCompressionTrigger ? (
+                          <div className="flex items-center justify-between text-[9px] text-muted-foreground/40">
+                            <span>
+                              {t('manualCompressionThreshold', {
+                                defaultValue: '建议手动压缩 >= {{threshold}}',
+                                threshold: formatTokens(manualCompressionTrigger)
+                              })}
+                            </span>
+                            <span>
+                              {t('autoCompressionThreshold', {
+                                defaultValue: '自动压缩 >= {{threshold}}',
+                                threshold: formatTokens(autoCompressionTrigger)
+                              })}
+                            </span>
+                          </div>
+                        ) : null}
                       </div>
                     )}
                     {activeSession.messages.length >= 8 && !showCompressPanel && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="mt-1 h-6 gap-1.5 px-2 text-[10px] text-muted-foreground"
-                        disabled={compressing}
-                        onClick={() => setShowCompressPanel(true)}
-                      >
-                        <Archive className="size-3" />
-                        {compressing ? '压缩中...' : '压缩上下文'}
-                      </Button>
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="mt-1 h-6 gap-1.5 px-2 text-[10px] text-muted-foreground"
+                          disabled={
+                            compressing ||
+                            !manualCompressionTrigger ||
+                            ctxUsed < manualCompressionTrigger
+                          }
+                          onClick={() => setShowCompressPanel(true)}
+                        >
+                          <Archive className="size-3" />
+                          {compressing ? '压缩中...' : '压缩上下文'}
+                        </Button>
+                        {manualCompressionTrigger && ctxUsed < manualCompressionTrigger ? (
+                          <p className="mt-1 text-[10px] text-muted-foreground/60">
+                            {t('manualCompressionHint', {
+                              defaultValue: '当前 {{used}}，建议达到 {{threshold}} 后再压缩',
+                              used: formatTokens(ctxUsed),
+                              threshold: formatTokens(manualCompressionTrigger)
+                            })}
+                          </p>
+                        ) : null}
+                      </>
                     )}
-                    {showCompressPanel && (
-                      <div className="mt-1.5 space-y-1.5 rounded-md border p-2">
-                        <input
-                          type="text"
-                          className="w-full rounded border bg-background px-2 py-1 text-[11px] placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-ring"
-                          placeholder="聚焦方向（可选），如：保留 API 相关变更"
-                          value={focusPrompt}
-                          onChange={(e) => setFocusPrompt(e.target.value)}
-                          disabled={compressing}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' && !compressing) {
-                              e.preventDefault()
-                              setCompressing(true)
-                              manualCompressContext(focusPrompt || undefined).finally(() => {
-                                setCompressing(false)
+                    {showCompressPanel &&
+                      manualCompressionTrigger &&
+                      ctxUsed >= manualCompressionTrigger && (
+                        <div className="mt-1.5 space-y-1.5 rounded-md border p-2">
+                          <input
+                            type="text"
+                            className="w-full rounded border bg-background px-2 py-1 text-[11px] placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-ring"
+                            placeholder="聚焦方向（可选），如：保留 API 相关变更"
+                            value={focusPrompt}
+                            onChange={(e) => setFocusPrompt(e.target.value)}
+                            disabled={compressing}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && !compressing) {
+                                e.preventDefault()
+                                setCompressing(true)
+                                manualCompressContext(focusPrompt || undefined).finally(() => {
+                                  setCompressing(false)
+                                  setShowCompressPanel(false)
+                                  setFocusPrompt('')
+                                })
+                              }
+                            }}
+                          />
+                          <div className="flex items-center gap-1">
+                            <Button
+                              variant="default"
+                              size="sm"
+                              className="h-5 px-2 text-[10px]"
+                              disabled={compressing}
+                              onClick={() => {
+                                setCompressing(true)
+                                manualCompressContext(focusPrompt || undefined).finally(() => {
+                                  setCompressing(false)
+                                  setShowCompressPanel(false)
+                                  setFocusPrompt('')
+                                })
+                              }}
+                            >
+                              <Archive className="size-3 mr-1" />
+                              {compressing ? '压缩中...' : '确认压缩'}
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-5 px-2 text-[10px] text-muted-foreground"
+                              disabled={compressing}
+                              onClick={() => {
                                 setShowCompressPanel(false)
                                 setFocusPrompt('')
-                              })
-                            }
-                          }}
-                        />
-                        <div className="flex items-center gap-1">
-                          <Button
-                            variant="default"
-                            size="sm"
-                            className="h-5 px-2 text-[10px]"
-                            disabled={compressing}
-                            onClick={() => {
-                              setCompressing(true)
-                              manualCompressContext(focusPrompt || undefined).finally(() => {
-                                setCompressing(false)
-                                setShowCompressPanel(false)
-                                setFocusPrompt('')
-                              })
-                            }}
-                          >
-                            <Archive className="size-3 mr-1" />
-                            {compressing ? '压缩中...' : '确认压缩'}
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-5 px-2 text-[10px] text-muted-foreground"
-                            disabled={compressing}
-                            onClick={() => {
-                              setShowCompressPanel(false)
-                              setFocusPrompt('')
-                            }}
-                          >
-                            取消
-                          </Button>
+                              }}
+                            >
+                              取消
+                            </Button>
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      )}
                   </>
                 )
               })()}

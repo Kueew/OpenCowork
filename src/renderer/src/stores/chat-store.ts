@@ -165,6 +165,7 @@ function dbAddMessage(sessionId: string, msg: UnifiedMessage, sortOrder: number)
       sessionId,
       role: msg.role,
       content: JSON.stringify(sanitizeMessageContentForPersistence(msg.content)),
+      meta: msg.meta ? JSON.stringify(msg.meta) : null,
       createdAt: msg.createdAt,
       usage: msg.usage ? JSON.stringify(msg.usage) : null,
       sortOrder
@@ -172,13 +173,14 @@ function dbAddMessage(sessionId: string, msg: UnifiedMessage, sortOrder: number)
     .catch(() => {})
 }
 
-function dbUpdateMessage(msgId: string, content: unknown, usage?: unknown): void {
+function dbUpdateMessage(msgId: string, content: unknown, usage?: unknown, meta?: unknown): void {
   const normalizedContent =
     typeof content === 'string' || Array.isArray(content)
       ? sanitizeMessageContentForPersistence(content)
       : content
   const patch: Record<string, unknown> = { content: JSON.stringify(normalizedContent) }
   if (usage !== undefined) patch.usage = JSON.stringify(usage)
+  if (meta !== undefined) patch.meta = meta === null ? null : JSON.stringify(meta)
   ipcClient.invoke('db:messages:update', { id: msgId, patch }).catch(() => {})
 }
 
@@ -218,7 +220,7 @@ function dbFlushMessage(msg: UnifiedMessage): void {
     key,
     setTimeout(() => {
       _pendingFlush.delete(key)
-      dbUpdateMessage(msg.id, msg.content, msg.usage)
+      dbUpdateMessage(msg.id, msg.content, msg.usage, msg.meta ?? null)
     }, 500)
   )
 }
@@ -229,7 +231,7 @@ function dbFlushMessageImmediate(msg: UnifiedMessage): void {
     clearTimeout(existing)
     _pendingFlush.delete(msg.id)
   }
-  dbUpdateMessage(msg.id, msg.content, msg.usage)
+  dbUpdateMessage(msg.id, msg.content, msg.usage, msg.meta ?? null)
 }
 
 function clearPendingMessageFlushes(messageIds: string[]): void {
@@ -435,6 +437,7 @@ interface MessageRow {
   session_id: string
   role: string
   content: string
+  meta: string | null
   created_at: number
   usage: string | null
   sort_order: number
@@ -496,6 +499,7 @@ function rowToSession(row: SessionRow, messages: UnifiedMessage[] = []): Session
 
 function rowToMessage(row: MessageRow): UnifiedMessage {
   let content: string | ContentBlock[]
+  let meta: UnifiedMessage['meta']
   try {
     const parsed = JSON.parse(row.content)
     if (typeof parsed === 'string' || Array.isArray(parsed)) {
@@ -514,10 +518,16 @@ function rowToMessage(row: MessageRow): UnifiedMessage {
   if (Array.isArray(content)) {
     content = sanitizeMessageContentForPersistence(content)
   }
+  try {
+    meta = row.meta ? (JSON.parse(row.meta) as UnifiedMessage['meta']) : undefined
+  } catch {
+    meta = undefined
+  }
   return {
     id: row.id,
     role: row.role as UnifiedMessage['role'],
     content,
+    ...(meta ? { meta } : {}),
     createdAt: row.created_at,
     usage: row.usage ? JSON.parse(row.usage) : undefined
   }
@@ -2225,6 +2235,7 @@ export const useChatStore = create<ChatStore>()(
             id: msg.id,
             role: msg.role,
             content: JSON.stringify(sanitizeMessageContentForPersistence(msg.content)),
+            meta: msg.meta ? JSON.stringify(msg.meta) : null,
             createdAt: msg.createdAt,
             usage: msg.usage ? JSON.stringify(msg.usage) : null,
             sortOrder: i
@@ -2276,7 +2287,7 @@ export const useChatStore = create<ChatStore>()(
       const session = get().sessions.find((s) => s.id === sessionId)
       if (session) {
         session.messages.forEach((msg) => {
-          dbUpdateMessage(msg.id, msg.content, msg.usage)
+          dbUpdateMessage(msg.id, msg.content, msg.usage, msg.meta ?? null)
         })
         dbUpdateSession(sessionId, { updatedAt: session.updatedAt })
       }
@@ -2323,7 +2334,7 @@ export const useChatStore = create<ChatStore>()(
       // Persist updated message
       const session = getSessionByIdFromState(get(), sessionId)
       const msg = session?.messages.find((m) => m.id === msgId)
-      if (msg) dbUpdateMessage(msgId, msg.content, msg.usage)
+      if (msg) dbUpdateMessage(msgId, msg.content, msg.usage, msg.meta ?? null)
     },
 
     appendTextDelta: (sessionId, msgId, text) => {

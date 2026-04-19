@@ -4,6 +4,7 @@ import { useSettingsStore } from '../../stores/settings-store'
 import {
   compressMessages,
   resolveCompressionContextLength,
+  resolveCompressionReservedOutputBudget,
   resolveCompressionThreshold,
   type CompressionConfig
 } from './context-compression'
@@ -42,7 +43,8 @@ export function buildRuntimeCompressionConfig(
     enabled: true,
     contextLength,
     threshold: resolveCompressionThreshold(modelConfig),
-    preCompressThreshold: 0.65
+    preCompressThreshold: 0.65,
+    reservedOutputBudget: resolveCompressionReservedOutputBudget(modelConfig)
   }
 }
 

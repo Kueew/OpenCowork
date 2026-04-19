@@ -1,6 +1,7 @@
 import { Allow, parse as parsePartialJSON } from 'partial-json'
 import type {
   ContentBlock,
+  MessageMeta,
   ProviderConfig,
   RequestDebugInfo,
   RequestTiming,
@@ -93,6 +94,7 @@ export interface SidecarUnifiedMessage {
   usage?: TokenUsage
   providerResponseId?: string
   source?: UnifiedMessage['source']
+  meta?: MessageMeta
 }
 
 export interface SidecarProviderConfig {
@@ -331,7 +333,8 @@ function mapSidecarMessage(message: UnifiedMessage): SidecarUnifiedMessage | nul
       createdAt: message.createdAt,
       ...(message.usage ? { usage: message.usage } : {}),
       ...(message.providerResponseId ? { providerResponseId: message.providerResponseId } : {}),
-      ...(message.source ? { source: message.source } : {})
+      ...(message.source ? { source: message.source } : {}),
+      ...(message.meta ? { meta: message.meta } : {})
     }
   }
 
@@ -349,7 +352,8 @@ function mapSidecarMessage(message: UnifiedMessage): SidecarUnifiedMessage | nul
     createdAt: message.createdAt,
     ...(message.usage ? { usage: message.usage } : {}),
     ...(message.providerResponseId ? { providerResponseId: message.providerResponseId } : {}),
-    ...(message.source ? { source: message.source } : {})
+    ...(message.source ? { source: message.source } : {}),
+    ...(message.meta ? { meta: message.meta } : {})
   }
 }
 
@@ -564,8 +568,15 @@ export function normalizeSidecarMessage(rawMessage: unknown): UnifiedMessage | n
     ...(typeof message.providerResponseId === 'string'
       ? { providerResponseId: message.providerResponseId }
       : {}),
-    ...(message.source === 'team' || message.source === 'queued' ? { source: message.source } : {})
+    ...(message.source === 'team' || message.source === 'queued' ? { source: message.source } : {}),
+    ...(isRecord(message.meta) ? { meta: message.meta as MessageMeta } : {})
   }
+}
+
+function normalizeSidecarMessages(rawMessages: unknown[]): UnifiedMessage[] {
+  return rawMessages
+    .map((message) => normalizeSidecarMessage(message))
+    .filter((message): message is UnifiedMessage => message !== null)
 }
 
 function normalizeToolResultOutput(value: unknown): ToolResultContent | undefined {
@@ -1042,6 +1053,11 @@ export function normalizeSidecarAgentEvent(rawEvent: unknown): AgentEvent | null
       }
     case 'loop_end': {
       const reason = event.reason
+      const messages = Array.isArray(event.messages)
+        ? event.messages
+            .map((rawMessage) => normalizeSidecarMessage(rawMessage))
+            .filter((message): message is UnifiedMessage => message !== null)
+        : undefined
       return {
         type: 'loop_end',
         reason:
@@ -1050,7 +1066,8 @@ export function normalizeSidecarAgentEvent(rawEvent: unknown): AgentEvent | null
           reason === 'aborted' ||
           reason === 'error'
             ? reason
-            : 'error'
+            : 'error',
+        ...(messages && messages.length > 0 ? { messages } : {})
       }
     }
     case 'context_compression_start':
@@ -1059,7 +1076,10 @@ export function normalizeSidecarAgentEvent(rawEvent: unknown): AgentEvent | null
       return {
         type: 'context_compressed',
         originalCount: Number(event.originalCount ?? 0),
-        newCount: Number(event.newCount ?? event.compressedCount ?? 0)
+        newCount: Number(event.newCount ?? event.compressedCount ?? 0),
+        ...(Array.isArray(event.messages)
+          ? { messages: normalizeSidecarMessages(event.messages) }
+          : {})
       }
     case 'request_debug': {
       const debugInfo = normalizeSidecarRecord(event.debugInfo)

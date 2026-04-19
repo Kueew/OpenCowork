@@ -85,11 +85,19 @@ export async function* runAgentLoop(
   })
   let conversationMessages = [...messages]
   let iteration = 0
+  let fullCompressionApplied = false
   if (config.contextCompression) {
     resetCompressionFailures()
   }
   let lastInputTokens = config.contextCompression ? findRecentContextUsage(messages) : 0
   const hasIterationLimit = Number.isFinite(config.maxIterations) && config.maxIterations > 0
+  const buildLoopEndEvent = (
+    reason: 'completed' | 'max_iterations' | 'aborted' | 'error'
+  ): AgentEvent => ({
+    type: 'loop_end',
+    reason,
+    ...(fullCompressionApplied ? { messages: [...conversationMessages] } : {})
+  })
 
   // Always hand the final transcript back to the caller so it can replay the
   // conversation (e.g. generate a fallback report when no text was produced).
@@ -97,21 +105,36 @@ export async function* runAgentLoop(
   // completed runs, errors, and early termination via .return().
   try {
     while (!hasIterationLimit || iteration < config.maxIterations) {
+      if (config.signal.aborted) {
+        yield buildLoopEndEvent('aborted')
+        return
+      }
+
       // --- Context management (between iterations) ---
-      if (lastInputTokens > 0 && config.contextCompression && !config.signal.aborted) {
+      if (lastInputTokens > 0 && config.contextCompression) {
         const cc = config.contextCompression
         if (shouldCompress(lastInputTokens, cc.config)) {
+          if (config.signal.aborted) {
+            yield buildLoopEndEvent('aborted')
+            return
+          }
           // Full compression: summarize middle history via main model
           yield { type: 'context_compression_start' }
+          if (config.signal.aborted) {
+            yield buildLoopEndEvent('aborted')
+            return
+          }
           try {
             const originalCount = conversationMessages.length
             const compressedMessages = await cc.compressFn(conversationMessages)
             // Keep loop-local history mutable even if external stores freeze shared arrays.
             conversationMessages = [...compressedMessages]
+            fullCompressionApplied = true
             yield {
               type: 'context_compressed',
               originalCount,
-              newCount: conversationMessages.length
+              newCount: conversationMessages.length,
+              messages: [...conversationMessages]
             }
             lastInputTokens = 0
           } catch (compErr) {
@@ -123,7 +146,7 @@ export async function* runAgentLoop(
         }
       }
       if (config.signal.aborted) {
-        yield { type: 'loop_end', reason: 'aborted' }
+        yield buildLoopEndEvent('aborted')
         return
       }
 
@@ -145,6 +168,7 @@ export async function* runAgentLoop(
       let sendAttempt = 0
       let accountFailoverUsed = false
       let providerResponseId: string | undefined
+      let assistantUsage: UnifiedMessage['usage']
       // stopReason from message_end is not used at loop level
 
       while (sendAttempt < MAX_PROVIDER_RETRIES) {
@@ -173,7 +197,7 @@ export async function* runAgentLoop(
 
           for await (const event of stream) {
             if (config.signal.aborted) {
-              yield { type: 'loop_end', reason: 'aborted' }
+              yield buildLoopEndEvent('aborted')
               return
             }
 
@@ -345,6 +369,7 @@ export async function* runAgentLoop(
 
               case 'message_end':
                 if (event.usage) {
+                  assistantUsage = event.usage
                   lastInputTokens = readContextUsage(event.usage)
                 }
                 if (event.providerResponseId) {
@@ -427,7 +452,7 @@ export async function* runAgentLoop(
           break
         } catch (err) {
           if (config.signal.aborted) {
-            yield { type: 'loop_end', reason: 'aborted' }
+            yield buildLoopEndEvent('aborted')
             return
           }
           // Multi-account failover: on rate-limit / auth errors, try switching to the
@@ -447,14 +472,14 @@ export async function* runAgentLoop(
           const delay = getRetryDelay(err, sendAttempt, streamedContent)
           if (delay === null || sendAttempt === MAX_PROVIDER_RETRIES - 1) {
             yield { type: 'error', error: err instanceof Error ? err : new Error(String(err)) }
-            yield { type: 'loop_end', reason: 'error' }
+            yield buildLoopEndEvent('error')
             return
           }
           sendAttempt++
           try {
             await delayWithAbort(delay, config.signal)
           } catch {
-            yield { type: 'loop_end', reason: 'aborted' }
+            yield buildLoopEndEvent('aborted')
             return
           }
           continue
@@ -467,6 +492,7 @@ export async function* runAgentLoop(
         role: 'assistant',
         content: assistantContentBlocks.length > 0 ? assistantContentBlocks : '',
         createdAt: Date.now(),
+        ...(assistantUsage ? { usage: assistantUsage } : {}),
         ...(providerResponseId ? { providerResponseId } : {})
       }
       conversationMessages.push(assistantMsg)
@@ -474,7 +500,7 @@ export async function* runAgentLoop(
 
       // 2. No tool calls → done
       if (toolCalls.length === 0) {
-        yield { type: 'loop_end', reason: 'completed' }
+        yield buildLoopEndEvent('completed')
         return
       }
 
@@ -530,7 +556,7 @@ export async function* runAgentLoop(
           const approved = await onApprovalNeeded(tc)
           if (!approved) {
             if (config.signal.aborted) {
-              yield { type: 'loop_end', reason: 'aborted' }
+              yield buildLoopEndEvent('aborted')
               return
             }
             const deniedAt = Date.now()
@@ -636,7 +662,7 @@ export async function* runAgentLoop(
             if (!execution) break
             completedCount += 1
             if (config.signal.aborted) {
-              yield { type: 'loop_end', reason: 'aborted' }
+              yield buildLoopEndEvent('aborted')
               return
             }
             const completedResult = buildToolCallResult(execution)
@@ -660,7 +686,7 @@ export async function* runAgentLoop(
             })
           } catch (toolErr) {
             if (config.signal.aborted) {
-              yield { type: 'loop_end', reason: 'aborted' }
+              yield buildLoopEndEvent('aborted')
               return
             }
             const errMsg = toolErr instanceof Error ? toolErr.message : String(toolErr)
@@ -670,7 +696,7 @@ export async function* runAgentLoop(
 
           const completedAt = Date.now()
           if (config.signal.aborted) {
-            yield { type: 'loop_end', reason: 'aborted' }
+            yield buildLoopEndEvent('aborted')
             return
           }
 
@@ -715,15 +741,15 @@ export async function* runAgentLoop(
       }
 
       if (shouldStopForUserReview) {
-        yield { type: 'loop_end', reason: 'completed' }
+        yield buildLoopEndEvent('completed')
         return
       }
     }
 
     if (hasIterationLimit) {
-      yield { type: 'loop_end', reason: 'max_iterations' }
+      yield buildLoopEndEvent('max_iterations')
     } else {
-      yield { type: 'loop_end', reason: 'completed' }
+      yield buildLoopEndEvent('completed')
     }
   } finally {
     try {

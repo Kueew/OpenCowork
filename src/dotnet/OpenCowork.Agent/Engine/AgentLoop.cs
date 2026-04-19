@@ -95,6 +95,12 @@ public static class AgentLoop
             ? FindRecentContextUsage(initialMessages)
             : 0;
         var hasLimit = config.MaxIterations > 0 && config.MaxIterations < int.MaxValue;
+        var fullCompressionApplied = false;
+        LoopEndEvent BuildLoopEndEvent(string reason) => new()
+        {
+            Reason = reason,
+            Messages = fullCompressionApplied ? conversationMessages.ToList() : null
+        };
 
         yield return new LoopStartEvent
         {
@@ -113,7 +119,7 @@ public static class AgentLoop
         {
             if (ct.IsCancellationRequested)
             {
-                yield return new LoopEndEvent { Reason = "aborted" };
+                yield return BuildLoopEndEvent("aborted");
                 yield break;
             }
 
@@ -125,16 +131,24 @@ public static class AgentLoop
                     yield return new ContextCompressionStartEvent();
 
                     var compressed = await ContextCompression.CompressMessagesAsync(
-                        conversationMessages, config.Provider, config.ProviderConfig, ct);
+                        conversationMessages, config.Provider, config.ProviderConfig, lastInputTokens, ct);
 
                     var removedCount = conversationMessages.Count - compressed.Count;
                     conversationMessages = compressed;
+                    fullCompressionApplied = true;
 
                     yield return new ContextCompressedEvent
                     {
                         OriginalCount = conversationMessages.Count + removedCount,
-                        CompressedCount = compressed.Count
+                        CompressedCount = compressed.Count,
+                        Messages = compressed.ToList()
                     };
+
+                    // The next iteration must evaluate compaction pressure from the
+                    // post-compaction transcript, not from the pre-compaction provider
+                    // usage. Keeping the stale token count causes immediate re-compaction
+                    // loops on every turn when the sidecar path is active.
+                    lastInputTokens = 0;
                 }
                 else if (ContextCompression.ShouldPreCompress(lastInputTokens, config.Compression))
                 {
@@ -343,7 +357,7 @@ public static class AgentLoop
                             Message = evt.Error?.Message ?? "Unknown error",
                             ErrorType = evt.Error?.Type
                         };
-                        yield return new LoopEndEvent { Reason = "error" };
+                        yield return BuildLoopEndEvent("error");
                         yield break;
                 }
             }
@@ -397,7 +411,7 @@ public static class AgentLoop
             // --- No tool calls → done ---
             if (toolCalls.Count == 0)
             {
-                yield return new LoopEndEvent { Reason = "completed" };
+                yield return BuildLoopEndEvent("completed");
                 yield break;
             }
 
@@ -409,7 +423,7 @@ public static class AgentLoop
             // the loop immediately.
             if (string.Equals(config.SessionMode, "chat", StringComparison.OrdinalIgnoreCase))
             {
-                yield return new LoopEndEvent { Reason = "chat_mode" };
+                yield return BuildLoopEndEvent("completed");
                 yield break;
             }
 
@@ -554,12 +568,12 @@ public static class AgentLoop
                 .OfType<ToolResultBlock>()
                 .Any(IsAwaitingUserReviewToolResult))
             {
-                yield return new LoopEndEvent { Reason = "completed" };
+                yield return BuildLoopEndEvent("completed");
                 yield break;
             }
         }
 
-        yield return new LoopEndEvent { Reason = "max_iterations" };
+        yield return BuildLoopEndEvent("max_iterations");
         }
         finally
         {

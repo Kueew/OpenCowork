@@ -7,7 +7,13 @@ import { useUIStore } from './ui-store'
 
 // --- Types ---
 
-export type PlanStatus = 'drafting' | 'approved' | 'implementing' | 'completed' | 'rejected'
+export type PlanStatus =
+  | 'drafting'
+  | 'awaiting_review'
+  | 'approved'
+  | 'implementing'
+  | 'completed'
+  | 'rejected'
 
 export interface Plan {
   id: string
@@ -119,7 +125,6 @@ function releaseDormantPlanMemory(
 interface PlanStore {
   plans: Record<string, Plan>
   plansBySession: Record<string, Plan>
-  pendingReviewBySession: Record<string, string>
   activePlanId: string | null
   _loaded: boolean
 
@@ -137,11 +142,9 @@ interface PlanStore {
   updatePlan: (planId: string, patch: Partial<Omit<Plan, 'id' | 'sessionId' | 'createdAt'>>) => void
   approvePlan: (planId: string) => void
   rejectPlan: (planId: string) => void
-  startImplementing: (planId: string) => void
+  beginImplementation: (planId: string) => void
   completePlan: (planId: string) => void
   deletePlan: (planId: string) => void
-  markPendingReview: (sessionId: string, planId: string) => void
-  clearPendingReview: (sessionId: string) => void
 
   // Queries
   getPlanBySession: (sessionId: string) => Plan | undefined
@@ -156,7 +159,6 @@ export const usePlanStore = create<PlanStore>()(
   immer((set, get) => ({
     plans: {},
     plansBySession: {},
-    pendingReviewBySession: {},
     activePlanId: null,
     _loaded: false,
 
@@ -216,7 +218,6 @@ export const usePlanStore = create<PlanStore>()(
                 state.activePlanId = null
               }
             }
-            delete state.pendingReviewBySession[sessionId]
             releaseDormantPlanMemory(state, sessionId)
           })
           return undefined
@@ -258,7 +259,6 @@ export const usePlanStore = create<PlanStore>()(
       set((state) => {
         state.plans[id] = plan
         state.plansBySession[sessionId] = stripPlanPayload(plan)
-        delete state.pendingReviewBySession[sessionId]
         state.activePlanId = id
         releaseDormantPlanMemory(state, sessionId)
       })
@@ -297,7 +297,6 @@ export const usePlanStore = create<PlanStore>()(
           plan.status = 'approved'
           plan.updatedAt = now
           state.plansBySession[plan.sessionId] = stripPlanPayload(plan)
-          delete state.pendingReviewBySession[plan.sessionId]
           releaseDormantPlanMemory(state, plan.sessionId)
         }
       })
@@ -316,7 +315,6 @@ export const usePlanStore = create<PlanStore>()(
           plan.status = 'rejected'
           plan.updatedAt = now
           state.plansBySession[plan.sessionId] = stripPlanPayload(plan)
-          delete state.pendingReviewBySession[plan.sessionId]
           releaseDormantPlanMemory(state, plan.sessionId)
         }
       })
@@ -327,7 +325,7 @@ export const usePlanStore = create<PlanStore>()(
       }
     },
 
-    startImplementing: (planId) => {
+    beginImplementation: (planId) => {
       const now = Date.now()
       set((state) => {
         const plan = state.plans[planId]
@@ -335,7 +333,6 @@ export const usePlanStore = create<PlanStore>()(
           plan.status = 'implementing'
           plan.updatedAt = now
           state.plansBySession[plan.sessionId] = stripPlanPayload(plan)
-          delete state.pendingReviewBySession[plan.sessionId]
           releaseDormantPlanMemory(state, plan.sessionId)
         }
       })
@@ -354,7 +351,6 @@ export const usePlanStore = create<PlanStore>()(
           plan.status = 'completed'
           plan.updatedAt = now
           state.plansBySession[plan.sessionId] = stripPlanPayload(plan)
-          delete state.pendingReviewBySession[plan.sessionId]
           releaseDormantPlanMemory(state, plan.sessionId)
         }
       })
@@ -371,9 +367,6 @@ export const usePlanStore = create<PlanStore>()(
         delete state.plans[planId]
         if (existingPlan?.sessionId) {
           delete state.plansBySession[existingPlan.sessionId]
-          if (state.pendingReviewBySession[existingPlan.sessionId] === planId) {
-            delete state.pendingReviewBySession[existingPlan.sessionId]
-          }
         }
         if (state.activePlanId === planId) {
           state.activePlanId = null
@@ -392,20 +385,9 @@ export const usePlanStore = create<PlanStore>()(
       return get().plans[cached.id] ?? cached
     },
 
-    markPendingReview: (sessionId, planId) =>
-      set((state) => {
-        state.pendingReviewBySession[sessionId] = planId
-      }),
-
-    clearPendingReview: (sessionId) =>
-      set((state) => {
-        delete state.pendingReviewBySession[sessionId]
-      }),
-
     getPendingReviewPlan: (sessionId) => {
-      const pendingPlanId = get().pendingReviewBySession[sessionId]
-      if (!pendingPlanId) return undefined
-      return get().plans[pendingPlanId]
+      const plan = get().getPlanBySession(sessionId)
+      return plan?.status === 'awaiting_review' ? plan : undefined
     },
 
     getActivePlan: () => {

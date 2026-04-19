@@ -160,6 +160,7 @@ export interface RequestDebugInfo {
   method: string
   headers: Record<string, string>
   body?: string
+  contextWindowBody?: string
   timestamp: number
   providerId?: string
   providerBuiltinId?: string
@@ -173,6 +174,29 @@ export interface RequestDebugInfo {
   previousResponseId?: string
 }
 
+export interface CompactBoundarySegment {
+  headId: string
+  anchorId: string
+  tailId: string
+}
+
+export interface CompactBoundaryMeta {
+  trigger: 'auto' | 'manual'
+  preTokens: number
+  messagesSummarized: number
+  preservedSegment?: CompactBoundarySegment
+}
+
+export interface CompactSummaryMeta {
+  messagesSummarized: number
+  recentMessagesPreserved: boolean
+}
+
+export interface MessageMeta {
+  compactBoundary?: CompactBoundaryMeta
+  compactSummary?: CompactSummaryMeta
+}
+
 export interface UnifiedMessage {
   id: string
   role: 'system' | 'user' | 'assistant' | 'tool'
@@ -184,6 +208,8 @@ export interface UnifiedMessage {
   providerResponseId?: string
   /** Optional source marker for non-manual message insertion paths. */
   source?: 'team' | 'queued'
+  /** Persisted auxiliary metadata used by transcript/runtime features. */
+  meta?: MessageMeta
   /**
    * Monotonic counter bumped by the chat-store every time the message is mutated.
    * Used by React.memo equality checks to skip expensive deep content scans.

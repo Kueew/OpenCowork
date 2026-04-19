@@ -189,6 +189,7 @@ function sendResponsesRequestDebug(
     url: string
     method: string
     body?: string
+    contextWindowBody?: string
     headers?: Record<string, string>
     transport: 'http' | 'websocket'
     fallbackReason?: string
@@ -203,6 +204,9 @@ function sendResponsesRequestDebug(
     method: args.method,
     headers: maskDebugHeaders(args.headers ?? req.headers),
     ...(typeof args.body === 'string' ? { body: args.body } : {}),
+    ...(typeof args.contextWindowBody === 'string'
+      ? { contextWindowBody: args.contextWindowBody }
+      : {}),
     timestamp: Date.now(),
     ...(req.providerId ? { providerId: req.providerId } : {}),
     ...(req.providerBuiltinId ? { providerBuiltinId: req.providerBuiltinId } : {}),
@@ -1092,6 +1096,7 @@ export function registerApiProxyHandlers(): void {
             method: 'WEBSOCKET',
             headers: debugInfo.headers,
             body: debugInfo.body,
+            contextWindowBody: debugInfo.contextWindowBody,
             transport: debugInfo.transport,
             fallbackReason: debugInfo.fallbackReason,
             reusedConnection: debugInfo.reusedConnection,

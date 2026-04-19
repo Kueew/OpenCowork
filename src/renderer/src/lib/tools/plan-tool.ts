@@ -170,7 +170,6 @@ const enterPlanModeHandler: ToolHandler = {
         return encodeToolError(error instanceof Error ? error.message : String(error))
       }
 
-      planStore.clearPendingReview(session.id)
       if (!uiStore.isPlanModeEnabled(session.id)) uiStore.enterPlanMode(session.id)
       if (useChatStore.getState().activeSessionId === session.id) {
         planStore.setActivePlan(existingPlan.id)
@@ -196,7 +195,6 @@ const enterPlanModeHandler: ToolHandler = {
       return encodeToolError(error instanceof Error ? error.message : String(error))
     }
 
-    planStore.clearPendingReview(session.id)
     if (!uiStore.isPlanModeEnabled(session.id)) uiStore.enterPlanMode(session.id)
     const autoSwitchTarget = useSettingsStore.getState().clarifyPlanModeAutoSwitchTarget
     if (session.mode === 'clarify' && autoSwitchTarget !== 'off') {
@@ -266,10 +264,9 @@ const exitPlanModeHandler: ToolHandler = {
     const title = inferTitleFromContent(content)
     planStore.updatePlan(plan.id, {
       title,
-      status: 'drafting',
+      status: 'awaiting_review',
       filePath: plan.filePath
     })
-    planStore.markPendingReview(sessionId, plan.id)
 
     uiStore.exitPlanMode(sessionId)
 

@@ -3,6 +3,7 @@ import { HttpsProxyAgent } from 'https-proxy-agent'
 import { readSettings } from '../ipc/settings-handlers'
 import {
   RESPONSES_WEBSOCKET_CONNECTION_MAX_AGE_MS,
+  buildResponsesWebsocketCreatePayload,
   buildResponsesWebsocketHeaders,
   extractResponsesWebsocketCompletionState,
   getResponsesWsFailureReason,
@@ -66,6 +67,7 @@ export interface ResponsesWsRequestDebug {
   url: string
   headers: Record<string, string>
   body: string
+  contextWindowBody?: string
   transport: 'websocket'
   fallbackReason?: string
   reusedConnection: boolean
@@ -457,6 +459,13 @@ export class ResponsesWebSocketSessionManager {
       url: args.args.websocketUrl,
       headers: buildResponsesWebsocketHeaders(args.args.headers),
       body: preparedRequest.payload,
+      ...(preparedRequest.kind === 'incremental'
+        ? {
+            contextWindowBody: buildResponsesWebsocketCreatePayload(
+              cloneJson(preparedRequest.fullRequest)
+            )
+          }
+        : {}),
       transport: 'websocket',
       ...(args.fallbackReason ? { fallbackReason: args.fallbackReason } : {}),
       reusedConnection,

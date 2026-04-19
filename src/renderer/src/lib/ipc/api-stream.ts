@@ -6,6 +6,7 @@ export interface RequestDebugInfo {
   method: string
   headers: Record<string, string>
   body?: string
+  contextWindowBody?: string
   timestamp: number
   transport?: 'http' | 'websocket'
   fallbackReason?: string

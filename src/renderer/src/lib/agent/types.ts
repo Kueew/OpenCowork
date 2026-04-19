@@ -143,7 +143,11 @@ export type AgentEvent =
       stopReason: string
       toolResults?: { toolUseId: string; content: ToolResultContent; isError?: boolean }[]
     }
-  | { type: 'loop_end'; reason: 'completed' | 'max_iterations' | 'aborted' | 'error' }
+  | {
+      type: 'loop_end'
+      reason: 'completed' | 'max_iterations' | 'aborted' | 'error'
+      messages?: UnifiedMessage[]
+    }
   | {
       type: 'error'
       error: Error
@@ -153,7 +157,12 @@ export type AgentEvent =
     }
   | { type: 'request_debug'; debugInfo: RequestDebugInfo }
   | { type: 'context_compression_start' }
-  | { type: 'context_compressed'; originalCount: number; newCount: number }
+  | {
+      type: 'context_compressed'
+      originalCount: number
+      newCount: number
+      messages?: UnifiedMessage[]
+    }
 
 // --- Agent Loop Stop Reasons ---
 

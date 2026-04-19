@@ -33,6 +33,12 @@ import { useSettingsStore } from '@renderer/stores/settings-store'
 import { updateWebSearchToolRegistration } from '@renderer/lib/tools'
 import { useUIStore, type AppMode } from '@renderer/stores/ui-store'
 import { formatTokens } from '@renderer/lib/format-tokens'
+import {
+  getEffectiveContextWindow,
+  resolveCompressionContextLength,
+  resolveCompressionReservedOutputBudget,
+  resolveCompressionThreshold
+} from '@renderer/lib/agent/context-compression'
 import { useDebouncedTokens } from '@renderer/hooks/use-estimated-tokens'
 import { usePromptRecommendation } from '@renderer/hooks/use-prompt-recommendation'
 import { useChatStore } from '@renderer/stores/chat-store'
@@ -117,38 +123,64 @@ import { isProjectSession, workspaceContextAvailable } from '@renderer/lib/sessi
 import { InlineStepsPanel } from '@renderer/components/cowork/StepsPanel'
 
 function ContextRing(): React.JSX.Element | null {
-  const chatView = useUIStore((s) => s.chatView)
+  const activeSessionProviderId = useChatStore((s) => {
+    const idx = s.activeSessionId ? s.sessionsById[s.activeSessionId] : undefined
+    const activeSession = idx !== undefined ? s.sessions[idx] : undefined
+    return activeSession?.providerId ?? null
+  })
+  const activeSessionModelId = useChatStore((s) => {
+    const idx = s.activeSessionId ? s.sessionsById[s.activeSessionId] : undefined
+    const activeSession = idx !== undefined ? s.sessions[idx] : undefined
+    return activeSession?.modelId ?? null
+  })
 
   const activeModelCfg = useProviderStore((s) => {
-    const { providers, activeProviderId, activeModelId } = s
-    if (!activeProviderId) return null
-    const provider = providers.find((p) => p.id === activeProviderId)
-    return provider?.models.find((m) => m.id === activeModelId) ?? null
+    const providerId = activeSessionProviderId ?? s.activeProviderId
+    const modelId = activeSessionModelId ?? s.activeModelId
+    if (!providerId || !modelId) return null
+    const provider = s.providers.find((p) => p.id === providerId)
+    return provider?.models.find((m) => m.id === modelId) ?? null
   }) as AIModelConfig | null
-
-  const ctxLimit = activeModelCfg?.contextLength ?? null
+  const compressionConfig = activeModelCfg
+    ? {
+        enabled: true,
+        contextLength: resolveCompressionContextLength(activeModelCfg),
+        threshold: resolveCompressionThreshold(activeModelCfg),
+        preCompressThreshold: 0.65,
+        reservedOutputBudget: resolveCompressionReservedOutputBudget(activeModelCfg)
+      }
+    : null
 
   const lastUsage = useChatStore((s) => {
-    // Only re-compute when streaming stops (streamingMessageId goes null) or session changes.
-    // During streaming, usage hasn't been set yet, so there's no point scanning messages every frame.
-    if (s.streamingMessageId) return null
     const idx = s.activeSessionId ? s.sessionsById[s.activeSessionId] : undefined
     const activeSession = idx !== undefined ? s.sessions[idx] : undefined
     if (!activeSession) return null
     const messages = activeSession.messages
     for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const usage = messages[index]?.usage
-      if (usage) return usage
+      const message = messages[index]
+      const usage = message?.usage
+      if (!usage) {
+        continue
+      }
+      if (s.streamingMessageId && message?.id === s.streamingMessageId) {
+        const streamingCtxUsed = usage.contextTokens ?? usage.inputTokens ?? 0
+        if (streamingCtxUsed <= 0) {
+          continue
+        }
+      }
+      return usage
     }
     return null
   })
 
   const ctxUsed = lastUsage?.contextTokens ?? lastUsage?.inputTokens ?? 0
+  const ctxLimit = lastUsage?.contextLength ?? compressionConfig?.contextLength ?? null
+  const ctxGaugeLimit = compressionConfig ? getEffectiveContextWindow(compressionConfig) : ctxLimit
 
-  if (chatView !== 'session' || !ctxLimit || ctxUsed <= 0) return null
+  if (!ctxGaugeLimit) return null
 
-  const pct = Math.min((ctxUsed / ctxLimit) * 100, 100)
-  const remaining = Math.max(ctxLimit - ctxUsed, 0)
+  const pct = Math.min((ctxUsed / ctxGaugeLimit) * 100, 100)
+  const remaining = Math.max(ctxGaugeLimit - ctxUsed, 0)
   const strokeColor =
     pct > 80 ? 'stroke-red-500' : pct > 50 ? 'stroke-amber-500' : 'stroke-emerald-500'
 
@@ -163,37 +195,39 @@ function ContextRing(): React.JSX.Element | null {
     <Tooltip>
       <TooltipTrigger asChild>
         <div className="flex items-center justify-center cursor-default">
-          <svg width={size} height={size} className="-rotate-90">
-            <circle
-              cx={size / 2}
-              cy={size / 2}
-              r={radius}
-              fill="none"
-              className="stroke-muted/30"
-              strokeWidth={strokeWidth}
-            />
-            <circle
-              cx={size / 2}
-              cy={size / 2}
-              r={radius}
-              fill="none"
-              className={`${strokeColor} transition-all duration-500`}
-              strokeWidth={strokeWidth}
-              strokeDasharray={circumference}
-              strokeDashoffset={dashOffset}
-              strokeLinecap="round"
-            />
-          </svg>
-          <span className="absolute text-[7px] font-medium text-muted-foreground tabular-nums select-none">
-            {pct < 10 ? `${pct.toFixed(0)}` : `${pct.toFixed(0)}`}%
-          </span>
+          <div className="relative flex size-[26px] shrink-0 items-center justify-center">
+            <svg width={size} height={size} className="-rotate-90">
+              <circle
+                cx={size / 2}
+                cy={size / 2}
+                r={radius}
+                fill="none"
+                className="stroke-muted/30"
+                strokeWidth={strokeWidth}
+              />
+              <circle
+                cx={size / 2}
+                cy={size / 2}
+                r={radius}
+                fill="none"
+                className={`${strokeColor} transition-all duration-500`}
+                strokeWidth={strokeWidth}
+                strokeDasharray={circumference}
+                strokeDashoffset={dashOffset}
+                strokeLinecap="round"
+              />
+            </svg>
+            <span className="absolute text-[7px] font-medium text-muted-foreground tabular-nums select-none">
+              {pct.toFixed(0)}%
+            </span>
+          </div>
         </div>
       </TooltipTrigger>
       <TooltipContent side="top">
         <div className="text-xs space-y-0.5">
-          <p className="font-medium">Context Window</p>
+          <p className="font-medium">Compression Budget</p>
           <p className="text-muted-foreground">
-            {formatTokens(ctxUsed)} / {formatTokens(ctxLimit)} ({pct.toFixed(1)}%)
+            {formatTokens(ctxUsed)} / {formatTokens(ctxGaugeLimit)} ({pct.toFixed(1)}%)
           </p>
           <p className="text-muted-foreground">{formatTokens(remaining)} remaining</p>
         </div>
@@ -1191,7 +1225,7 @@ export function InputArea({
     draftSessionId ? Boolean(s.planModesBySession[draftSessionId]) : false
   )
   const pendingReviewPlanId = usePlanStore((s) =>
-    draftSessionId ? (s.pendingReviewBySession[draftSessionId] ?? null) : null
+    draftSessionId ? (s.getPendingReviewPlan(draftSessionId)?.id ?? null) : null
   )
 
   React.useEffect(() => {

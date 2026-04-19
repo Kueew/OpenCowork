@@ -122,15 +122,21 @@ export function AcpPanel(): React.JSX.Element {
                 ns: 'layout',
                 defaultValue: '继续完善实施计划，保存后退出 Plan Mode。'
               })
-            : plan?.status === 'approved' || plan?.status === 'implementing'
-              ? t('rightPanel.acpNextActionExecute', {
+            : plan?.status === 'awaiting_review'
+              ? t('rightPanel.acpNextActionReview', {
                   ns: 'layout',
-                  defaultValue: '继续把已批准计划拆成任务，分派子代理执行，并汇总结果。'
+                  defaultValue:
+                    'Review the plan and explicitly confirm execution before any implementation starts.'
                 })
-              : t('rightPanel.acpNextActionClarify', {
-                  ns: 'layout',
-                  defaultValue: '先补齐目标、约束、边界与验收标准，再进入计划。'
-                })}
+              : plan?.status === 'approved' || plan?.status === 'implementing'
+                ? t('rightPanel.acpNextActionExecute', {
+                    ns: 'layout',
+                    defaultValue: '继续把已批准计划拆成任务，分派子代理执行，并汇总结果。'
+                  })
+                : t('rightPanel.acpNextActionClarify', {
+                    ns: 'layout',
+                    defaultValue: '先补齐目标、约束、边界与验收标准，再进入计划。'
+                  })}
         </p>
       </div>
     </div>

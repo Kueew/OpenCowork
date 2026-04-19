@@ -5,10 +5,12 @@ import { Users, ChevronDown } from 'lucide-react'
 import { SlideIn } from '@renderer/components/animate-ui'
 import { UserMessage } from './UserMessage'
 import { AssistantMessage } from './AssistantMessage'
+import { ContextCompressionMessage } from './ContextCompressionMessage'
 import type { UnifiedMessage, ToolResultContent } from '@renderer/lib/api/types'
 import type { ToolCallState } from '@renderer/lib/agent/types'
 import type { EditableUserMessageDraft } from '@renderer/lib/image-attachments'
 import type { OrchestrationRun } from '@renderer/lib/orchestration/types'
+import { isCompactSummaryLikeMessage } from '@renderer/lib/agent/context-compression'
 
 type MessageRenderMode = 'default' | 'transcript'
 
@@ -104,6 +106,9 @@ function MessageItemInner({
   const inner = (() => {
     switch (message.role) {
       case 'user': {
+        if (isCompactSummaryLikeMessage(message)) {
+          return <ContextCompressionMessage message={message} />
+        }
         if (message.source === 'team') {
           return (
             <TeamNotification
@@ -141,6 +146,8 @@ function MessageItemInner({
             hiddenToolUseIds={hiddenToolUseIds}
           />
         )
+      case 'system':
+        return <ContextCompressionMessage message={message} />
       default:
         return null
     }

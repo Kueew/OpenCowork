@@ -30,6 +30,7 @@ import { cn } from '@renderer/lib/utils'
 function StatusBadge({ status }: { status: PlanStatus }): React.JSX.Element {
   const colorMap: Record<PlanStatus, string> = {
     drafting: 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20',
+    awaiting_review: 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20',
     approved: 'bg-green-500/10 text-green-600 dark:text-green-400 border-green-500/20',
     implementing: 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20',
     completed: 'bg-muted text-muted-foreground border-border',
@@ -37,6 +38,7 @@ function StatusBadge({ status }: { status: PlanStatus }): React.JSX.Element {
   }
   const labelMap: Record<PlanStatus, string> = {
     drafting: 'Drafting',
+    awaiting_review: 'Awaiting Review',
     approved: 'Approved',
     implementing: 'Implementing',
     completed: 'Completed',
@@ -70,15 +72,19 @@ function PlanContent({ plan, content }: { plan: Plan; content: string }): React.
   const [rejectOpen, setRejectOpen] = useState(false)
   const [rejectFeedback, setRejectFeedback] = useState('')
 
-  const canApprove = !!content.trim() && (plan.status === 'drafting' || plan.status === 'rejected') && !isRunning
-  const canReject = canApprove
+  const canExecute = !!content.trim() && plan.status === 'awaiting_review' && !isRunning
+  const canReject = canExecute
+  const canEdit =
+    !planMode &&
+    !isRunning &&
+    ['awaiting_review', 'approved', 'implementing', 'rejected'].includes(plan.status)
 
   const handleConfirmExecute = (): void => {
-    sendImplementPlan(plan.id)
+    void sendImplementPlan(plan.id)
   }
 
   const handleExecuteInNewSession = (): void => {
-    sendImplementPlanInNewSession(plan.id)
+    void sendImplementPlanInNewSession(plan.id)
   }
 
   const handleEditPlan = (): void => {
@@ -103,7 +109,9 @@ function PlanContent({ plan, content }: { plan: Plan; content: string }): React.
             <FileText className="size-4 shrink-0 text-violet-500" />
             <h3 className="text-sm font-medium truncate">{plan.title}</h3>
           </div>
-          {plan.filePath && <p className="mt-1 text-[10px] text-muted-foreground truncate">{plan.filePath}</p>}
+          {plan.filePath && (
+            <p className="mt-1 text-[10px] text-muted-foreground truncate">{plan.filePath}</p>
+          )}
         </div>
         <StatusBadge status={plan.status} />
       </div>
@@ -131,7 +139,7 @@ function PlanContent({ plan, content }: { plan: Plan; content: string }): React.
       </div>
 
       <div className="flex items-center gap-2 pt-1">
-        {canApprove && (
+        {canExecute && (
           <>
             <Button
               size="sm"
@@ -161,14 +169,12 @@ function PlanContent({ plan, content }: { plan: Plan; content: string }): React.
             )}
           </>
         )}
-        {(plan.status === 'approved' || plan.status === 'implementing') &&
-          !planMode &&
-          !isRunning && (
-            <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={handleEditPlan}>
-              <PenLine className="size-3" />
-              {t('plan.edit', { defaultValue: 'Edit Plan' })}
-            </Button>
-          )}
+        {canEdit && (
+          <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={handleEditPlan}>
+            <PenLine className="size-3" />
+            {t('plan.edit', { defaultValue: 'Edit Plan' })}
+          </Button>
+        )}
       </div>
 
       {(plan.status === 'drafting' || plan.status === 'rejected') && planMode && (

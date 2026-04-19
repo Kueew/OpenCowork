@@ -187,6 +187,7 @@ export function registerDbHandlers(): void {
         sessionId: string
         role: string
         content: string
+        meta?: string | null
         createdAt: number
         usage?: string | null
         sortOrder: number
@@ -214,7 +215,10 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle(
     'db:messages:update',
-    (_event, args: { id: string; patch: Partial<{ content: string; usage: string | null }> }) => {
+    (
+      _event,
+      args: { id: string; patch: Partial<{ content: string; meta: string | null; usage: string | null }> }
+    ) => {
       messagesDao.updateMessage(args.id, args.patch)
       return { success: true }
     }
@@ -235,6 +239,7 @@ export function registerDbHandlers(): void {
           id: string
           role: string
           content: string
+          meta?: string | null
           createdAt: number
           usage?: string | null
           sortOrder: number

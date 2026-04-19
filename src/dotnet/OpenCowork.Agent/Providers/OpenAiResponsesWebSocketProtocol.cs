@@ -207,6 +207,9 @@ internal static class OpenAiResponsesWebSocketProtocol
         return Encoding.UTF8.GetBytes(payload.ToJsonString());
     }
 
+    public static byte[] BuildCreatePayload(JsonObject payloadObject)
+        => EncodeCreatePayload(CloneObject(payloadObject));
+
     private static JsonObject StripInputForComparison(JsonObject value)
     {
         var cloned = CloneObject(value);

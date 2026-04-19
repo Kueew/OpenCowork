@@ -285,6 +285,7 @@ public sealed class UnifiedMessage
     public TokenUsage? Usage { get; set; }
     public string? ProviderResponseId { get; set; }
     public string? Source { get; set; }
+    public MessageMeta? Meta { get; set; }
 
     public string GetTextContent()
     {
@@ -315,6 +316,33 @@ public sealed class UnifiedMessage
 
         return [];
     }
+}
+
+public sealed class CompactBoundarySegment
+{
+    public required string HeadId { get; set; }
+    public required string AnchorId { get; set; }
+    public required string TailId { get; set; }
+}
+
+public sealed class CompactBoundaryMeta
+{
+    public required string Trigger { get; set; }
+    public int PreTokens { get; set; }
+    public int MessagesSummarized { get; set; }
+    public CompactBoundarySegment? PreservedSegment { get; set; }
+}
+
+public sealed class CompactSummaryMeta
+{
+    public int MessagesSummarized { get; set; }
+    public bool RecentMessagesPreserved { get; set; }
+}
+
+public sealed class MessageMeta
+{
+    public CompactBoundaryMeta? CompactBoundary { get; set; }
+    public CompactSummaryMeta? CompactSummary { get; set; }
 }
 
 // --- Tool Definitions ---
@@ -590,6 +618,7 @@ public sealed class LoopEndEvent : AgentEvent
 {
     protected override string TypeValue => "loop_end";
     public required string Reason { get; init; }
+    public List<UnifiedMessage>? Messages { get; init; }
 }
 
 public sealed class AgentErrorEvent : AgentEvent
@@ -618,6 +647,7 @@ public sealed class ContextCompressedEvent : AgentEvent
     protected override string TypeValue => "context_compressed";
     public int OriginalCount { get; init; }
     public int CompressedCount { get; init; }
+    public List<UnifiedMessage>? Messages { get; init; }
 }
 
 public sealed class RequestDebugInfo
@@ -626,6 +656,7 @@ public sealed class RequestDebugInfo
     public required string Method { get; init; }
     public required Dictionary<string, string> Headers { get; init; }
     public string? Body { get; init; }
+    public string? ContextWindowBody { get; init; }
     public long Timestamp { get; init; }
     public string? ProviderId { get; init; }
     public string? ProviderBuiltinId { get; init; }

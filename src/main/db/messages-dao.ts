@@ -5,6 +5,7 @@ export interface MessageRow {
   session_id: string
   role: string
   content: string
+  meta: string | null
   created_at: number
   usage: string | null
   sort_order: number
@@ -29,6 +30,7 @@ export function addMessage(msg: {
   sessionId: string
   role: string
   content: string
+  meta?: string | null
   createdAt: number
   usage?: string | null
   sortOrder: number
@@ -39,13 +41,14 @@ export function addMessage(msg: {
     | undefined
 
   db.prepare(
-    `INSERT OR REPLACE INTO messages (id, session_id, role, content, created_at, usage, sort_order)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
+    `INSERT OR REPLACE INTO messages (id, session_id, role, content, meta, created_at, usage, sort_order)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     msg.id,
     msg.sessionId,
     msg.role,
     msg.content,
+    msg.meta ?? null,
     msg.createdAt,
     msg.usage ?? null,
     msg.sortOrder
@@ -60,7 +63,7 @@ export function addMessage(msg: {
 
 export function updateMessage(
   msgId: string,
-  patch: Partial<{ content: string; usage: string | null }>
+  patch: Partial<{ content: string; meta: string | null; usage: string | null }>
 ): void {
   const db = getDb()
   const sets: string[] = []
@@ -69,6 +72,10 @@ export function updateMessage(
   if (patch.content !== undefined) {
     sets.push('content = ?')
     values.push(patch.content)
+  }
+  if (patch.meta !== undefined) {
+    sets.push('meta = ?')
+    values.push(patch.meta)
   }
   if (patch.usage !== undefined) {
     sets.push('usage = ?')
@@ -93,6 +100,7 @@ export function replaceMessages(
     id: string
     role: string
     content: string
+    meta?: string | null
     createdAt: number
     usage?: string | null
     sortOrder: number
@@ -102,8 +110,8 @@ export function replaceMessages(
   const tx = db.transaction(() => {
     db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId)
     const insert = db.prepare(
-      `INSERT OR REPLACE INTO messages (id, session_id, role, content, created_at, usage, sort_order)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+      `INSERT OR REPLACE INTO messages (id, session_id, role, content, meta, created_at, usage, sort_order)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     )
     for (const msg of messages) {
       insert.run(
@@ -111,6 +119,7 @@ export function replaceMessages(
         sessionId,
         msg.role,
         msg.content,
+        msg.meta ?? null,
         msg.createdAt,
         msg.usage ?? null,
         msg.sortOrder

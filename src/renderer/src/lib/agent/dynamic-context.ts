@@ -88,6 +88,11 @@ function buildSessionStateContext(sessionId: string): string | null {
   const plan = usePlanStore.getState().getPlanBySession(sessionId)
   if (plan) {
     parts.push(`- Plan: "${plan.title}" (status: ${plan.status})`)
+    if (plan.status === 'awaiting_review') {
+      parts.push(
+        '  Reminder: The plan is awaiting user review. Do not implement until it is approved.'
+      )
+    }
     if (plan.status === 'approved' || plan.status === 'implementing') {
       parts.push('  Reminder: An approved plan exists. Follow the plan steps for implementation.')
     }

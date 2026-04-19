@@ -33,7 +33,7 @@ export function RightPanelRail({
   const hasUnreadPlan = usePlanStore((s) => {
     if (!activeSessionId) return false
     const plan = Object.values(s.plans).find((p) => p.sessionId === activeSessionId)
-    return plan?.status === 'drafting'
+    return plan?.status === 'awaiting_review'
   })
 
   return (

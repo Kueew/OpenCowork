@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace OpenCowork.Agent.Engine;
@@ -8,6 +9,7 @@ public sealed class CompressionConfig
     public int ContextLength { get; init; }
     public double Threshold { get; init; } = 0.8;
     public double PreCompressThreshold { get; init; } = 0.65;
+    public int ReservedOutputBudget { get; init; } = 20_000;
 }
 
 /// <summary>
@@ -19,6 +21,16 @@ public static class ContextCompression
 {
     /// <summary>Number of recent messages to preserve after full compression.</summary>
     private const int PreserveRecentCount = 4;
+    private const int ToolResultKeepRecent = 6;
+    private const int DefaultReservedOutputTokens = 20_000;
+    private const int AutoBufferTokens = 13_000;
+    private const int PreBufferTokens = 20_000;
+    private const int PreGapTokens = 8_000;
+    private const int ToolResultClearCharThreshold = 200;
+    private const int BoundaryScanLimit = 10;
+    private const string ClearedToolResultPlaceholder = "[Tool result compressed]";
+    private const string ClearedThinkingPlaceholder = "[Thinking compressed]";
+    private const string CompactBoundaryText = "Conversation compacted";
 
     /// <summary>Max retry attempts for compression failures.</summary>
     private const int MaxRetries = 2;
@@ -31,18 +43,61 @@ public static class ContextCompression
 
     public static void ResetFailures() => _consecutiveFailures = 0;
 
+    private static int GetEffectiveContextWindow(CompressionConfig config)
+    {
+        if (config.ContextLength <= 0) return 0;
+        var reserved = Math.Max(0, config.ReservedOutputBudget > 0
+            ? config.ReservedOutputBudget
+            : DefaultReservedOutputTokens);
+        return Math.Max(1, config.ContextLength - reserved);
+    }
+
+    private static int GetCompressionTriggerTokens(CompressionConfig config)
+    {
+        var effectiveWindow = GetEffectiveContextWindow(config);
+        if (effectiveWindow <= 0) return 0;
+
+        var ratioThreshold = (int)Math.Floor(effectiveWindow * config.Threshold);
+        var bufferedThreshold = effectiveWindow - AutoBufferTokens;
+        var threshold = bufferedThreshold > 0
+            ? Math.Min(ratioThreshold, bufferedThreshold)
+            : ratioThreshold;
+        return Math.Max(1, threshold);
+    }
+
+    private static int GetPreCompressionTriggerTokens(CompressionConfig config)
+    {
+        var effectiveWindow = GetEffectiveContextWindow(config);
+        if (effectiveWindow <= 0) return 0;
+
+        var ratioThreshold = (int)Math.Floor(effectiveWindow * config.PreCompressThreshold);
+        var fullThreshold = GetCompressionTriggerTokens(config);
+        var threshold = ratioThreshold;
+
+        var bufferedThreshold = effectiveWindow - PreBufferTokens;
+        if (bufferedThreshold > 0)
+            threshold = Math.Min(threshold, bufferedThreshold);
+
+        var gapThreshold = fullThreshold - PreGapTokens;
+        if (gapThreshold > 0)
+            threshold = Math.Min(threshold, gapThreshold);
+
+        return Math.Max(1, Math.Min(threshold, Math.Max(1, fullThreshold - 1)));
+    }
+
     public static bool ShouldCompress(int inputTokens, CompressionConfig config)
     {
         if (!config.Enabled || config.ContextLength <= 0) return false;
         if (_consecutiveFailures >= MaxConsecutiveFailures) return false;
-        return (double)inputTokens / config.ContextLength >= config.Threshold;
+        return inputTokens >= GetCompressionTriggerTokens(config);
     }
 
     public static bool ShouldPreCompress(int inputTokens, CompressionConfig config)
     {
         if (!config.Enabled || config.ContextLength <= 0) return false;
-        var ratio = (double)inputTokens / config.ContextLength;
-        return ratio >= config.PreCompressThreshold && ratio < config.Threshold;
+        var preThreshold = GetPreCompressionTriggerTokens(config);
+        var fullThreshold = GetCompressionTriggerTokens(config);
+        return inputTokens >= preThreshold && inputTokens < fullThreshold;
     }
 
     /// <summary>
@@ -53,10 +108,10 @@ public static class ContextCompression
     /// </summary>
     public static List<UnifiedMessage> PreCompressMessages(List<UnifiedMessage> messages)
     {
-        if (messages.Count <= 6) return messages;
+        if (messages.Count <= ToolResultKeepRecent) return messages;
 
         var result = new List<UnifiedMessage>(messages.Count);
-        var preserveFrom = messages.Count - 6;
+        var preserveFrom = messages.Count - ToolResultKeepRecent;
 
         // When message list grows very large, drop oldest non-system messages
         var dropBefore = 0;
@@ -91,19 +146,19 @@ public static class ContextCompression
 
             foreach (var block in blocks)
             {
-                if (block is ToolResultBlock trb && trb.GetTextContent().Length > 200)
+                if (block is ToolResultBlock trb && trb.GetTextContent().Length > ToolResultClearCharThreshold)
                 {
                     newContent.Add(new ToolResultBlock
                     {
                         ToolUseId = trb.ToolUseId,
-                        Content = "[Tool result compressed]",
+                        Content = ClearedToolResultPlaceholder,
                         IsError = trb.IsError
                     });
                     compressed = true;
                 }
                 else if (block is ThinkingBlock)
                 {
-                    newContent.Add(new TextBlock { Text = "[Thinking compressed]" });
+                    newContent.Add(new TextBlock { Text = ClearedThinkingPlaceholder });
                     compressed = true;
                 }
                 else if (block is ImageBlock)
@@ -123,7 +178,12 @@ public static class ContextCompression
                 {
                     Id = msg.Id,
                     Role = msg.Role,
-                    Content = newContent
+                    Content = newContent,
+                    CreatedAt = msg.CreatedAt,
+                    Usage = msg.Usage,
+                    ProviderResponseId = msg.ProviderResponseId,
+                    Source = msg.Source,
+                    Meta = msg.Meta
                 });
             }
             else
@@ -144,6 +204,7 @@ public static class ContextCompression
         List<UnifiedMessage> messages,
         Providers.ILlmProvider provider,
         ProviderConfig config,
+        int preTokens,
         CancellationToken ct)
     {
         if (messages.Count <= PreserveRecentCount + 2) return messages;
@@ -165,7 +226,7 @@ public static class ContextCompression
                     ? messagesToCompress
                     : TruncateOldestMessages(messagesToCompress, attempt);
 
-                var serialized = SerializeMessages(inputMessages);
+                var serialized = SerializeCompressionInput(inputMessages);
 
                 var summaryRequest = new List<UnifiedMessage>
                 {
@@ -215,29 +276,21 @@ public static class ContextCompression
                 if (string.IsNullOrWhiteSpace(summary))
                     throw new InvalidOperationException("Compression returned empty summary");
 
-                // Reset circuit breaker on success
                 _consecutiveFailures = 0;
 
-                // Build result: system message + boundary + summary + preserved messages
-                var result = new List<UnifiedMessage>();
+                var summaryMessage = CreateCompactSummaryMessage(
+                    summary,
+                    messagesToCompress.Count,
+                    messagesToPreserve.Count > 0);
 
-                var systemMsg = messages.FirstOrDefault(m => m.Role == "system");
-                if (systemMsg is not null) result.Add(systemMsg);
+                var boundaryMessage = CreateCompactBoundaryMessage(
+                    "auto",
+                    preTokens,
+                    messagesToCompress.Count,
+                    summaryMessage.Id,
+                    messagesToPreserve);
 
-                result.Add(new UnifiedMessage
-                {
-                    Role = "user",
-                    Content = new List<ContentBlock>
-                    {
-                        new TextBlock
-                        {
-                            Text = $"[Context Memory Compressed Summary]\n\nThis session continues from a previous conversation. The following summary covers {messagesToCompress.Count} earlier messages. Recent messages are preserved verbatim after this summary.\n\n{summary}"
-                        }
-                    }
-                });
-
-                result.AddRange(messagesToPreserve);
-                return result;
+                return [boundaryMessage, summaryMessage, .. messagesToPreserve];
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -264,7 +317,7 @@ public static class ContextCompression
     {
         var boundary = Math.Max(1, Math.Min(initialBoundary, messages.Count - 1));
 
-        for (var attempts = 0; attempts < 10; attempts++)
+        for (var attempts = 0; attempts < BoundaryScanLimit; attempts++)
         {
             var compressedToolUseIds = new HashSet<string>();
             for (var i = 0; i < boundary; i++)
@@ -351,15 +404,159 @@ public static class ContextCompression
         return result;
     }
 
+    private static string SerializeCompressionInput(List<UnifiedMessage> messages)
+    {
+        var parts = new List<string>();
+        var originalTask = FindOriginalTaskMessage(messages);
+        if (originalTask is not null)
+        {
+            parts.Add("## Original Task");
+            parts.Add(SerializeMessage(originalTask));
+        }
+
+        parts.Add("## Full Conversation History");
+        parts.Add(SerializeMessages(messages));
+        return string.Join("\n\n", parts.Where(part => !string.IsNullOrWhiteSpace(part)));
+    }
+
+    private static UnifiedMessage? FindOriginalTaskMessage(List<UnifiedMessage> messages)
+    {
+        foreach (var message in messages)
+        {
+            if (!string.Equals(message.Role, "user", StringComparison.Ordinal))
+                continue;
+            if (string.Equals(message.Source, "team", StringComparison.Ordinal))
+                continue;
+            if (message.Meta?.CompactSummary is not null)
+                continue;
+
+            if (message.RawContent is { ValueKind: JsonValueKind.String } rawString
+                && !string.IsNullOrWhiteSpace(rawString.GetString()))
+            {
+                return message;
+            }
+
+            var blocks = message.GetBlockContent();
+            if (blocks.Any(block => block is TextBlock or ImageBlock))
+                return message;
+        }
+
+        return null;
+    }
+
     private static string SerializeMessages(List<UnifiedMessage> messages)
     {
-        var sb = new System.Text.StringBuilder();
-        foreach (var msg in messages)
+        var parts = new List<string>();
+        foreach (var message in messages)
         {
-            sb.Append($"[{msg.Role.ToUpperInvariant()}]: ");
-            sb.AppendLine(msg.GetTextContent());
+            var serialized = SerializeMessage(message);
+            if (!string.IsNullOrWhiteSpace(serialized))
+                parts.Add(serialized);
         }
-        return sb.ToString();
+        return string.Join("\n\n", parts);
+    }
+
+    private static string SerializeMessage(UnifiedMessage message)
+    {
+        var role = message.Role.ToUpperInvariant();
+        var content = SerializeMessageContent(message);
+        return string.IsNullOrWhiteSpace(content) ? string.Empty : $"[{role}]: {content}";
+    }
+
+    private static string SerializeMessageContent(UnifiedMessage message)
+    {
+        if (message.RawContent is { ValueKind: JsonValueKind.String } rawString)
+            return rawString.GetString() ?? string.Empty;
+
+        return string.Join("\n", message.GetBlockContent()
+            .Select(SerializeContentBlock)
+            .Where(text => !string.IsNullOrWhiteSpace(text)));
+    }
+
+    private static string SerializeContentBlock(ContentBlock block) => block switch
+    {
+        TextBlock textBlock => textBlock.Text,
+        ThinkingBlock => string.Empty,
+        ToolUseBlock toolUse => $"[Tool call: {toolUse.Name}] {SerializeToolInput(toolUse.Input)}",
+        ToolResultBlock toolResult => $"[Tool result error={toolResult.IsError == true}] {SerializeToolResult(toolResult)}",
+        ImageBlock => "[image]",
+        ImageErrorBlock imageError => $"[Image error: {imageError.Message}]",
+        _ => string.Empty
+    };
+
+    private static string SerializeToolInput(Dictionary<string, JsonElement> input)
+    {
+        var serialized = JsonSerializer.Serialize(input, AppJsonContext.Default.DictionaryStringJsonElement);
+        return serialized.Length > 500 ? serialized[..500] : serialized;
+    }
+
+    private static string SerializeToolResult(ToolResultBlock block)
+    {
+        var text = block.GetTextContent();
+        return text.Length > 800 ? $"{text[..800]}\n... [truncated, {text.Length} chars total]" : text;
+    }
+
+    private static UnifiedMessage CreateCompactBoundaryMessage(
+        string trigger,
+        int preTokens,
+        int messagesSummarized,
+        string summaryMessageId,
+        List<UnifiedMessage> preservedMessages)
+    {
+        return new UnifiedMessage
+        {
+            Role = "system",
+            CreatedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            RawContent = JsonSerializer.SerializeToElement(CompactBoundaryText, AppJsonContext.Default.String),
+            Meta = new MessageMeta
+            {
+                CompactBoundary = new CompactBoundaryMeta
+                {
+                    Trigger = trigger,
+                    PreTokens = preTokens,
+                    MessagesSummarized = messagesSummarized,
+                    PreservedSegment = preservedMessages.Count > 0
+                        ? new CompactBoundarySegment
+                        {
+                            HeadId = preservedMessages[0].Id,
+                            AnchorId = summaryMessageId,
+                            TailId = preservedMessages[^1].Id
+                        }
+                        : null
+                }
+            }
+        };
+    }
+
+    private static UnifiedMessage CreateCompactSummaryMessage(
+        string summary,
+        int messagesSummarized,
+        bool recentMessagesPreserved)
+    {
+        var text =
+            $"[Context Memory Compressed Summary]\n\n" +
+            "This session continues from a previous conversation. " +
+            $"The following summary covers {messagesSummarized} earlier messages.";
+
+        if (recentMessagesPreserved)
+            text += " Recent messages are preserved verbatim after this summary.";
+
+        text += $"\n\n{summary}";
+
+        return new UnifiedMessage
+        {
+            Role = "user",
+            CreatedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            RawContent = JsonSerializer.SerializeToElement(text, AppJsonContext.Default.String),
+            Meta = new MessageMeta
+            {
+                CompactSummary = new CompactSummaryMeta
+                {
+                    MessagesSummarized = messagesSummarized,
+                    RecentMessagesPreserved = recentMessagesPreserved
+                }
+            }
+        };
     }
 
     private const string CompactSystemPrompt = """

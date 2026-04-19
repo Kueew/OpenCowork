@@ -5,6 +5,10 @@ import type {
   UnifiedMessage
 } from '@renderer/lib/api/types'
 import { isEditableUserMessage } from '@renderer/lib/image-attachments'
+import {
+  isCompactBoundaryMessage,
+  isCompactSummaryLikeMessage
+} from '@renderer/lib/agent/context-compression'
 
 export interface RenderableMessageMeta {
   messageId: string
@@ -36,7 +40,7 @@ export function isToolResultOnlyUserMessage(message: UnifiedMessage): boolean {
 }
 
 function isRealUserMessage(message: UnifiedMessage): boolean {
-  return isEditableUserMessage(message)
+  return isEditableUserMessage(message) && !isCompactSummaryLikeMessage(message)
 }
 
 function hasVisibleAssistantBlock(block: ContentBlock): boolean {
@@ -52,6 +56,7 @@ function hasVisibleAssistantBlock(block: ContentBlock): boolean {
 }
 
 function shouldRenderInMessageList(message: UnifiedMessage): boolean {
+  if (message.role === 'system') return isCompactBoundaryMessage(message)
   if (isToolResultOnlyUserMessage(message)) return false
   if (message.role !== 'assistant' || !Array.isArray(message.content)) return true
   return message.content.some(hasVisibleAssistantBlock)
