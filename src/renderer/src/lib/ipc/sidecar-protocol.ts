@@ -1097,6 +1097,9 @@ export function normalizeSidecarAgentEvent(rawEvent: unknown): AgentEvent | null
           method: String(debugInfo.method ?? 'POST'),
           headers,
           ...(typeof debugInfo.body === 'string' ? { body: debugInfo.body } : {}),
+          ...(typeof debugInfo.contextWindowBody === 'string'
+            ? { contextWindowBody: debugInfo.contextWindowBody }
+            : {}),
           timestamp: Number(debugInfo.timestamp ?? Date.now()),
           ...(typeof debugInfo.providerId === 'string' ? { providerId: debugInfo.providerId } : {}),
           ...(typeof debugInfo.providerBuiltinId === 'string'

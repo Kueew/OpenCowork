@@ -578,8 +578,22 @@ function normalizeUsageForPersistence(usage: TokenUsage, contextLength?: number)
   }
 }
 
+function resolveDebugContextWindowPayload(debugInfo?: RequestDebugInfo | null): string | null {
+  if (!debugInfo) return null
+  if (debugInfo.transport === 'websocket' && debugInfo.websocketRequestKind === 'warmup') {
+    return null
+  }
+  if (typeof debugInfo.contextWindowBody === 'string' && debugInfo.contextWindowBody.trim()) {
+    return debugInfo.contextWindowBody
+  }
+  if (typeof debugInfo.body === 'string' && debugInfo.body.trim()) {
+    return debugInfo.body
+  }
+  return null
+}
+
 function shouldUseEstimatedContextTokens(debugInfo?: RequestDebugInfo | null): boolean {
-  return debugInfo?.transport === 'websocket' && debugInfo.websocketRequestKind === 'incremental'
+  return debugInfo?.transport === 'websocket' && !!resolveDebugContextWindowPayload(debugInfo)
 }
 
 function serializeContextEstimatePayload(value: unknown): string {
@@ -632,6 +646,18 @@ function estimateCurrentIterationContextTokens(args: {
     tools: args.tools,
     providerConfig: args.providerConfig
   })
+}
+
+function estimateContextTokensFromDebugInfo(debugInfo?: RequestDebugInfo | null): number {
+  const payload = resolveDebugContextWindowPayload(debugInfo)
+  if (!payload) return 0
+
+  try {
+    return estimateTokens(payload)
+  } catch (error) {
+    console.warn('[ChatActions] Failed to estimate debug context tokens', error)
+    return 0
+  }
 }
 
 function normalizeUsageWithEstimatedContext(args: {
@@ -3493,20 +3519,34 @@ export function useChatActions(): {
                   addRuntimeMessage(sessionId!, toolResultMsg)
                 }
                 if (hasPendingSessionMessages(sessionId!)) {
-                  console.log(
-                    `[ChatActions] Queued message detected at iteration_end, allowing current run to finish before processing queued input for session ${sessionId}`
-                  )
+                  if (isPendingSessionDispatchPaused(sessionId!)) {
+                    console.log(
+                      `[ChatActions] Queued message detected at iteration_end, but dispatch is paused for session ${sessionId}`
+                    )
+                  } else {
+                    console.log(
+                      `[ChatActions] Queued message detected at iteration_end, interrupting current run at the turn boundary for session ${sessionId}`
+                    )
+                    queueMicrotask(() => {
+                      const activeAbortController = sessionAbortControllers.get(sessionId!)
+                      if (activeAbortController && !activeAbortController.signal.aborted) {
+                        activeAbortController.abort()
+                      }
+                      void cancelSidecarRun(sessionId!)
+                    })
+                  }
                 }
                 break
 
-              case 'message_end':
+              case 'message_end': {
                 streamDeltaBuffer.flushNow()
                 if (!thinkingDone) {
                   thinkingDone = true
                   completeRuntimeThinking(sessionId!, assistantMsgId)
                 }
                 const estimatedContextTokens = shouldUseEstimatedContextTokens(lastRequestDebugInfo)
-                  ? estimateCurrentIterationContextTokens({
+                  ? estimateContextTokensFromDebugInfo(lastRequestDebugInfo) ||
+                    estimateCurrentIterationContextTokens({
                       sessionId: sessionId!,
                       assistantMessageId: assistantMsgId,
                       tools: effectiveToolDefs,
@@ -3568,6 +3608,7 @@ export function useChatActions(): {
                   })
                 }
                 break
+              }
 
               case 'loop_end': {
                 streamDeltaBuffer.flushNow()
@@ -3605,12 +3646,13 @@ export function useChatActions(): {
                   setLastDebugInfo(assistantMsgId, event.debugInfo)
                   if (shouldUseEstimatedContextTokens(lastRequestDebugInfo)) {
                     const provisionalUsage = buildStreamingContextUsage(
-                      estimateCurrentIterationContextTokens({
-                        sessionId: sessionId!,
-                        assistantMessageId: assistantMsgId,
-                        tools: effectiveToolDefs,
-                        providerConfig: agentProviderConfig
-                      }),
+                      estimateContextTokensFromDebugInfo(lastRequestDebugInfo) ||
+                        estimateCurrentIterationContextTokens({
+                          sessionId: sessionId!,
+                          assistantMessageId: assistantMsgId,
+                          tools: effectiveToolDefs,
+                          providerConfig: agentProviderConfig
+                        }),
                       compressionContextLength
                     )
                     if (provisionalUsage) {
@@ -4716,7 +4758,8 @@ async function runSimpleChat(
                 : undefined,
               debugInfo: lastRequestDebugInfo,
               estimatedContextTokens: shouldUseEstimatedContextTokens(lastRequestDebugInfo)
-                ? estimateContextTokensForRequest({
+                ? estimateContextTokensFromDebugInfo(lastRequestDebugInfo) ||
+                  estimateContextTokensForRequest({
                     messages: requestMessages,
                     tools: [],
                     providerConfig: config
@@ -4754,11 +4797,12 @@ async function runSimpleChat(
             })
             if (shouldUseEstimatedContextTokens(lastRequestDebugInfo)) {
               const provisionalUsage = buildStreamingContextUsage(
-                estimateContextTokensForRequest({
-                  messages: requestMessages,
-                  tools: [],
-                  providerConfig: config
-                }),
+                estimateContextTokensFromDebugInfo(lastRequestDebugInfo) ||
+                  estimateContextTokensForRequest({
+                    messages: requestMessages,
+                    tools: [],
+                    providerConfig: config
+                  }),
                 chatModelConfig?.contextLength
                   ? resolveCompressionContextLength(chatModelConfig)
                   : undefined

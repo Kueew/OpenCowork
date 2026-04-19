@@ -131,11 +131,10 @@ export class ResponsesWebSocketSessionManager {
     let fallbackReason = args.fallbackReason
     while (true) {
       const result = args.sessionKey
-        ? await this.runQueuedSessionRequest(
-            this.getOrCreateSession(args.sessionKey),
-            args,
-            { forceFresh, fallbackReason }
-          )
+        ? await this.runQueuedSessionRequest(this.getOrCreateSession(args.sessionKey), args, {
+            forceFresh,
+            fallbackReason
+          })
         : await this.runOneShotRequest(args, { forceFresh, fallbackReason })
 
       if (
@@ -343,17 +342,16 @@ export class ResponsesWebSocketSessionManager {
     args: ExecuteResponsesWsRequestArgs,
     headers: Record<string, string>,
     options: ResponsesWsAttemptOptions & { reusable: boolean }
-  ):
-    Promise<
-      | {
-          kind: 'ok'
-          connection: ResponsesWsConnection
-          reusedConnection: boolean
-          warmupNeeded: boolean
-        }
-      | { kind: 'fallback'; reason: string }
-      | { kind: 'fatal'; error: string }
-    > {
+  ): Promise<
+    | {
+        kind: 'ok'
+        connection: ResponsesWsConnection
+        reusedConnection: boolean
+        warmupNeeded: boolean
+      }
+    | { kind: 'fallback'; reason: string }
+    | { kind: 'fatal'; error: string }
+  > {
     if (!options.reusable) {
       try {
         const connection = await this.createConnection(args.websocketUrl, headers, args)
@@ -395,7 +393,11 @@ export class ResponsesWebSocketSessionManager {
           phase: 'close',
           key: session.key,
           websocketUrl: args.websocketUrl,
-          reason: connectionExpired ? 'connection_expired' : options.forceFresh ? 'force_fresh' : 'connection_reset'
+          reason: connectionExpired
+            ? 'connection_expired'
+            : options.forceFresh
+              ? 'force_fresh'
+              : 'connection_reset'
         })
         this.closeConnection(existing)
       }
@@ -865,9 +867,7 @@ export class ResponsesWebSocketSessionManager {
       perMessageDeflate: false,
       handshakeTimeout: 15_000,
       ...(args.allowInsecureTls === true ? { rejectUnauthorized: false } : {}),
-      ...(proxyUrl
-        ? { agent: this.getProxyAgent(proxyUrl, args.allowInsecureTls ?? true) }
-        : {})
+      ...(proxyUrl ? { agent: this.getProxyAgent(proxyUrl, args.allowInsecureTls ?? true) } : {})
     })
 
     const connection: ResponsesWsConnection = {
@@ -971,10 +971,7 @@ export class ResponsesWebSocketSessionManager {
     console.info(segments.join(' '))
   }
 
-  private getProxyAgent(
-    proxyUrl: string,
-    allowInsecureTls: boolean
-  ): HttpsProxyAgent<string> {
+  private getProxyAgent(proxyUrl: string, allowInsecureTls: boolean): HttpsProxyAgent<string> {
     const cache = allowInsecureTls ? this.insecureProxyAgents : this.secureProxyAgents
     const existing = cache.get(proxyUrl)
     if (existing) return existing
@@ -1031,11 +1028,7 @@ async function waitForAbortable(waitFor: Promise<void>, signal?: AbortSignal): P
   await Promise.race([
     waitFor,
     new Promise<never>((_, reject) => {
-      signal.addEventListener(
-        'abort',
-        () => reject(new Error('Request aborted')),
-        { once: true }
-      )
+      signal.addEventListener('abort', () => reject(new Error('Request aborted')), { once: true })
     })
   ])
 }
