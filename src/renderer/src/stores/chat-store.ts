@@ -2800,5 +2800,3 @@ _scheduleStreamDeltaFlush = () => {
   if (_streamDeltaRafId !== null) return
   _streamDeltaRafId = requestAnimationFrame(flushStreamDeltas)
 }
-rame(flushStreamDeltas)
-}
