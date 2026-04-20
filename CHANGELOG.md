@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.5] - 2026-04-20
+
+### Added
+
+- Added session isolation improvements to keep conversation-scoped tool sessions separated across windows.
+- Added default project/workspace recovery behavior for unbound sessions when an existing project is available.
+
+### Changed
+
+- Updated chat session and sidebar flows to better align with multi-window interactions.
+- Refined websocket and streaming handling to improve turn consistency and context delivery.
+- Continued improving context compression, message metadata, and related data-flow paths.
+- Improved SSH remote search handling and error resilience.
+- Kept analytics overview loading lazy for better settings performance.
+- Updated README and documentation with clearer usage guidance.
+
+### Fixed
+
+- Fixed stream delta flushing behavior to avoid redundant animation-frame scheduling.
+- Fixed queued websocket runs to honor turn boundaries more reliably.
+- Fixed remote search to skip ignored directories consistently.
+
 ## [0.9.4] - 2026-04-20
 
 ### Added
