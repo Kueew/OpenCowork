@@ -102,6 +102,79 @@ const EMPTY_ORCHESTRATION_STATE = { runs: [], byId: new Map(), byMessageId: new 
 const MESSAGE_COLUMN_CLASS = 'mx-auto w-full max-w-[820px] px-5'
 const MESSAGE_COLUMN_COMPACT_CLASS = 'mx-auto w-full max-w-[720px] px-5'
 
+function areToolResultsEqual(a?: ToolResultsLookup, b?: ToolResultsLookup): boolean {
+  if (a === b) return true
+  if (!a || !b) return !a && !b
+  if (a.size !== b.size) return false
+
+  for (const [id, value] of a) {
+    const other = b.get(id)
+    if (!other) return false
+    if (other.isError !== value.isError) return false
+    if (other.content !== value.content) return false
+  }
+
+  return true
+}
+
+function areStringSetsEqual(a?: Set<string>, b?: Set<string>): boolean {
+  if (a === b) return true
+  if (!a || !b) return !a && !b
+  if (a.size !== b.size) return false
+
+  for (const value of a) {
+    if (!b.has(value)) return false
+  }
+
+  return true
+}
+
+function getOrchestrationRunSignature(
+  run?: import('@renderer/lib/orchestration/types').OrchestrationRun | null
+): string {
+  if (!run) return ''
+
+  const memberSig = run.members
+    .map(
+      (member) =>
+        `${member.id}:${member.status}:${member.iteration}:${member.progress}:${member.toolCallCount}:${member.completedAt ?? ''}:${member.latestAction}:${member.summary}`
+    )
+    .join('|')
+
+  return [
+    run.id,
+    run.status,
+    run.stageIndex,
+    run.stageCount,
+    run.selectedMemberId ?? '',
+    run.completedAt ?? '',
+    run.summary,
+    run.latestAction,
+    memberSig
+  ].join('::')
+}
+
+function areMessageRowPropsEqual(prev: MessageRowProps, next: MessageRowProps): boolean {
+  return (
+    prev.rowIndex === next.rowIndex &&
+    prev.message === next.message &&
+    prev.isStreaming === next.isStreaming &&
+    prev.isLastUserMessage === next.isLastUserMessage &&
+    prev.isLastAssistantMessage === next.isLastAssistantMessage &&
+    prev.showContinue === next.showContinue &&
+    prev.disableAnimation === next.disableAnimation &&
+    areToolResultsEqual(prev.toolResults, next.toolResults) &&
+    getOrchestrationRunSignature(prev.orchestrationRun) ===
+      getOrchestrationRunSignature(next.orchestrationRun) &&
+    areStringSetsEqual(prev.hiddenToolUseIds, next.hiddenToolUseIds) &&
+    prev.anchorMessageId === next.anchorMessageId &&
+    prev.onRetry === next.onRetry &&
+    prev.onContinue === next.onContinue &&
+    prev.onEditUserMessage === next.onEditUserMessage &&
+    prev.onDeleteMessage === next.onDeleteMessage
+  )
+}
+
 function getDistanceToBottom(ref: HTMLDivElement): number {
   return Math.max(0, ref.scrollHeight - ref.scrollTop - ref.clientHeight)
 }
@@ -176,7 +249,7 @@ const MessageRow = React.memo(function MessageRow({
       />
     </div>
   )
-})
+}, areMessageRowPropsEqual)
 
 export function MessageList(props: MessageListProps): React.JSX.Element {
   const {
@@ -196,7 +269,7 @@ export function MessageList(props: MessageListProps): React.JSX.Element {
     return idx === undefined ? undefined : s.sessions[idx]
   })
   const messages = targetSession?.messages ?? EMPTY_MESSAGES
-  const activeSessionLoaded = targetSession?.messagesLoaded ?? true
+  const activeSessionLoaded = targetSession?.messagesLoaded ?? false
   const activeSessionMessageCount = targetSession?.messageCount ?? 0
   const activeWorkingFolder = targetSession?.workingFolder
   const activeProjectName = useChatStore((s) => {

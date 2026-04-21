@@ -194,6 +194,18 @@ function areToolResultsEqual(
   return true
 }
 
+function areStringSetsEqual(a?: Set<string>, b?: Set<string>): boolean {
+  if (a === b) return true
+  if (!a || !b) return !a && !b
+  if (a.size !== b.size) return false
+
+  for (const value of a) {
+    if (!b.has(value)) return false
+  }
+
+  return true
+}
+
 function areEqual(prev: MessageItemProps, next: MessageItemProps): boolean {
   // Fast path: same object reference => nothing to compare.
   if (prev.message === next.message) {
@@ -212,7 +224,7 @@ function areEqual(prev: MessageItemProps, next: MessageItemProps): boolean {
       prev.liveToolCallMap === next.liveToolCallMap &&
       prev.renderMode === next.renderMode &&
       prev.orchestrationRun === next.orchestrationRun &&
-      prev.hiddenToolUseIds === next.hiddenToolUseIds
+      areStringSetsEqual(prev.hiddenToolUseIds, next.hiddenToolUseIds)
     )
   }
 
@@ -255,7 +267,7 @@ function areEqual(prev: MessageItemProps, next: MessageItemProps): boolean {
     prev.liveToolCallMap === next.liveToolCallMap &&
     prev.renderMode === next.renderMode &&
     prev.orchestrationRun === next.orchestrationRun &&
-    prev.hiddenToolUseIds === next.hiddenToolUseIds
+    areStringSetsEqual(prev.hiddenToolUseIds, next.hiddenToolUseIds)
   )
 }
 

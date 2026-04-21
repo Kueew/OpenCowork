@@ -1,3 +1,4 @@
+import * as React from 'react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronRight, ChevronDown, Loader2 } from 'lucide-react'
@@ -92,6 +93,11 @@ export function ToolCallGroup({
   const isActive = status === 'running' || status === 'streaming' || status === 'pending_approval'
 
   const [expanded, setExpanded] = useState(isActive)
+  React.useEffect(() => {
+    if (isActive) {
+      setExpanded(true)
+    }
+  }, [isActive])
 
   const summaryLabel = groupSummaryLabel(toolName, items, t)
 

@@ -348,7 +348,8 @@ export function WidgetOutputBlock({
 
   if (!payload) return null
 
-  const isPending = status === 'streaming' || status === 'running' || !loaded
+  const isExecuting = status === 'streaming' || status === 'running'
+  const isPending = isExecuting && !loaded
   const loadingMessage = payload.loadingMessages[loadingIndex] ?? DEFAULT_WIDGET_LOADING_MESSAGES[0]
 
   return (
