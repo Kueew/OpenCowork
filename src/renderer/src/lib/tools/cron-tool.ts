@@ -1,6 +1,8 @@
 import { toolRegistry } from '../agent/tool-registry'
 import { IPC } from '../ipc/channels'
 import { useCronStore } from '../../stores/cron-store'
+import { useChatStore } from '../../stores/chat-store'
+import { useProviderStore } from '../../stores/provider-store'
 import { useUIStore } from '../../stores/ui-store'
 import { encodeStructuredToolResult } from './tool-result-format'
 import type { ToolHandler } from './tool-types'
@@ -181,6 +183,19 @@ const cronAddHandler: ToolHandler = {
     const pluginId = input.pluginId ? String(input.pluginId) : ctx.pluginId
     const pluginChatId = input.pluginChatId ? String(input.pluginChatId) : ctx.pluginChatId
 
+    // Resolve provider context so the main-process CronAgent can find the right provider
+    const session = ctx.sessionId
+      ? useChatStore.getState().sessions.find((s) => s.id === ctx.sessionId)
+      : null
+    const project = session?.projectId
+      ? useChatStore.getState().projects.find((p) => p.id === session.projectId)
+      : null
+    const sourceProviderId =
+      session?.providerId ?? useProviderStore.getState().activeProviderId ?? null
+    const sourceSessionTitle = session?.title ?? null
+    const sourceProjectId = project?.id ?? session?.projectId ?? null
+    const sourceProjectName = project?.name ?? null
+
     const result = (await ctx.ipc.invoke(IPC.CRON_ADD, {
       name,
       sessionId: ctx.sessionId ?? null,
@@ -195,7 +210,11 @@ const cronAddHandler: ToolHandler = {
       maxIterations: input.maxIterations,
       // Allow explicit overrides, falling back to current plugin context when available
       pluginId: pluginId ?? undefined,
-      pluginChatId: pluginChatId ?? undefined
+      pluginChatId: pluginChatId ?? undefined,
+      sourceProviderId: sourceProviderId ?? undefined,
+      sourceSessionTitle: sourceSessionTitle ?? undefined,
+      sourceProjectId: sourceProjectId ?? undefined,
+      sourceProjectName: sourceProjectName ?? undefined
     })) as { error?: string; jobId?: string; success?: boolean }
 
     if (result.error) return encodeStructuredToolResult({ error: result.error })
@@ -302,7 +321,7 @@ const cronRemoveHandler: ToolHandler = {
     const jobId = String(input.jobId ?? '')
     if (!jobId) return encodeStructuredToolResult({ error: 'jobId is required' })
 
-    const result = (await ctx.ipc.invoke(IPC.CRON_REMOVE, { jobId })) as {
+    const result = (await ctx.ipc.invoke(IPC.CRON_DELETE, { jobId })) as {
       error?: string
       success?: boolean
     }

@@ -88,6 +88,7 @@ interface CronStore {
   loadRuns: (jobId?: string) => Promise<void>
   addJob: (job: CronJobEntry) => void
   removeJob: (id: string) => void
+  deleteJob: (id: string) => Promise<{ success: boolean; error?: string }>
   updateJob: (id: string, patch: Partial<CronJobEntry>) => void
   upsertJob: (job: CronJobEntry) => void
   recordRun: (run: CronRunEntry) => void
@@ -138,6 +139,21 @@ export const useCronStore = create<CronStore>((set) => ({
   addJob: (job) => set((s) => ({ jobs: [job, ...s.jobs] })),
 
   removeJob: (id) => set((s) => ({ jobs: s.jobs.filter((j) => j.id !== id) })),
+
+  deleteJob: async (id) => {
+    try {
+      const result = (await ipcClient.invoke(IPC.CRON_DELETE, { jobId: id })) as {
+        error?: string
+        success?: boolean
+      }
+      if (result.error) return { success: false, error: result.error }
+      set((s) => ({ jobs: s.jobs.filter((j) => j.id !== id) }))
+      return { success: true }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return { success: false, error: msg }
+    }
+  },
 
   upsertJob: (job) =>
     set((s) => {

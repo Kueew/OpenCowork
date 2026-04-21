@@ -661,6 +661,30 @@ function getResidentSessionIds(
     residentSessionIds.add(sessionId)
   }
 
+  // Any session that is currently executing (agent loop, sub-agents, background
+  // processes, or team runtime) must stay resident. Otherwise a brief window
+  // between execution phases (when streamingMessages is temporarily empty) can
+  // cause its messages to be wiped and force MessageList into its skeleton
+  // branch, producing a visible flash.
+  const agentState = useAgentStore.getState()
+  for (const [sessionId, status] of Object.entries(agentState.runningSessions)) {
+    if (status) residentSessionIds.add(sessionId)
+  }
+  if (agentState.runningSubAgentSessionIdsSig) {
+    for (const sessionId of agentState.runningSubAgentSessionIdsSig.split('\u0000')) {
+      if (sessionId) residentSessionIds.add(sessionId)
+    }
+  }
+  for (const process of Object.values(agentState.backgroundProcesses)) {
+    if (process.sessionId && process.status === 'running') {
+      residentSessionIds.add(process.sessionId)
+    }
+  }
+  const activeTeamSessionId = useTeamStore.getState().activeTeam?.sessionId
+  if (activeTeamSessionId) {
+    residentSessionIds.add(activeTeamSessionId)
+  }
+
   return residentSessionIds
 }
 

@@ -133,12 +133,11 @@ function sendToRenderer(channel: string, data: unknown): void {
 // ── Job fired handler ────────────────────────────────────────────
 
 function onJobFired(job: CronJobRecord): void {
-  // Concurrency guard — prevent firing if this job is already running
-  if (activeRunJobIds.has(job.id)) {
-    console.warn(`[CronScheduler] Job ${job.id} is already running, skipping fire`)
+  // Concurrency guard — prevent firing if this job is already running or limit reached
+  if (!markRunning(job.id)) {
+    console.warn(`[CronScheduler] Job ${job.id} skipped (already running or concurrency limit)`)
     return
   }
-  activeRunJobIds.add(job.id)
 
   try {
     const db = getDb()

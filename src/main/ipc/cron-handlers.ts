@@ -513,6 +513,23 @@ export function registerCronHandlers(): void {
     }
   })
 
+  ipcMain.handle('cron:delete', async (_event, args: { jobId: string }) => {
+    if (!args.jobId) return { error: 'jobId is required' }
+
+    try {
+      const db = getDb()
+      const row = db.prepare('SELECT id FROM cron_jobs WHERE id = ?').get(args.jobId)
+      if (!row) return { error: `Job "${args.jobId}" not found` }
+
+      cancelJob(args.jobId)
+      // Hard delete — cascading FK constraints remove related cron_runs, cron_run_messages, cron_run_logs
+      db.prepare('DELETE FROM cron_jobs WHERE id = ?').run(args.jobId)
+      return { success: true, jobId: args.jobId }
+    } catch (err) {
+      return { error: `DB error: ${err instanceof Error ? err.message : String(err)}` }
+    }
+  })
+
   ipcMain.handle(
     'cron:list',
     async (_event, args?: { sessionId?: string | null; includeDeleted?: boolean }) => {

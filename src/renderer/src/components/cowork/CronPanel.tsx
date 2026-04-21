@@ -198,6 +198,7 @@ function CronJobCard({
 }): React.JSX.Element {
   const [expanded, setExpanded] = React.useState(false)
   const [runNowLoading, setRunNowLoading] = React.useState(false)
+  const [confirmDelete, setConfirmDelete] = React.useState(false)
   const hasAgentLogs = useCronStore((s) => (s.agentLogs[job.id]?.length ?? 0) > 0)
   const jobRuns = runs.filter((r) => r.jobId === job.id).slice(0, 5)
 
@@ -401,9 +402,22 @@ function CronJobCard({
           <Button
             variant="ghost"
             size="icon"
-            className="size-6 text-muted-foreground hover:text-destructive"
-            title="删除任务"
-            onClick={() => onRemove(job.id)}
+            className={cn(
+              'size-6',
+              confirmDelete
+                ? 'text-destructive animate-pulse'
+                : 'text-muted-foreground hover:text-destructive'
+            )}
+            title={confirmDelete ? '再次点击确认删除' : '删除任务'}
+            onClick={() => {
+              if (confirmDelete) {
+                onRemove(job.id)
+                setConfirmDelete(false)
+              } else {
+                setConfirmDelete(true)
+                setTimeout(() => setConfirmDelete(false), 3000)
+              }
+            }}
           >
             <Trash2 className="size-3" />
           </Button>
@@ -1083,7 +1097,7 @@ export function CronPanel(): React.JSX.Element {
   const runs = useCronStore((s) => s.runs)
   const loadJobs = useCronStore((s) => s.loadJobs)
   const loadRuns = useCronStore((s) => s.loadRuns)
-  const removeJob = useCronStore((s) => s.removeJob)
+  const deleteJob = useCronStore((s) => s.deleteJob)
   const updateJob = useCronStore((s) => s.updateJob)
   const [refreshing, setRefreshing] = React.useState(false)
   const [view, setView] = React.useState<CronView>('tasks')
@@ -1120,12 +1134,11 @@ export function CronPanel(): React.JSX.Element {
   }
 
   const handleRemove = async (id: string): Promise<void> => {
-    const result = (await ipcClient.invoke(IPC.CRON_REMOVE, { jobId: id })) as { error?: string }
+    const result = await deleteJob(id)
     if (result.error) {
       toast.error('删除失败', { description: result.error })
       return
     }
-    removeJob(id)
     toast.success('定时任务已删除')
   }
 

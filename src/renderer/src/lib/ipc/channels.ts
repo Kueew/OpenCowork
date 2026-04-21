@@ -152,6 +152,7 @@ export const IPC = {
   CRON_ADD: 'cron:add',
   CRON_UPDATE: 'cron:update',
   CRON_REMOVE: 'cron:remove',
+  CRON_DELETE: 'cron:delete',
   CRON_LIST: 'cron:list',
   CRON_TOGGLE: 'cron:toggle',
   CRON_RUN_NOW: 'cron:run-now',

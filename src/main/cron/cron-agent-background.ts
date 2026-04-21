@@ -652,13 +652,27 @@ function resolveCronProviderConfig(
 ): ProviderConfig | null {
   const settings = getPersistedSettingsState()
   const state = getPersistedProvidersState()
-  if (providerId && modelOverride) {
-    const direct = buildProviderConfigById(state, settings, providerId, modelOverride)
-    if (direct && (direct.apiKey || direct.requiresApiKey === false)) {
-      return direct
+
+  // 1. Try the explicit provider (with model override or its default model)
+  if (providerId) {
+    const provider = state.providers.find((item) => item.id === providerId)
+    if (provider) {
+      const modelId = modelOverride || resolveProviderDefaultModelId(provider)
+      if (modelId) {
+        const direct = buildProviderConfigById(state, settings, providerId, modelId)
+        if (direct && (direct.apiKey || direct.requiresApiKey === false)) {
+          return direct
+        }
+      }
+      console.warn(
+        `[CronAgent] Provider ${providerId} found but no usable model/key (model=${modelOverride})`
+      )
+    } else {
+      console.warn(`[CronAgent] Provider ${providerId} not found in persisted state`)
     }
   }
 
+  // 2. Try the fast provider (or active provider)
   const fast = getFastProviderConfig(state, settings)
   if (fast && (fast.apiKey || fast.requiresApiKey === false)) {
     const model = modelOverride || fast.model
@@ -670,6 +684,7 @@ function resolveCronProviderConfig(
     }
   }
 
+  // 3. Legacy fallback from settings.json
   const fallbackType = normalizeProviderType(
     (settings.provider as ProviderType | undefined) ?? 'anthropic'
   )
@@ -677,6 +692,11 @@ function resolveCronProviderConfig(
     (modelOverride as string | undefined) ?? (settings.model as string | undefined) ?? ''
   const fallbackApiKey = String(settings.apiKey ?? '')
   if (!fallbackApiKey && fallbackType !== 'openai-chat') {
+    console.warn(
+      `[CronAgent] No provider resolved: providerId=${providerId ?? 'null'}, ` +
+        `fastProvider=${state.activeFastProviderId ?? state.activeProviderId ?? 'null'}, ` +
+        `providerCount=${state.providers.length}, fallbackKey=${fallbackApiKey ? 'set' : 'empty'}`
+    )
     return null
   }
   return {
