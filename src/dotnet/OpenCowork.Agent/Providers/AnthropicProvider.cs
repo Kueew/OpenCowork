@@ -110,194 +110,208 @@ public sealed class AnthropicProvider : ILlmProvider
         var toolCalls = new Dictionary<int, (string Id, string Name)>();
         var emittedThinkingEncrypted = new HashSet<string>(StringComparer.Ordinal);
 
-        try
-        {
-            await foreach (var payload in SseStreamReader.ReadAsync<AnthropicSsePayload>(
-                stream,
-                static (eventType, data) =>
-                {
-                    if (data.IsEmpty || SseStreamReader.IsDoneSentinel(data))
-                        return null;
-
-                    return JsonSerializer.Deserialize(data,
-                        AppJsonContext.Default.AnthropicSsePayload);
-                },
-                ct))
+        HttpRequestException? transportReadError = null;
+        await using var payloadStream = SseStreamReader.ReadAsync<AnthropicSsePayload>(
+            stream,
+            static (eventType, data) =>
             {
-                switch (payload.Type)
+                if (data.IsEmpty || SseStreamReader.IsDoneSentinel(data))
+                    return null;
+
+                return JsonSerializer.Deserialize(data,
+                    AppJsonContext.Default.AnthropicSsePayload);
+            },
+            ct).GetAsyncEnumerator(ct);
+
+        while (true)
+        {
+            AnthropicSsePayload payload;
+            try
+            {
+                if (!await payloadStream.MoveNextAsync())
+                    break;
+
+                payload = payloadStream.Current;
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested && SseStreamReader.IsRetryableTransportFailure(ex))
+            {
+                transportReadError = SseStreamReader.RememberRetryableTransportFailure(circuitKey, ex);
+                break;
+            }
+
+            switch (payload.Type)
+            {
+                case "message_start":
+                    var msgUsage = payload.Message?.Usage;
+                    if (msgUsage is not null)
+                    {
+                        pendingUsage.InputTokens = msgUsage.InputTokens ?? 0;
+                        pendingUsage.ContextTokens = pendingUsage.InputTokens;
+
+                        if (msgUsage.CacheCreation?.Ephemeral5mInputTokens is { } cacheCreation5mTokens
+                            || msgUsage.CacheCreation?.Ephemeral1hInputTokens is { } cacheCreation1hTokens)
+                        {
+                            var totalCacheCreationTokens = (msgUsage.CacheCreation?.Ephemeral5mInputTokens ?? 0)
+                                + (msgUsage.CacheCreation?.Ephemeral1hInputTokens ?? 0);
+                            pendingUsage.CacheCreationTokens = totalCacheCreationTokens > 0 ? totalCacheCreationTokens : null;
+                        }
+                        else if (msgUsage.CacheCreationInputTokens.HasValue)
+                        {
+                            pendingUsage.CacheCreationTokens = msgUsage.CacheCreationInputTokens;
+                        }
+
+                        if (msgUsage.CacheReadInputTokens.HasValue)
+                            pendingUsage.CacheReadTokens = msgUsage.CacheReadInputTokens;
+
+                        var billableInputTokens = pendingUsage.InputTokens - (pendingUsage.CacheReadTokens ?? 0);
+                        pendingUsage.BillableInputTokens = billableInputTokens >= 0 ? billableInputTokens : 0;
+                    }
+                    break;
+
+                case "content_block_start":
                 {
-                    case "message_start":
-                        var msgUsage = payload.Message?.Usage;
-                        if (msgUsage is not null)
-                        {
-                            pendingUsage.InputTokens = msgUsage.InputTokens ?? 0;
-                            pendingUsage.ContextTokens = pendingUsage.InputTokens;
-
-                            if (msgUsage.CacheCreation?.Ephemeral5mInputTokens is { } cacheCreation5mTokens
-                                || msgUsage.CacheCreation?.Ephemeral1hInputTokens is { } cacheCreation1hTokens)
-                            {
-                                var totalCacheCreationTokens = (msgUsage.CacheCreation?.Ephemeral5mInputTokens ?? 0)
-                                    + (msgUsage.CacheCreation?.Ephemeral1hInputTokens ?? 0);
-                                pendingUsage.CacheCreationTokens = totalCacheCreationTokens > 0 ? totalCacheCreationTokens : null;
-                            }
-                            else if (msgUsage.CacheCreationInputTokens.HasValue)
-                            {
-                                pendingUsage.CacheCreationTokens = msgUsage.CacheCreationInputTokens;
-                            }
-
-                            if (msgUsage.CacheReadInputTokens.HasValue)
-                                pendingUsage.CacheReadTokens = msgUsage.CacheReadInputTokens;
-
-                            var billableInputTokens = pendingUsage.InputTokens - (pendingUsage.CacheReadTokens ?? 0);
-                            pendingUsage.BillableInputTokens = billableInputTokens >= 0 ? billableInputTokens : 0;
-                        }
-                        break;
-
-                    case "content_block_start":
+                    var idx = payload.Index ?? -1;
+                    var block = payload.ContentBlock;
+                    if (block?.Type == "tool_use" && idx >= 0)
                     {
-                        var idx = payload.Index ?? -1;
-                        var block = payload.ContentBlock;
-                        if (block?.Type == "tool_use" && idx >= 0)
-                        {
-                            toolBuffers[idx] = new StringBuilder();
-                            toolCalls[idx] = (block.Id ?? "", block.Name ?? "");
-                            yield return new StreamEvent
-                            {
-                                Type = "tool_call_start",
-                                ToolCallId = block.Id,
-                                ToolName = block.Name
-                            };
-                        }
-                        else if (block?.Type == "thinking")
-                        {
-                            var sig = (block.Signature ?? block.EncryptedContent)?.Trim();
-                            if (!string.IsNullOrWhiteSpace(sig) && emittedThinkingEncrypted.Add(sig))
-                            {
-                                yield return new StreamEvent
-                                {
-                                    Type = "thinking_encrypted",
-                                    ThinkingEncryptedContent = sig,
-                                    ThinkingEncryptedProvider = "anthropic"
-                                };
-                            }
-                        }
-                        break;
-                    }
-
-                    case "content_block_delta":
-                    {
-                        firstTokenAt ??= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                        var idx = payload.Index ?? -1;
-                        var delta = payload.Delta;
-
-                        if (delta?.Type == "text_delta")
-                        {
-                            yield return new StreamEvent { Type = "text_delta", Text = delta.Text };
-                        }
-                        else if (delta?.Type == "thinking_delta")
-                        {
-                            yield return new StreamEvent { Type = "thinking_delta", Thinking = delta.Thinking };
-                        }
-                        else if (delta?.Type == "signature_delta")
-                        {
-                            var sig = (delta.Signature ?? delta.EncryptedContent)?.Trim();
-                            if (!string.IsNullOrWhiteSpace(sig) && emittedThinkingEncrypted.Add(sig))
-                            {
-                                yield return new StreamEvent
-                                {
-                                    Type = "thinking_encrypted",
-                                    ThinkingEncryptedContent = sig,
-                                    ThinkingEncryptedProvider = "anthropic"
-                                };
-                            }
-                        }
-                        else if (delta?.Type == "input_json_delta" && idx >= 0)
-                        {
-                            if (toolBuffers.TryGetValue(idx, out var buf))
-                            {
-                                buf.Append(delta.PartialJson);
-
-                                var tc = toolCalls.GetValueOrDefault(idx);
-                                yield return new StreamEvent
-                                {
-                                    Type = "tool_call_delta",
-                                    ToolCallId = tc.Id,
-                                    ArgumentsDelta = delta.PartialJson
-                                };
-                            }
-                        }
-                        break;
-                    }
-
-                    case "content_block_stop":
-                    {
-                        var idx = payload.Index ?? -1;
-                        if (toolCalls.TryGetValue(idx, out var tc))
-                        {
-                            var raw = toolBuffers.GetValueOrDefault(idx)?.ToString()?.Trim() ?? "";
-                            var input = ProviderMessageFormatter.ParseToolInputObject(raw);
-
-                            yield return new StreamEvent
-                            {
-                                Type = "tool_call_end",
-                                ToolCallId = tc.Id,
-                                ToolName = tc.Name,
-                                ToolCallInput = input
-                            };
-
-                            toolBuffers.Remove(idx);
-                            toolCalls.Remove(idx);
-                        }
-                        break;
-                    }
-
-                    case "message_delta":
-                    {
-                        var completedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                        if (payload.Usage?.OutputTokens is { } outTok)
-                        {
-                            pendingUsage.OutputTokens = outTok;
-                            outputTokens = outTok;
-                        }
-
+                        toolBuffers[idx] = new StringBuilder();
+                        toolCalls[idx] = (block.Id ?? "", block.Name ?? "");
                         yield return new StreamEvent
                         {
-                            Type = "message_end",
-                            StopReason = payload.Delta?.StopReason,
-                            Usage = new TokenUsage
-                            {
-                                InputTokens = pendingUsage.InputTokens,
-                                OutputTokens = pendingUsage.OutputTokens,
-                                BillableInputTokens = pendingUsage.BillableInputTokens,
-                                CacheCreationTokens = pendingUsage.CacheCreationTokens,
-                                CacheReadTokens = pendingUsage.CacheReadTokens,
-                                ContextTokens = pendingUsage.ContextTokens
-                            },
-                            Timing = new RequestTiming
-                            {
-                                TotalMs = completedAt - requestStartedAt,
-                                TtftMs = firstTokenAt.HasValue ? firstTokenAt.Value - requestStartedAt : null,
-                                Tps = ComputeTps(outputTokens, firstTokenAt, completedAt)
-                            }
+                            Type = "tool_call_start",
+                            ToolCallId = block.Id,
+                            ToolName = block.Name
                         };
-                        break;
                     }
-
-                    case "error":
-                        yield return new StreamEvent
+                    else if (block?.Type == "thinking")
+                    {
+                        var sig = (block.Signature ?? block.EncryptedContent)?.Trim();
+                        if (!string.IsNullOrWhiteSpace(sig) && emittedThinkingEncrypted.Add(sig))
                         {
-                            Type = "error",
-                            Error = payload.Error is not null
-                                ? new StreamEventError { Type = payload.Error.Type, Message = payload.Error.Message }
-                                : null
-                        };
-                        break;
+                            yield return new StreamEvent
+                            {
+                                Type = "thinking_encrypted",
+                                ThinkingEncryptedContent = sig,
+                                ThinkingEncryptedProvider = "anthropic"
+                            };
+                        }
+                    }
+                    break;
                 }
+
+                case "content_block_delta":
+                {
+                    firstTokenAt ??= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    var idx = payload.Index ?? -1;
+                    var delta = payload.Delta;
+
+                    if (delta?.Type == "text_delta")
+                    {
+                        yield return new StreamEvent { Type = "text_delta", Text = delta.Text };
+                    }
+                    else if (delta?.Type == "thinking_delta")
+                    {
+                        yield return new StreamEvent { Type = "thinking_delta", Thinking = delta.Thinking };
+                    }
+                    else if (delta?.Type == "signature_delta")
+                    {
+                        var sig = (delta.Signature ?? delta.EncryptedContent)?.Trim();
+                        if (!string.IsNullOrWhiteSpace(sig) && emittedThinkingEncrypted.Add(sig))
+                        {
+                            yield return new StreamEvent
+                            {
+                                Type = "thinking_encrypted",
+                                ThinkingEncryptedContent = sig,
+                                ThinkingEncryptedProvider = "anthropic"
+                            };
+                        }
+                    }
+                    else if (delta?.Type == "input_json_delta" && idx >= 0)
+                    {
+                        if (toolBuffers.TryGetValue(idx, out var buf))
+                        {
+                            buf.Append(delta.PartialJson);
+
+                            var tc = toolCalls.GetValueOrDefault(idx);
+                            yield return new StreamEvent
+                            {
+                                Type = "tool_call_delta",
+                                ToolCallId = tc.Id,
+                                ArgumentsDelta = delta.PartialJson
+                            };
+                        }
+                    }
+                    break;
+                }
+
+                case "content_block_stop":
+                {
+                    var idx = payload.Index ?? -1;
+                    if (toolCalls.TryGetValue(idx, out var tc))
+                    {
+                        var raw = toolBuffers.GetValueOrDefault(idx)?.ToString()?.Trim() ?? "";
+                        var input = ProviderMessageFormatter.ParseToolInputObject(raw);
+
+                        yield return new StreamEvent
+                        {
+                            Type = "tool_call_end",
+                            ToolCallId = tc.Id,
+                            ToolName = tc.Name,
+                            ToolCallInput = input
+                        };
+
+                        toolBuffers.Remove(idx);
+                        toolCalls.Remove(idx);
+                    }
+                    break;
+                }
+
+                case "message_delta":
+                {
+                    var completedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    if (payload.Usage?.OutputTokens is { } outTok)
+                    {
+                        pendingUsage.OutputTokens = outTok;
+                        outputTokens = outTok;
+                    }
+
+                    yield return new StreamEvent
+                    {
+                        Type = "message_end",
+                        StopReason = payload.Delta?.StopReason,
+                        Usage = new TokenUsage
+                        {
+                            InputTokens = pendingUsage.InputTokens,
+                            OutputTokens = pendingUsage.OutputTokens,
+                            BillableInputTokens = pendingUsage.BillableInputTokens,
+                            CacheCreationTokens = pendingUsage.CacheCreationTokens,
+                            CacheReadTokens = pendingUsage.CacheReadTokens,
+                            ContextTokens = pendingUsage.ContextTokens
+                        },
+                        Timing = new RequestTiming
+                        {
+                            TotalMs = completedAt - requestStartedAt,
+                            TtftMs = firstTokenAt.HasValue ? firstTokenAt.Value - requestStartedAt : null,
+                            Tps = ComputeTps(outputTokens, firstTokenAt, completedAt)
+                        }
+                    };
+                    break;
+                }
+
+                case "error":
+                    yield return new StreamEvent
+                    {
+                        Type = "error",
+                        Error = payload.Error is not null
+                            ? new StreamEventError { Type = payload.Error.Type, Message = payload.Error.Message }
+                            : null
+                    };
+                    break;
             }
         }
-        catch (Exception ex) when (!ct.IsCancellationRequested && SseStreamReader.IsRetryableTransportFailure(ex))
+
+        if (transportReadError is not null)
         {
-            var transportReadError = SseStreamReader.RememberRetryableTransportFailure(circuitKey, ex);
             yield return new StreamEvent
             {
                 Type = "error",

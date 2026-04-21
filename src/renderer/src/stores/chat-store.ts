@@ -197,6 +197,25 @@ function dbUpdateMessage(msgId: string, content: unknown, usage?: unknown, meta?
     typeof content === 'string' || Array.isArray(content)
       ? sanitizeMessageContentForPersistence(content)
       : content
+  if (Array.isArray(normalizedContent)) {
+    for (const b of normalizedContent) {
+      if (
+        b &&
+        typeof b === 'object' &&
+        (b as { type?: unknown }).type === 'tool_use' &&
+        (b as { name?: unknown }).name === 'visualize_show_widget'
+      ) {
+        const input = (b as { input?: Record<string, unknown> }).input ?? {}
+        console.log('[WidgetTrace] dbUpdateMessage persist', {
+          msgId,
+          toolUseId: (b as { id?: string }).id,
+          inputKeys: Object.keys(input),
+          widget_code_len:
+            typeof input.widget_code === 'string' ? input.widget_code.length : null
+        })
+      }
+    }
+  }
   const patch: Record<string, unknown> = { content: JSON.stringify(normalizedContent) }
   if (usage !== undefined) patch.usage = JSON.stringify(usage)
   if (meta !== undefined) patch.meta = meta === null ? null : JSON.stringify(meta)
@@ -233,6 +252,24 @@ function stripThinkTagMarkers(text: string): string {
 }
 
 function dbFlushMessage(msg: UnifiedMessage): void {
+  if (Array.isArray(msg.content)) {
+    for (const b of msg.content) {
+      if (
+        b &&
+        typeof b === 'object' &&
+        (b as { type?: unknown }).type === 'tool_use' &&
+        (b as { name?: unknown }).name === 'visualize_show_widget'
+      ) {
+        const input = (b as { input?: Record<string, unknown> }).input ?? {}
+        if (Object.keys(input).length === 0) {
+          console.trace('[WidgetTrace] dbFlushMessage sees EMPTY input', {
+            msgId: msg.id,
+            toolUseId: (b as { id?: string }).id
+          })
+        }
+      }
+    }
+  }
   const key = msg.id
   const existing = _pendingFlush.get(key)
   if (existing) clearTimeout(existing)
@@ -2712,6 +2749,16 @@ export const useChatStore = create<ChatStore>()(
     },
 
     updateToolUseInput: (sessionId, msgId, toolUseId, input) => {
+      if (input && typeof input === 'object' && 'widget_code' in input) {
+        console.log('[WidgetTrace] updateToolUseInput', {
+          msgId,
+          toolUseId,
+          inputKeys: Object.keys(input),
+          widget_code_len: typeof (input as Record<string, unknown>).widget_code === 'string'
+            ? ((input as Record<string, unknown>).widget_code as string).length
+            : null
+        })
+      }
       set((state) => {
         const session = getSessionByIdFromState(state, sessionId)
         if (!session) return
@@ -2723,6 +2770,17 @@ export const useChatStore = create<ChatStore>()(
         ) as ToolUseBlock | undefined
         if (block) {
           block.input = summarizeToolInputForHistory(block.name, input)
+          if (block.name === 'visualize_show_widget') {
+            console.log('[WidgetTrace] block.input written', {
+              msgId,
+              toolUseId,
+              blockInputKeys: Object.keys(block.input ?? {}),
+              widget_code_len:
+                typeof (block.input as Record<string, unknown>)?.widget_code === 'string'
+                  ? ((block.input as Record<string, unknown>).widget_code as string).length
+                  : null
+            })
+          }
           bumpMessageRevision(msg)
         }
       })

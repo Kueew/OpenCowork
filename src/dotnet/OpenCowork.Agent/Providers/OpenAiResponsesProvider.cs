@@ -52,6 +52,9 @@ public sealed class OpenAiResponsesProvider : ILlmProvider
 
         var baseUrl = (config.BaseUrl ?? "https://api.openai.com/v1").TrimEnd('/');
         var url = $"{baseUrl}/responses";
+        var circuitKey = SseStreamReader.BuildTransportCircuitKey(
+            config.ProviderBuiltinId ?? config.Type,
+            config.BaseUrl ?? url);
 
         var headers = new Dictionary<string, string>
         {

@@ -18,6 +18,24 @@ function stripThinkTagMarkers(text: string): string {
   return text.replace(/<\s*\/?\s*think\s*>/gi, '')
 }
 
+function upsertBufferedToolUse(blocks: ContentBlock[], toolUse: ToolUseBlock): void {
+  const existingIndex = blocks.findIndex(
+    (block): block is ToolUseBlock => block.type === 'tool_use' && block.id === toolUse.id
+  )
+
+  if (existingIndex === -1) {
+    blocks.push(toolUse)
+    return
+  }
+
+  const existing = blocks[existingIndex] as ToolUseBlock
+  blocks[existingIndex] = {
+    ...existing,
+    ...toolUse,
+    input: toolUse.input
+  }
+}
+
 // --- Visible session cache (50 ms TTL) ---
 // getVisibleSessionIds() is called per-event during streaming — caching avoids
 // re-creating a Set and reading two stores on every invocation.
@@ -353,7 +371,7 @@ export function appendRuntimeToolUse(
       return
     }
 
-    ;(message.content as ContentBlock[]).push({ ...normalizedToolUse })
+    upsertBufferedToolUse(message.content as ContentBlock[], { ...normalizedToolUse })
   })
 }
 
