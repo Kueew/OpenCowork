@@ -213,6 +213,7 @@ export function MessageList(props: MessageListProps): React.JSX.Element {
   const activeSessionId = targetSessionId
   const isMainChatSession =
     !sessionId && Boolean(activeSessionId) && activeSessionId === currentActiveSessionId
+  const isDetachedSessionView = Boolean(sessionId && activeSessionId)
   const mode = useUIStore((s) => s.mode)
   const hasStreamingMessage = useChatStore((s) =>
     activeSessionId ? Boolean(s.streamingMessages[activeSessionId]) : false
@@ -248,7 +249,8 @@ export function MessageList(props: MessageListProps): React.JSX.Element {
     [activeSessionId, executedToolCalls, pendingToolCalls]
   )
   const isSessionOutputting = hasStreamingMessage || hasActiveToolCallOutput
-  const canSessionTriggerStreamingAutoScroll = isMainChatSession && isSessionOutputting
+  const canSessionTriggerStreamingAutoScroll =
+    (isMainChatSession || isDetachedSessionView) && isSessionOutputting
 
   const orchestrationMessageBindingSignature = React.useMemo(
     () => buildOrchestrationMessageBindingSignature(messages),

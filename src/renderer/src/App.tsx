@@ -21,9 +21,11 @@ import { ErrorBoundary } from './components/error-boundary';
 import { useSettingsStore } from './stores/settings-store';
 import { initProviderStore, useProviderStore } from './stores/provider-store';
 import { initAppPluginStore, useAppPluginStore } from './stores/app-plugin-store';
+import { useAgentStore } from './stores/agent-store';
 import { useChatStore } from './stores/chat-store';
 import { usePlanStore } from './stores/plan-store';
 import { useSshStore } from './stores/ssh-store';
+import { useTaskStore } from './stores/task-store';
 import { useTeamStore } from './stores/team-store';
 import { useUIStore } from './stores/ui-store';
 import { registerAllTools, updateWebSearchToolRegistration, updateBrowserToolRegistration } from './lib/tools';
@@ -46,6 +48,12 @@ import { nanoid } from 'nanoid';
 import type { UnifiedMessage } from './lib/api/types';
 import { NotifyToastContainer } from './components/notify/NotifyWindow';
 import { ChangelogDialog } from './components/changelog/ChangelogDialog';
+import { parseChatRoute, readPersistedChatRoute, replaceChatRoute } from './lib/chat-route';
+import {
+   installAgentRuntimeSyncListener,
+   withAgentRuntimeSyncSuppressed,
+   type AgentRuntimeSyncEvent
+} from './lib/agent-runtime-sync';
 import { installSessionRuntimeSyncListener } from './lib/session-runtime-sync';
 import {
    getGlobalMemorySnapshot,
@@ -282,50 +290,63 @@ function App(): React.JSX.Element {
 
    // Load sessions and plans from SQLite on startup
    useEffect(() => {
-      void useChatStore
-         .getState()
-         .loadFromDb()
-         .then(async () => {
-            await usePlanStore.getState().loadPlansFromDb()
-            if (sessionWindowView && detachedSessionId) {
-               const hasDetachedSession = useChatStore
-                  .getState()
-                  .sessions.some((session) => session.id === detachedSessionId)
-               if (hasDetachedSession) {
-                  useChatStore.getState().setActiveSession(detachedSessionId)
-                  useUIStore.getState().navigateToSession(detachedSessionId)
+      void (async () => {
+         if (!sessionWindowView) {
+            const currentRoute = parseChatRoute(window.location.hash)
+            const currentRouteIsDefaultHome =
+               currentRoute.chatView === 'home' &&
+               !currentRoute.projectId &&
+               !currentRoute.sessionId
+
+            if (currentRouteIsDefaultHome) {
+               const persistedRoute = await readPersistedChatRoute()
+               if (persistedRoute) {
+                  replaceChatRoute(persistedRoute)
                }
-            } else {
-               useUIStore.getState().applyChatRouteFromLocation()
             }
+         }
 
-            const activeSessionId = useChatStore.getState().activeSessionId
-            const activePlan = activeSessionId
-               ? await usePlanStore.getState().loadPlanForSession(activeSessionId)
-               : undefined
-            usePlanStore.getState().setActivePlan(activePlan?.id ?? null)
-
-            if (rendererOomRecoveryRef.current && !teamWorkerParams) {
-               const recoverySessionId = useChatStore.getState().activeSessionId
-               useSettingsStore.getState().updateSettings({ animationsEnabled: false })
-               useUIStore.setState({
-                  detailPanelOpen: false,
-                  detailPanelContent: null,
-                  previewPanelOpen: false,
-                  previewPanelState: null,
-                  orchestrationConsoleOpen: false,
-                  selectedOrchestrationRunId: null,
-                  selectedOrchestrationMemberId: null,
-                  subAgentExecutionDetailOpen: false,
-                  subAgentExecutionDetailToolUseId: null,
-                  subAgentExecutionDetailInlineText: null,
-                  selectedSubAgentToolUseId: null,
-                  rightPanelOpen: false
-               })
-               await useChatStore.getState().recoverFromRendererOom(recoverySessionId)
-               toast.warning('Renderer recovered in reduced-memory mode')
+         await useChatStore.getState().loadFromDb()
+         await usePlanStore.getState().loadPlansFromDb()
+         if (sessionWindowView && detachedSessionId) {
+            const hasDetachedSession = useChatStore
+               .getState()
+               .sessions.some((session) => session.id === detachedSessionId)
+            if (hasDetachedSession) {
+               useChatStore.getState().setActiveSession(detachedSessionId)
+               useUIStore.getState().navigateToSession(detachedSessionId)
             }
-         })
+         } else {
+            useUIStore.getState().applyChatRouteFromLocation()
+         }
+
+         const activeSessionId = useChatStore.getState().activeSessionId
+         const activePlan = activeSessionId
+            ? await usePlanStore.getState().loadPlanForSession(activeSessionId)
+            : undefined
+         usePlanStore.getState().setActivePlan(activePlan?.id ?? null)
+
+         if (rendererOomRecoveryRef.current && !teamWorkerParams) {
+            const recoverySessionId = useChatStore.getState().activeSessionId
+            useSettingsStore.getState().updateSettings({ animationsEnabled: false })
+            useUIStore.setState({
+               detailPanelOpen: false,
+               detailPanelContent: null,
+               previewPanelOpen: false,
+               previewPanelState: null,
+               orchestrationConsoleOpen: false,
+               selectedOrchestrationRunId: null,
+               selectedOrchestrationMemberId: null,
+               subAgentExecutionDetailOpen: false,
+               subAgentExecutionDetailToolUseId: null,
+               subAgentExecutionDetailInlineText: null,
+               selectedSubAgentToolUseId: null,
+               rightPanelOpen: false
+            })
+            await useChatStore.getState().recoverFromRendererOom(recoverySessionId)
+            toast.warning('Renderer recovered in reduced-memory mode')
+         }
+      })()
       window.electron.ipcRenderer
          .invoke('settings:get', 'apiKey')
          .then((key) => {
@@ -350,6 +371,66 @@ function App(): React.JSX.Element {
    }, [sessionWindowView])
 
    useEffect(() => installSessionRuntimeSyncListener(), [])
+
+   useEffect(
+      () =>
+         installAgentRuntimeSyncListener((event: AgentRuntimeSyncEvent) => {
+            withAgentRuntimeSyncSuppressed(() => {
+               const store = useAgentStore.getState()
+               switch (event.kind) {
+                  case 'set_running':
+                     store.setRunning(event.running)
+                     return
+                  case 'set_session_status':
+                     store.setSessionStatus(event.sessionId, event.status)
+                     return
+                  case 'add_tool_call':
+                     store.addToolCall(event.toolCall, event.sessionId)
+                     return
+                  case 'update_tool_call':
+                     store.updateToolCall(event.id, event.patch, event.sessionId)
+                     return
+                  case 'task_add':
+                     useTaskStore.getState().applySyncedTaskAdd(event.task)
+                     return
+                  case 'task_update':
+                     useTaskStore.getState().applySyncedTaskUpdate(event.id, event.patch)
+                     return
+                  case 'task_delete':
+                     useTaskStore.getState().applySyncedTaskDelete(event.id)
+                     return
+                  case 'task_delete_session':
+                     useTaskStore.getState().applySyncedDeleteSessionTasks(event.sessionId)
+                     return
+                  case 'team_event':
+                     useTeamStore.getState().handleTeamEvent(event.event, event.sessionId ?? undefined)
+                     return
+                  case 'team_snapshot':
+                     useTeamStore.getState().syncRuntimeSnapshot(
+                        event.snapshot,
+                        event.sessionId ?? undefined
+                     )
+                     return
+                  case 'team_meta':
+                     useTeamStore.getState().updateTeamMeta(event.patch)
+                     return
+                  case 'clear_session_team':
+                     useTeamStore.getState().clearSessionTeam(event.sessionId)
+                     return
+                  case 'subagent_event':
+                     store.handleSubAgentEvent(event.event, event.sessionId ?? undefined)
+                     return
+                  case 'resolve_approval':
+                     store.resolveApproval(event.toolCallId, event.approved)
+                     return
+                  case 'clear_pending_approvals':
+                     store.clearPendingApprovals()
+                     return
+               }
+            })
+         }),
+      []
+   )
 
    useEffect(() => {
       const offSessionUpdated = ipcClient.on(IPC.CHAT_SESSION_UPDATED, (data: unknown) => {

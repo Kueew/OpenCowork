@@ -658,6 +658,24 @@ function registerWindowControlHandlers(): void {
       safeSendToWindow(window, 'session-runtime:sync', payload)
     }
   })
+
+  ipcMain.on('session-control:sync', (event, payload: unknown) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (window.isDestroyed() || window.webContents.id === event.sender.id) {
+        continue
+      }
+      safeSendToWindow(window, 'session-control:sync', payload)
+    }
+  })
+
+  ipcMain.on('agent-runtime:sync', (event, payload: unknown) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (window.isDestroyed() || window.webContents.id === event.sender.id) {
+        continue
+      }
+      safeSendToWindow(window, 'agent-runtime:sync', payload)
+    }
+  })
 }
 
 function configureAppWindow(window: BrowserWindow, options?: { hideOnClose?: boolean; onClosed?: () => void }): void {
@@ -743,11 +761,11 @@ async function createSshWindow(): Promise<void> {
   }
 
   sshWindow = new BrowserWindow({
-    width: 1400,
+    width: 1680,
 
-    height: 900,
+    height: 980,
 
-    minWidth: 1000,
+    minWidth: 1280,
 
     minHeight: 700,
 

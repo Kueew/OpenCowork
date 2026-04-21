@@ -7,6 +7,10 @@ import type { ToolResultContent, UnifiedMessage, ContentBlock, TokenUsage } from
 import { ipcStorage } from '../lib/ipc/ipc-storage'
 import { ipcClient } from '../lib/ipc/ipc-client'
 import { IPC } from '../lib/ipc/channels'
+import {
+  emitAgentRuntimeSync,
+  isAgentRuntimeSyncSuppressed
+} from '../lib/agent-runtime-sync'
 import { useTeamStore } from './team-store'
 import { sendApprovalResponse } from '../lib/agent/teams/inbox-poller'
 import { sendPlanApprovalResponse } from '../lib/agent/teams/plan-approval-bridge'
@@ -914,7 +918,12 @@ export const useAgentStore = create<AgentStore>()(
       backgroundProcesses: {},
       foregroundShellExecByToolUseId: {},
 
-      setRunning: (running) => set({ isRunning: running }),
+      setRunning: (running) => {
+        set({ isRunning: running })
+        if (!isAgentRuntimeSyncSuppressed()) {
+          emitAgentRuntimeSync({ kind: 'set_running', running })
+        }
+      },
 
       setCurrentLoopId: (id) => set({ currentLoopId: id }),
 
@@ -926,6 +935,9 @@ export const useAgentStore = create<AgentStore>()(
             delete state.runningSessions[sessionId]
           }
         })
+        if (!isAgentRuntimeSyncSuppressed()) {
+          emitAgentRuntimeSync({ kind: 'set_session_status', sessionId, status })
+        }
         // Auto-clear 'completed' after 3 seconds
         if (status === 'completed') {
           setTimeout(() => {
@@ -1005,36 +1017,57 @@ export const useAgentStore = create<AgentStore>()(
       },
 
       addToolCall: (tc, sessionId) => {
+        const resolvedSessionId = sessionId ?? tc.sessionId ?? get().liveSessionId
         set((state) => {
-          const targetSessionId = sessionId ?? tc.sessionId ?? state.liveSessionId
-          const target = resolveSessionToolCallTarget(state, targetSessionId)
+          const target = resolveSessionToolCallTarget(state, resolvedSessionId)
           applyToolCallToBuckets(target.pending, target.executed, {
             ...tc,
-            ...(targetSessionId ? { sessionId: targetSessionId } : {})
+            ...(resolvedSessionId ? { sessionId: resolvedSessionId } : {})
           })
         })
+        if (!isAgentRuntimeSyncSuppressed()) {
+          emitAgentRuntimeSync({ kind: 'add_tool_call', toolCall: tc, sessionId: resolvedSessionId })
+        }
       },
 
       updateToolCall: (id, patch, sessionId) => {
+        let changed = false
+        let resolvedSessionId = sessionId ?? patch.sessionId ?? get().liveSessionId ?? null
         set((state) => {
           const explicitSessionId = sessionId ?? patch.sessionId ?? null
           if (explicitSessionId) {
             const target = resolveSessionToolCallTarget(state, explicitSessionId)
-            if (applyToolCallPatchToBuckets(target.pending, target.executed, id, patch)) return
+            if (applyToolCallPatchToBuckets(target.pending, target.executed, id, patch)) {
+              changed = true
+              resolvedSessionId = explicitSessionId
+              return
+            }
           }
 
           if (
             applyToolCallPatchToBuckets(state.pendingToolCalls, state.executedToolCalls, id, patch)
           ) {
+            changed = true
+            resolvedSessionId = state.liveSessionId
             return
           }
 
-          for (const cache of Object.values(state.sessionToolCallsCache)) {
+          for (const [cacheSessionId, cache] of Object.entries(state.sessionToolCallsCache)) {
             if (applyToolCallPatchToBuckets(cache.pending, cache.executed, id, patch)) {
+              changed = true
+              resolvedSessionId = cacheSessionId
               return
             }
           }
         })
+        if (changed && !isAgentRuntimeSyncSuppressed()) {
+          emitAgentRuntimeSync({
+            kind: 'update_tool_call',
+            id,
+            patch,
+            sessionId: resolvedSessionId
+          })
+        }
       },
 
       addApprovedTool: (name) => {
@@ -1598,6 +1631,9 @@ export const useAgentStore = create<AgentStore>()(
             }
           }
         })
+        if (!isAgentRuntimeSyncSuppressed()) {
+          emitAgentRuntimeSync({ kind: 'subagent_event', event, sessionId })
+        }
       },
 
       abort: () => {
@@ -1720,6 +1756,9 @@ export const useAgentStore = create<AgentStore>()(
           state.pendingToolCalls = []
           trimToolCallArray(state.executedToolCalls)
         })
+        if (!isAgentRuntimeSyncSuppressed()) {
+          emitAgentRuntimeSync({ kind: 'clear_pending_approvals' })
+        }
       },
 
       resolveApproval: (toolCallId, approved) => {
@@ -1765,6 +1804,9 @@ export const useAgentStore = create<AgentStore>()(
             trimToolCallArray(state.executedToolCalls)
           }
         })
+        if (!isAgentRuntimeSyncSuppressed()) {
+          emitAgentRuntimeSync({ kind: 'resolve_approval', toolCallId, approved })
+        }
       }
     })),
     {

@@ -136,7 +136,7 @@ function ImageOutputBlock({ output }: { output: ToolResultContent }): React.JSX.
           <div key={i}>
             <div className="mb-1 flex items-center gap-1.5">
               <p className="text-xs font-medium text-muted-foreground">{t('toolCall.image')}</p>
-              <span className="text-[9px] text-muted-foreground/40">{img.source.mediaType}</span>
+              <span className="text-[9px] text-muted-foreground/55">{img.source.mediaType}</span>
             </div>
             <img
               src={src}
@@ -461,7 +461,7 @@ function ReadOutputBlock({
         >
           {filePath.split(/[\\/]/).slice(-2).join('/')}
         </span>
-        <span className="text-[9px] text-muted-foreground/40 font-mono">
+        <span className="text-[9px] text-muted-foreground/55 font-mono">
           {lang} · {lines.length} lines
         </span>
         <CopyBtn text={rawContent} />
@@ -1035,7 +1035,7 @@ function GrepOutputBlock({
         <p className="text-xs font-medium text-muted-foreground">{t('toolCall.grepResults')}</p>
         <SearchStateBadge state={visualState} />
         {pattern && <span className="text-[9px] font-mono text-amber-400/50">/{pattern}/</span>}
-        <span className="text-[9px] text-muted-foreground/40">
+        <span className="text-[9px] text-muted-foreground/55">
           {t('toolCall.matchesInFiles', { matches: matchCount, files: groups.length })}
         </span>
         <CopyBtn text={copyText} />
@@ -1154,7 +1154,7 @@ function LSOutputBlock({ output }: { output: string }): React.JSX.Element {
         <p className="text-xs font-medium text-muted-foreground">
           {t('toolCall.directoryListing')}
         </p>
-        <span className="text-[9px] text-muted-foreground/40">
+        <span className="text-[9px] text-muted-foreground/55">
           {t('toolCall.foldersAndFiles', { folders: dirs.length, files: files.length })}
         </span>
         <CopyBtn text={parsed.map((e) => e.name).join('\n')} />
@@ -1277,8 +1277,8 @@ function EditPayloadPane({
     <div className={cn('rounded-md border bg-muted/20 dark:bg-zinc-950/70', borderTone)}>
       <div className="flex items-center gap-1.5 border-b border-border/50 px-2.5 py-1.5 text-[10px] uppercase tracking-wide">
         <span className={headerTone}>{label}</span>
-        <span className="text-muted-foreground/40">{lineCount(value)} lines</span>
-        <span className="text-muted-foreground/40">{value.length} chars</span>
+        <span className="text-muted-foreground/55">{lineCount(value)} lines</span>
+        <span className="text-muted-foreground/55">{value.length} chars</span>
         <CopyBtn text={value} />
       </div>
       <pre
@@ -1350,7 +1350,7 @@ function StructuredInput({
           <div className="flex flex-wrap items-center gap-2 pl-[18px]">
             {description && <p className="text-[10px] text-muted-foreground/60">{description}</p>}
             {timeout && (
-              <span className="text-[10px] text-muted-foreground/40">timeout: {timeout}ms</span>
+              <span className="text-[10px] text-muted-foreground/55">timeout: {timeout}ms</span>
             )}
           </div>
         )}
@@ -1374,9 +1374,9 @@ function StructuredInput({
         {(offset || limit) && (
           <div className="flex items-center gap-2 pl-[18px]">
             {offset && (
-              <span className="text-[10px] text-muted-foreground/40">offset: {offset}</span>
+              <span className="text-[10px] text-muted-foreground/55">offset: {offset}</span>
             )}
-            {limit && <span className="text-[10px] text-muted-foreground/40">limit: {limit}</span>}
+            {limit && <span className="text-[10px] text-muted-foreground/55">limit: {limit}</span>}
           </div>
         )}
       </div>
@@ -1431,7 +1431,7 @@ function StructuredInput({
           newLineTotal !== null ||
           oldCharTotal !== null ||
           newCharTotal !== null) && (
-          <div className="pl-[18px] text-[10px] text-muted-foreground/40">
+          <div className="pl-[18px] text-[10px] text-muted-foreground/55">
             {oldLineTotal !== null ? `-${oldLineTotal} lines` : '-? lines'}
             {' / '}
             {newLineTotal !== null ? `+${newLineTotal} lines` : '+? lines'}
@@ -1486,7 +1486,7 @@ function StructuredInput({
             </div>
           )}
           {(lineTotal !== null || charTotal !== null) && (
-            <div className="pl-[18px] text-[10px] text-muted-foreground/40">
+            <div className="pl-[18px] text-[10px] text-muted-foreground/55">
               {lineTotal !== null ? `${lineTotal} lines` : ''}
               {lineTotal !== null && charTotal !== null ? ' · ' : ''}
               {charTotal !== null ? `${charTotal} chars` : ''}
@@ -1581,7 +1581,7 @@ function StructuredInput({
           <div className="flex items-center gap-2 pl-[18px]">
             {path && (
               <span
-                className="text-[10px] text-muted-foreground/40 font-mono"
+                className="text-[10px] text-muted-foreground/55 font-mono"
                 style={{ fontFamily: MONO_FONT }}
               >
                 in {path}
@@ -1589,7 +1589,7 @@ function StructuredInput({
             )}
             {include && (
               <span
-                className="text-[10px] text-muted-foreground/40 font-mono"
+                className="text-[10px] text-muted-foreground/55 font-mono"
                 style={{ fontFamily: MONO_FONT }}
               >
                 include: {include}
@@ -1682,7 +1682,7 @@ function StructuredInput({
             </span>
           )}
           {schedule?.tz && schedule.tz !== 'UTC' && (
-            <span className="text-[9px] text-muted-foreground/40">{schedule.tz}</span>
+            <span className="text-[9px] text-muted-foreground/55">{schedule.tz}</span>
           )}
         </div>
         {jobName && <p className="text-xs text-muted-foreground/60 italic pl-[18px]">{jobName}</p>}
@@ -2072,7 +2072,7 @@ export function ToolCallCard({
                         <p className="text-xs font-medium text-muted-foreground">
                           {t('toolCall.content')}
                         </p>
-                        <span className="text-[9px] text-muted-foreground/40 font-mono">
+                        <span className="text-[9px] text-muted-foreground/55 font-mono">
                           {detectLang(String(input.file_path ?? input.path ?? ''))} ·{' '}
                           {typeof input.content === 'string'
                             ? input.content.split('\n').length

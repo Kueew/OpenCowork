@@ -20,6 +20,7 @@ import { useProviderStore } from './provider-store'
 import { useSettingsStore } from './settings-store'
 import { useInputDraftStore } from './input-draft-store'
 import { invalidateVisibleSessionCache } from '../lib/agent/session-runtime-router'
+import { parseChatRoute } from '../lib/chat-route'
 import {
   summarizeToolInputForHistory,
   sanitizeMessagesForToolReplay
@@ -211,6 +212,7 @@ const _pendingStreamDeltas: StreamDelta[] = []
 let _streamDeltaRafId: number | null = null
 // Assigned after useChatStore is created (avoids temporal dead zone).
 let _scheduleStreamDeltaFlush: () => void = () => {}
+const _streamingBackfillBlockedSessionIds = new Set<string>()
 
 function stripThinkTagMarkers(text: string): string {
   return text.replace(/<\s*\/?\s*think\s*>/gi, '')
@@ -617,6 +619,20 @@ function trimSessionMessageWindow(session: Session): void {
   if (trimCount <= 0) return
   session.messages.splice(0, trimCount)
   session.loadedRangeStart = Math.min(session.messageCount, session.loadedRangeStart + trimCount)
+}
+
+function backfillStreamingMessage(
+  state: Pick<ChatStore, 'activeSessionId' | 'streamingMessageId' | 'streamingMessages'>,
+  sessionId: string,
+  msgId: string
+): void {
+  if (_streamingBackfillBlockedSessionIds.has(sessionId)) return
+  if (state.streamingMessages[sessionId] !== msgId) {
+    state.streamingMessages[sessionId] = msgId
+  }
+  if (sessionId === state.activeSessionId && state.streamingMessageId !== msgId) {
+    state.streamingMessageId = msgId
+  }
 }
 
 function getResidentSessionIds(
@@ -1492,6 +1508,11 @@ export const useChatStore = create<ChatStore>()(
 
     loadFromDb: async () => {
       try {
+        const isInitialLoad = !get()._loaded
+        const initialRoute =
+          isInitialLoad && typeof window !== 'undefined'
+            ? parseChatRoute(window.location.hash)
+            : null
         const projectRows = (await ipcClient.invoke('db:projects:list')) as ProjectRow[]
         let projects = projectRows.map(rowToProject)
 
@@ -1530,13 +1551,32 @@ export const useChatStore = create<ChatStore>()(
           syncSessionsById(state)
           state._loaded = true
 
-          nextActiveSessionId = state.activeSessionId ?? sessions[0]?.id ?? null
+          const routeSessionId =
+            initialRoute?.sessionId &&
+            sessions.some((session) => session.id === initialRoute.sessionId)
+              ? initialRoute.sessionId
+              : null
+          const preservedActiveSessionId =
+            state.activeSessionId &&
+            sessions.some((session) => session.id === state.activeSessionId)
+              ? state.activeSessionId
+              : null
+
+          nextActiveSessionId = isInitialLoad
+            ? routeSessionId
+            : (preservedActiveSessionId ?? sessions[0]?.id ?? null)
           state.activeSessionId = nextActiveSessionId
 
           const activeSession = sessions.find((session) => session.id === nextActiveSessionId)
+          const routeProjectId =
+            initialRoute?.projectId &&
+            projects.some((project) => project.id === initialRoute.projectId)
+              ? initialRoute.projectId
+              : null
           const preferredProjectId = activeSession?.projectId
           nextActiveProjectId =
             preferredProjectId ??
+            routeProjectId ??
             state.activeProjectId ??
             projects.find((project) => !project.pluginId)?.id ??
             projects[0]?.id ??
@@ -2517,6 +2557,7 @@ export const useChatStore = create<ChatStore>()(
         if (!session) return
         const msg = session.messages.find((m) => m.id === msgId)
         if (!msg) return
+        backfillStreamingMessage(state, sessionId, msgId)
         bumpMessageRevision(msg)
 
         const now = Date.now()
@@ -2609,6 +2650,7 @@ export const useChatStore = create<ChatStore>()(
         if (!session) return
         const msg = session.messages.find((m) => m.id === msgId)
         if (!msg) return
+        backfillStreamingMessage(state, sessionId, msgId)
 
         const normalizedToolUse: ToolUseBlock = {
           ...toolUse,
@@ -2656,6 +2698,7 @@ export const useChatStore = create<ChatStore>()(
         if (!session) return
         const msg = session.messages.find((m) => m.id === msgId)
         if (!msg) return
+        backfillStreamingMessage(state, sessionId, msgId)
 
         if (typeof msg.content === 'string') {
           msg.content = msg.content ? [{ type: 'text', text: msg.content }, block] : [block]
@@ -2734,8 +2777,10 @@ export const useChatStore = create<ChatStore>()(
     setStreamingMessageId: (sessionId, id) =>
       set((state) => {
         if (id) {
+          _streamingBackfillBlockedSessionIds.delete(sessionId)
           state.streamingMessages[sessionId] = id
         } else {
+          _streamingBackfillBlockedSessionIds.add(sessionId)
           delete state.streamingMessages[sessionId]
         }
         releaseDormantSessionMemory(state)
@@ -2873,6 +2918,7 @@ function applyStreamDeltas(
       for (const delta of sessionDeltas) {
         const msg = msgMap.get(delta.msgId)
         if (!msg) continue
+        backfillStreamingMessage(state, sessionId, delta.msgId)
 
         if (delta.kind === 'text') {
           if (typeof msg.content === 'string') {

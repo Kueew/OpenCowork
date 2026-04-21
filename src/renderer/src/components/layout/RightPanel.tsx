@@ -1,18 +1,13 @@
-import { Loader2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence } from 'motion/react'
 import { useTranslation } from 'react-i18next'
-import { Button } from '@renderer/components/ui/button'
 import { FadeIn } from '@renderer/components/animate-ui'
 import { useUIStore, type RightPanelTab } from '@renderer/stores/ui-store'
 import { ArtifactsPanel } from '@renderer/components/cowork/ArtifactsPanel'
 import { ContextPanel } from '@renderer/components/cowork/ContextPanel'
-import { FileTreePanel } from '@renderer/components/cowork/FileTreePanel'
-import { SshFileExplorer } from '@renderer/components/ssh/SshFileExplorer'
 import { TerminalPanel } from '@renderer/components/terminal/TerminalPanel'
 import { useChatStore } from '@renderer/stores/chat-store'
 import { useAgentStore } from '@renderer/stores/agent-store'
-import { useSshStore } from '@renderer/stores/ssh-store'
 import { useSettingsStore } from '@renderer/stores/settings-store'
 import { useTeamStore } from '@renderer/stores/team-store'
 import { TASK_TOOL_NAME } from '@renderer/lib/agent/sub-agents/create-tool'
@@ -31,77 +26,6 @@ import {
   RIGHT_PANEL_TAB_DEFS,
   clampRightPanelWidth
 } from './right-panel-defs'
-
-function SshFilesPanel({
-  connectionId,
-  rootPath
-}: {
-  connectionId: string
-  rootPath?: string
-}): React.JSX.Element {
-  const { t } = useTranslation('ssh')
-  const sessions = useSshStore((s) => s.sessions)
-  const connect = useSshStore((s) => s.connect)
-
-  const connectedSession = Object.values(sessions).find(
-    (s) => s.connectionId === connectionId && s.status === 'connected'
-  )
-  const connectingSession = Object.values(sessions).find(
-    (s) => s.connectionId === connectionId && s.status === 'connecting'
-  )
-  const errorSession = Object.values(sessions).find(
-    (s) => s.connectionId === connectionId && s.status === 'error'
-  )
-  const error = errorSession?.error ?? null
-
-  useEffect(() => {
-    if (connectedSession || connectingSession || errorSession) return
-    void connect(connectionId)
-  }, [connectedSession, connectingSession, errorSession, connect, connectionId])
-
-  if (connectedSession) {
-    return (
-      <div className="h-full overflow-hidden rounded-md border border-border/50 bg-background/40">
-        <SshFileExplorer
-          sessionId={connectedSession.id}
-          connectionId={connectionId}
-          rootPath={rootPath}
-        />
-      </div>
-    )
-  }
-
-  if (connectingSession) {
-    return (
-      <div className="flex h-full items-center justify-center rounded-md border border-border/50 bg-background/40 text-xs text-muted-foreground">
-        <Loader2 className="mr-2 size-4 animate-spin text-amber-500" />
-        {t('connecting')}
-      </div>
-    )
-  }
-
-  if (error) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-2 rounded-md border border-border/50 bg-background/40 text-xs text-muted-foreground">
-        <span>{error}</span>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-6 px-2 text-[10px]"
-          onClick={() => void connect(connectionId)}
-        >
-          {t('terminal.reconnect')}
-        </Button>
-      </div>
-    )
-  }
-
-  return (
-    <div className="flex h-full items-center justify-center rounded-md border border-border/50 bg-background/40 text-xs text-muted-foreground">
-      {t('connecting')}
-    </div>
-  )
-}
 
 export function RightPanel({ compact = false }: { compact?: boolean }): React.JSX.Element {
   const { t } = useTranslation('layout')
@@ -310,19 +234,6 @@ export function RightPanel({ compact = false }: { compact?: boolean }): React.JS
                       />
                     ) : (
                       <SubAgentsPanel />
-                    )}
-                  </FadeIn>
-                )}
-
-                {resolvedTab === 'files' && (
-                  <FadeIn key="files" className="h-full">
-                    {activeSession?.sshConnectionId ? (
-                      <SshFilesPanel
-                        connectionId={activeSession.sshConnectionId}
-                        rootPath={activeSession.workingFolder}
-                      />
-                    ) : (
-                      <FileTreePanel />
                     )}
                   </FadeIn>
                 )}

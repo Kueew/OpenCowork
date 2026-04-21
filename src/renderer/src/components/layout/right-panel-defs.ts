@@ -2,7 +2,6 @@ import {
   Activity,
   Database,
   FileOutput,
-  FolderTree,
   Globe,
   Monitor,
   Users,
@@ -37,7 +36,6 @@ export interface RightPanelSectionDef {
 }
 
 export const RIGHT_PANEL_TAB_DEFS: RightPanelTabDef[] = [
-  { value: 'files', labelKey: 'files', section: 'resources', icon: FolderTree },
   { value: 'preview', labelKey: 'preview', section: 'resources', icon: Monitor },
   { value: 'browser', labelKey: 'browser', section: 'resources', icon: Globe },
   { value: 'terminal', labelKey: 'terminal', section: 'resources', icon: SquareTerminal },
@@ -59,7 +57,7 @@ export const RIGHT_PANEL_SECTION_DEFS: RightPanelSectionDef[] = [
   {
     value: 'resources',
     labelKey: 'sectionResources',
-    icon: FolderTree
+    icon: Monitor
   },
   {
     value: 'collaboration',
@@ -75,7 +73,7 @@ export const RIGHT_PANEL_SECTION_DEFS: RightPanelSectionDef[] = [
 
 export const RIGHT_PANEL_DEFAULT_TAB_BY_SECTION: Record<RightPanelSection, RightPanelTab> = {
   execution: 'plan',
-  resources: 'files',
+  resources: 'preview',
   collaboration: 'orchestration',
   monitoring: 'context'
 }

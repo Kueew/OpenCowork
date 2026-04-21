@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useShallow } from 'zustand/react/shallow'
 import { confirm } from '@renderer/components/ui/confirm-dialog'
 import {
   FolderOpen,
@@ -477,12 +478,33 @@ function TreeItem({
 
 // --- Main Panel ---
 
-export function FileTreePanel(): React.JSX.Element {
+interface FileTreePanelProps {
+  sessionId?: string | null
+  surface?: 'card' | 'sheet'
+}
+
+export function FileTreePanel({
+  sessionId = null,
+  surface = 'card'
+}: FileTreePanelProps): React.JSX.Element {
   const { t } = useTranslation('cowork')
-  const sessions = useChatStore((s) => s.sessions)
-  const activeSessionId = useChatStore((s) => s.activeSessionId)
-  const activeSession = sessions.find((s) => s.id === activeSessionId)
-  const workingFolder = activeSession?.workingFolder
+  const sessionView = useChatStore(
+    useShallow((state) => {
+      const resolvedSessionId = sessionId ?? state.activeSessionId
+      const currentSession = resolvedSessionId
+        ? state.sessions.find((item) => item.id === resolvedSessionId)
+        : undefined
+      const currentProject = currentSession?.projectId
+        ? state.projects.find((item) => item.id === currentSession.projectId)
+        : undefined
+
+      return {
+        sessionId: resolvedSessionId,
+        workingFolder: currentSession?.workingFolder ?? currentProject?.workingFolder
+      }
+    })
+  )
+  const workingFolder = sessionView.workingFolder
   const previewPanelState = useUIStore((s) => s.previewPanelState)
 
   const [tree, setTree] = useState<TreeNode[]>([])
@@ -779,9 +801,12 @@ export function FileTreePanel(): React.JSX.Element {
     onNewItemCancel: handleNewItemCancel
   }
 
-  const handlePreview = useCallback((filePath: string) => {
-    useUIStore.getState().openFilePreview(filePath)
-  }, [])
+  const handlePreview = useCallback(
+    (filePath: string) => {
+      useUIStore.getState().openFilePreview(filePath, undefined, undefined, sessionView.sessionId)
+    },
+    [sessionView.sessionId]
+  )
 
   const handleFileDragStart = useCallback(
     (event: React.DragEvent<HTMLElement>, filePath: string) => {
@@ -808,8 +833,20 @@ export function FileTreePanel(): React.JSX.Element {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[20px] border border-border/60 bg-background/70 shadow-[0_10px_30px_rgba(0,0,0,0.12)]">
-        <div className="border-b border-border/60 bg-gradient-to-b from-muted/30 to-background/30 px-3 py-3">
+      <div
+        className={cn(
+          'flex min-h-0 flex-1 flex-col overflow-hidden',
+          surface === 'sheet'
+            ? 'bg-background'
+            : 'rounded-[20px] border border-border/60 bg-background/70 shadow-[0_10px_30px_rgba(0,0,0,0.12)]'
+        )}
+      >
+        <div
+          className={cn(
+            'border-b border-border/60 bg-gradient-to-b from-muted/30 to-background/30',
+            surface === 'sheet' ? 'px-4 py-4' : 'px-3 py-3'
+          )}
+        >
           <div className="flex items-start gap-2">
             <div className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-amber-500/20 bg-amber-500/10">
               <FolderOpen className="size-4 text-amber-400" />
@@ -823,7 +860,10 @@ export function FileTreePanel(): React.JSX.Element {
                   {t('fileTree.dragToReference')}
                 </span>
               </div>
-              <div className="mt-1 truncate text-[11px] text-muted-foreground" title={workingFolder}>
+              <div
+                className="mt-1 truncate text-[11px] text-muted-foreground"
+                title={workingFolder}
+              >
                 {workingFolder}
               </div>
             </div>
@@ -894,7 +934,12 @@ export function FileTreePanel(): React.JSX.Element {
           </div>
         )}
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2 text-[12px]">
+        <div
+          className={cn(
+            'min-h-0 flex-1 overflow-y-auto text-[12px]',
+            surface === 'sheet' ? 'px-3 py-3' : 'px-2 py-2'
+          )}
+        >
           {loading && tree.length === 0 ? (
             <div className="flex h-full items-center justify-center py-8">
               <RefreshCw className="size-4 animate-spin text-muted-foreground" />
@@ -935,13 +980,15 @@ export function FileTreePanel(): React.JSX.Element {
                       <GripVertical className="size-3 shrink-0 text-muted-foreground/25 transition-colors group-hover:text-muted-foreground/60" />
                       {fileIcon(file.name)}
                       <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-medium text-foreground/90">{file.name}</div>
+                        <div className="truncate text-sm font-medium text-foreground/90">
+                          {file.name}
+                        </div>
                         <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
                           {relativePath}
                         </div>
                       </div>
                       <span className="rounded-full border border-border/60 bg-background/80 px-1.5 py-0.5 text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100">
-                        拖动引用
+                        {t('fileTree.dragToReference')}
                       </span>
                     </button>
                   )
@@ -975,7 +1022,12 @@ export function FileTreePanel(): React.JSX.Element {
           )}
         </div>
 
-        <div className="border-t border-border/60 bg-background/40 px-3 py-2 text-[10px] text-muted-foreground/80">
+        <div
+          className={cn(
+            'border-t border-border/60 bg-background/40 text-[10px] text-muted-foreground/80',
+            surface === 'sheet' ? 'px-4 py-3' : 'px-3 py-2'
+          )}
+        >
           {isSearching
             ? t('fileTree.searchHint', { defaultValue: '点击预览，拖到输入框可插入文件引用' })
             : t('fileTree.stats', {

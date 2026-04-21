@@ -21,6 +21,7 @@ import { PermissionDialog } from '@renderer/components/cowork/PermissionDialog'
 import { ConversationGuideDialog } from '@renderer/components/chat/ConversationGuideDialog'
 import { CommandPalette } from './CommandPalette'
 import { SessionConversationPane } from './SessionConversationPane'
+import { WorkingFolderSheet } from './WorkingFolderSheet'
 import { ErrorBoundary } from '@renderer/components/error-boundary'
 import { useUIStore, type AppMode } from '@renderer/stores/ui-store'
 import { useChatStore, type SessionMode } from '@renderer/stores/chat-store'
@@ -250,7 +251,6 @@ export function Layout({ updateInfo, onOpenUpdateDialog }: LayoutProps): React.J
   const translatePageOpen = useUIStore((s) => s.translatePageOpen)
   const tasksPageOpen = useUIStore((s) => s.tasksPageOpen)
   const toggleLeftSidebar = useUIStore((s) => s.toggleLeftSidebar)
-  const _loaded = useChatStore((s) => s._loaded)
   const appliedDefaultToolbarStateRef = useRef(false)
 
   useEffect(() => {
@@ -258,16 +258,6 @@ export function Layout({ updateInfo, onOpenUpdateDialog }: LayoutProps): React.J
     useUIStore.getState().setLeftSidebarOpen(!toolbarCollapsedByDefault)
     appliedDefaultToolbarStateRef.current = true
   }, [toolbarCollapsedByDefault])
-
-  // On initial DB load, restore last active session if any
-  useEffect(() => {
-    if (_loaded) {
-      const activeId = useChatStore.getState().activeSessionId
-      if (activeId) {
-        useUIStore.getState().navigateToSession()
-      }
-    }
-  }, [_loaded])
 
   const getActiveSessionSnapshot = useCallback(
     (): ReturnType<typeof useChatStore.getState>['sessions'][number] | undefined =>
@@ -747,6 +737,8 @@ export function Layout({ updateInfo, onOpenUpdateDialog }: LayoutProps): React.J
           <PreviewPanel embedded />
         </DialogContent>
       </Dialog>
+
+      <WorkingFolderSheet />
 
       <Dialog
         open={subAgentExecutionDetailOpen}

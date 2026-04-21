@@ -169,7 +169,10 @@
     "openSession": "Open session",
     "stopCommand": "Stop",
     "openMiniWindow": "Mini window",
-    "currentSession": "Current session"
+    "currentSession": "Current session",
+    "openFileManager": "Open file manager",
+    "closeFileManager": "Close file manager",
+    "fileManagerUnavailable": "Select a working folder to open the file manager"
   },
   "commandPalette": {
     "placeholder": "Type a command or search sessions...",

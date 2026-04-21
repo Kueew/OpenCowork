@@ -1,5 +1,6 @@
 import {
   Download,
+  FolderOpen,
   HelpCircle,
   Loader2,
   PanelLeftClose,
@@ -10,9 +11,11 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { useShallow } from 'zustand/react/shallow'
 import { confirm } from '@renderer/components/ui/confirm-dialog'
 import { Button } from '@renderer/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
+import { useChatStore } from '@renderer/stores/chat-store'
 import { useSettingsStore } from '@renderer/stores/settings-store'
 import { useUIStore } from '@renderer/stores/ui-store'
 import { cn } from '@renderer/lib/utils'
@@ -39,6 +42,8 @@ export function TitleBar({ updateInfo, onOpenUpdateDialog }: TitleBarProps): Rea
   const toggleLeftSidebar = useUIStore((s) => s.toggleLeftSidebar)
   const rightPanelOpen = useUIStore((s) => s.rightPanelOpen)
   const toggleRightPanel = useUIStore((s) => s.toggleRightPanel)
+  const workingFolderSheetOpen = useUIStore((s) => s.workingFolderSheetOpen)
+  const toggleWorkingFolderSheet = useUIStore((s) => s.toggleWorkingFolderSheet)
   const chatView = useUIStore((s) => s.chatView)
   const settingsPageOpen = useUIStore((s) => s.settingsPageOpen)
   const skillsPageOpen = useUIStore((s) => s.skillsPageOpen)
@@ -46,6 +51,20 @@ export function TitleBar({ updateInfo, onOpenUpdateDialog }: TitleBarProps): Rea
   const drawPageOpen = useUIStore((s) => s.drawPageOpen)
   const translatePageOpen = useUIStore((s) => s.translatePageOpen)
   const tasksPageOpen = useUIStore((s) => s.tasksPageOpen)
+  const sessionContext = useChatStore(
+    useShallow((state) => {
+      const activeSession = state.activeSessionId
+        ? state.sessions.find((session) => session.id === state.activeSessionId)
+        : undefined
+      const activeProject = activeSession?.projectId
+        ? state.projects.find((project) => project.id === activeSession.projectId)
+        : undefined
+
+      return {
+        workingFolder: activeSession?.workingFolder ?? activeProject?.workingFolder ?? null
+      }
+    })
+  )
 
   const autoApprove = useSettingsStore((s) => s.autoApprove)
 
@@ -57,6 +76,8 @@ export function TitleBar({ updateInfo, onOpenUpdateDialog }: TitleBarProps): Rea
     !translatePageOpen &&
     !tasksPageOpen
   const showInspectorToggle = chatSurfaceActive && chatView === 'session'
+  const showFileManagerToggle = chatSurfaceActive && chatView === 'session'
+  const canOpenFileManager = Boolean(sessionContext.workingFolder)
 
   const handleToggleAutoApprove = async (): Promise<void> => {
     if (!autoApprove) {
@@ -156,6 +177,40 @@ export function TitleBar({ updateInfo, onOpenUpdateDialog }: TitleBarProps): Rea
         </Tooltip>
 
         <PendingInboxPopover />
+
+        {showFileManagerToggle && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-pressed={workingFolderSheetOpen}
+                aria-disabled={!canOpenFileManager}
+                className={cn(
+                  'titlebar-no-drag inline-flex size-7 items-center justify-center rounded-md transition-all',
+                  workingFolderSheetOpen
+                    ? 'bg-accent text-accent-foreground'
+                    : 'hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50',
+                  !canOpenFileManager && 'cursor-not-allowed opacity-40 hover:bg-transparent'
+                )}
+                onClick={() => {
+                  if (!canOpenFileManager) return
+                  toggleWorkingFolderSheet()
+                }}
+              >
+                <FolderOpen className="size-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {canOpenFileManager
+                ? workingFolderSheetOpen
+                  ? t('topbar.closeFileManager', { defaultValue: 'Close file manager' })
+                  : t('topbar.openFileManager', { defaultValue: 'Open file manager' })
+                : t('topbar.fileManagerUnavailable', {
+                    defaultValue: 'Select a working folder to open the file manager'
+                  })}
+            </TooltipContent>
+          </Tooltip>
+        )}
 
         {showInspectorToggle && (
           <Tooltip>

@@ -2,6 +2,10 @@ import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
 import { persist, createJSONStorage } from 'zustand/middleware'
 import type { TeamMember, TeamTask, TeamMessage, TeamEvent } from '../lib/agent/teams/types'
+import {
+  emitAgentRuntimeSync,
+  isAgentRuntimeSyncSuppressed
+} from '../lib/agent-runtime-sync'
 import type {
   TeamRuntimeBackendType,
   TeamRuntimePermissionMode,
@@ -46,22 +50,25 @@ export const useTeamStore = create<TeamStore>()(
       teamHistory: [],
 
       handleTeamEvent: (event, sessionId) => {
+        const resolvedSessionId = sessionId ?? event.sessionId
+        const eventWithSession =
+          resolvedSessionId && !event.sessionId ? { ...event, sessionId: resolvedSessionId } : event
         set((state) => {
-          switch (event.type) {
+          switch (eventWithSession.type) {
             case 'team_start':
               state.activeTeam = {
-                name: event.teamName,
-                description: event.description,
-                sessionId,
-                runtimePath: event.runtimePath,
-                leadAgentId: event.leadAgentId,
-                defaultBackend: event.defaultBackend,
-                permissionMode: event.permissionMode,
-                teamAllowedPaths: event.teamAllowedPaths ?? [],
+                name: eventWithSession.teamName,
+                description: eventWithSession.description,
+                sessionId: resolvedSessionId,
+                runtimePath: eventWithSession.runtimePath,
+                leadAgentId: eventWithSession.leadAgentId,
+                defaultBackend: eventWithSession.defaultBackend,
+                permissionMode: eventWithSession.permissionMode,
+                teamAllowedPaths: eventWithSession.teamAllowedPaths ?? [],
                 members: [],
                 tasks: [],
                 messages: [],
-                createdAt: event.createdAt ?? Date.now(),
+                createdAt: eventWithSession.createdAt ?? Date.now(),
                 lastRuntimeSyncAt: Date.now()
               }
               break
@@ -69,48 +76,48 @@ export const useTeamStore = create<TeamStore>()(
               if (state.activeTeam) {
                 // Guard: skip if a member with the same id or name already exists
                 const dup = state.activeTeam.members.some(
-                  (m) => m.id === event.member.id || m.name === event.member.name
+                  (m) => m.id === eventWithSession.member.id || m.name === eventWithSession.member.name
                 )
-                if (!dup) state.activeTeam.members.push(event.member)
+                if (!dup) state.activeTeam.members.push(eventWithSession.member)
               }
               break
             case 'team_member_update': {
               if (!state.activeTeam) break
-              const member = state.activeTeam.members.find((m) => m.id === event.memberId)
-              if (member) Object.assign(member, event.patch)
+              const member = state.activeTeam.members.find((m) => m.id === eventWithSession.memberId)
+              if (member) Object.assign(member, eventWithSession.patch)
               break
             }
             case 'team_member_remove': {
               if (!state.activeTeam) break
-              const idx = state.activeTeam.members.findIndex((m) => m.id === event.memberId)
+              const idx = state.activeTeam.members.findIndex((m) => m.id === eventWithSession.memberId)
               if (idx !== -1) state.activeTeam.members.splice(idx, 1)
               break
             }
             case 'team_task_add':
               if (state.activeTeam) {
                 // Guard: skip if a task with the same id already exists
-                const dupTask = state.activeTeam.tasks.some((t) => t.id === event.task.id)
-                if (!dupTask) state.activeTeam.tasks.push(event.task)
+                const dupTask = state.activeTeam.tasks.some((t) => t.id === eventWithSession.task.id)
+                if (!dupTask) state.activeTeam.tasks.push(eventWithSession.task)
               }
               break
             case 'team_task_update': {
               if (!state.activeTeam) break
-              const task = state.activeTeam.tasks.find((t) => t.id === event.taskId)
+              const task = state.activeTeam.tasks.find((t) => t.id === eventWithSession.taskId)
               if (task) {
                 // Guard: never roll back a completed task to a non-completed status
                 if (
                   task.status === 'completed' &&
-                  event.patch.status &&
-                  event.patch.status !== 'completed'
+                  eventWithSession.patch.status &&
+                  eventWithSession.patch.status !== 'completed'
                 ) {
                   break
                 }
-                Object.assign(task, event.patch)
+                Object.assign(task, eventWithSession.patch)
               }
               break
             }
             case 'team_message':
-              if (state.activeTeam) state.activeTeam.messages.push(event.message)
+              if (state.activeTeam) state.activeTeam.messages.push(eventWithSession.message)
               break
             case 'team_end':
               if (state.activeTeam) {
@@ -120,6 +127,13 @@ export const useTeamStore = create<TeamStore>()(
               break
           }
         })
+        if (!isAgentRuntimeSyncSuppressed()) {
+          emitAgentRuntimeSync({
+            kind: 'team_event',
+            event: eventWithSession,
+            sessionId: resolvedSessionId
+          })
+        }
       },
       syncRuntimeSnapshot: (snapshot, sessionId) => {
         set((state) => {
@@ -184,6 +198,9 @@ export const useTeamStore = create<TeamStore>()(
             }))
           }
         })
+        if (!isAgentRuntimeSyncSuppressed()) {
+          emitAgentRuntimeSync({ kind: 'team_snapshot', snapshot, sessionId })
+        }
       },
       updateTeamMeta: (patch) => {
         set((state) => {
@@ -191,6 +208,9 @@ export const useTeamStore = create<TeamStore>()(
           Object.assign(state.activeTeam, patch)
           state.activeTeam.lastRuntimeSyncAt = Date.now()
         })
+        if (!isAgentRuntimeSyncSuppressed()) {
+          emitAgentRuntimeSync({ kind: 'team_meta', patch })
+        }
       },
       clearSessionTeam: (sessionId) => {
         set((state) => {
@@ -201,6 +221,9 @@ export const useTeamStore = create<TeamStore>()(
           // Remove history entries belonging to the session
           state.teamHistory = state.teamHistory.filter((t) => t.sessionId !== sessionId)
         })
+        if (!isAgentRuntimeSyncSuppressed()) {
+          emitAgentRuntimeSync({ kind: 'clear_session_team', sessionId })
+        }
       }
     })),
     {

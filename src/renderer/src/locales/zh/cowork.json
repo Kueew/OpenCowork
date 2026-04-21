@@ -83,6 +83,9 @@
   },
   "fileTree": {
     "selectFolder": "选择工作目录以查看文件",
+    "searchPlaceholder": "搜索文件名或路径",
+    "searching": "搜索文件中...",
+    "noSearchResults": "没有匹配的文件",
     "newFile": "新建文件",
     "newFolder": "新建文件夹",
     "deleteConfirm": "删除{{type}}「{{name}}」？",
@@ -97,6 +100,7 @@
     "dragToReference": "拖到输入框可引用",
     "unableToRead": "（无法读取文件）",
     "empty": "空文件夹",
+    "searchHint": "点击可预览，拖到输入框可插入文件引用",
     "stats": "{{folders}} 个文件夹 · {{files}} 个文件"
   },
   "teammateCard": {

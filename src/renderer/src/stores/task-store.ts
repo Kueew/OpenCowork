@@ -1,5 +1,9 @@
 import { create } from 'zustand'
 import { ipcClient } from '../lib/ipc/ipc-client'
+import {
+  emitAgentRuntimeSync,
+  isAgentRuntimeSyncSuppressed
+} from '../lib/agent-runtime-sync'
 import { useChatStore } from './chat-store'
 
 export interface TaskItem {
@@ -141,6 +145,13 @@ interface TaskStore {
   releaseDormantSessionTasks: (residentSessionIds: string[]) => void
   /** Delete all tasks for a session from DB and memory */
   deleteSessionTasks: (sessionId: string) => void
+  applySyncedTaskAdd: (task: TaskItem) => void
+  applySyncedTaskUpdate: (
+    id: string,
+    patch: Partial<Omit<TaskItem, 'id' | 'createdAt'>>
+  ) => void
+  applySyncedTaskDelete: (id: string) => void
+  applySyncedDeleteSessionTasks: (sessionId: string) => void
 
   // --- Backward-compatible aliases ---
   /** @deprecated Use tasks */
@@ -223,6 +234,9 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
     if (newTask.sessionId) {
       useChatStore.getState().clearSessionPromptSnapshot(newTask.sessionId)
     }
+    if (!isAgentRuntimeSyncSuppressed()) {
+      emitAgentRuntimeSync({ kind: 'task_add', task: newTask })
+    }
     return newTask
   },
 
@@ -280,6 +294,9 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
       if (updatedTask.sessionId) {
         useChatStore.getState().clearSessionPromptSnapshot(updatedTask.sessionId)
       }
+      if (!isAgentRuntimeSyncSuppressed()) {
+        emitAgentRuntimeSync({ kind: 'task_update', id, patch })
+      }
     }
     return updatedTask
   },
@@ -322,6 +339,9 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
     dbDeleteTask(id)
     if (existingTask?.sessionId) {
       useChatStore.getState().clearSessionPromptSnapshot(existingTask.sessionId)
+    }
+    if (!isAgentRuntimeSyncSuppressed()) {
+      emitAgentRuntimeSync({ kind: 'task_delete', id })
     }
     return true
   },
@@ -383,6 +403,135 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
     })
     dbDeleteTasksBySession(sessionId)
     useChatStore.getState().clearSessionPromptSnapshot(sessionId)
+    if (!isAgentRuntimeSyncSuppressed()) {
+      emitAgentRuntimeSync({ kind: 'task_delete_session', sessionId })
+    }
+  },
+
+  applySyncedTaskAdd: (task) => {
+    const syncedTask: TaskItem = {
+      ...task,
+      blocks: task.blocks ?? [],
+      blockedBy: task.blockedBy ?? []
+    }
+
+    set((state) => {
+      const sessionId = syncedTask.sessionId
+      if (!sessionId) {
+        if (state.tasks.some((item) => item.id === syncedTask.id)) {
+          const tasks = state.tasks.map((item) => (item.id === syncedTask.id ? syncedTask : item))
+          return { tasks, todos: tasks }
+        }
+        const tasks = [...state.tasks, syncedTask]
+        return { tasks, todos: tasks }
+      }
+
+      const sessionTasks =
+        state.tasksBySession[sessionId] ?? (state.currentSessionId === sessionId ? state.tasks : [])
+      const existingIndex = sessionTasks.findIndex((item) => item.id === syncedTask.id)
+      const nextSessionTasks = [...sessionTasks]
+      if (existingIndex !== -1) {
+        nextSessionTasks[existingIndex] = syncedTask
+      } else {
+        nextSessionTasks.push(syncedTask)
+      }
+
+      const nextTasksBySession = { ...state.tasksBySession, [sessionId]: nextSessionTasks }
+      if (state.currentSessionId === sessionId) {
+        return { tasks: nextSessionTasks, todos: nextSessionTasks, tasksBySession: nextTasksBySession }
+      }
+      return { tasksBySession: nextTasksBySession }
+    })
+  },
+
+  applySyncedTaskUpdate: (id, patch) => {
+    set((state) => {
+      const nextTasksBySession = { ...state.tasksBySession }
+
+      const sessionEntries = Object.entries(state.tasksBySession)
+      if (state.currentSessionId && !state.tasksBySession[state.currentSessionId]) {
+        sessionEntries.push([state.currentSessionId, state.tasks])
+      }
+
+      for (const [sessionId, sessionTasks] of sessionEntries) {
+        const idx = sessionTasks.findIndex((task) => task.id === id)
+        if (idx === -1) continue
+
+        const nextSessionTasks = [...sessionTasks]
+        nextSessionTasks[idx] = { ...nextSessionTasks[idx], ...patch }
+        nextTasksBySession[sessionId] = nextSessionTasks
+
+        if (state.currentSessionId === sessionId) {
+          return {
+            tasks: nextSessionTasks,
+            todos: nextSessionTasks,
+            tasksBySession: nextTasksBySession
+          }
+        }
+        return { tasksBySession: nextTasksBySession }
+      }
+
+      const taskIndex = state.tasks.findIndex((task) => task.id === id)
+      if (taskIndex !== -1) {
+        const tasks = [...state.tasks]
+        tasks[taskIndex] = { ...tasks[taskIndex], ...patch }
+        return { tasks, todos: tasks }
+      }
+
+      return {}
+    })
+  },
+
+  applySyncedTaskDelete: (id) => {
+    set((state) => {
+      const nextTasksBySession = { ...state.tasksBySession }
+      const sessionEntries = Object.entries(state.tasksBySession)
+      if (state.currentSessionId && !state.tasksBySession[state.currentSessionId]) {
+        sessionEntries.push([state.currentSessionId, state.tasks])
+      }
+
+      for (const [sessionId, sessionTasks] of sessionEntries) {
+        const hasTarget = sessionTasks.some((task) => task.id === id)
+        if (!hasTarget) continue
+
+        const cleaned = sessionTasks
+          .filter((task) => task.id !== id)
+          .map((task) => ({
+            ...task,
+            blocks: task.blocks.filter((item) => item !== id),
+            blockedBy: task.blockedBy.filter((item) => item !== id)
+          }))
+        nextTasksBySession[sessionId] = cleaned
+
+        if (state.currentSessionId === sessionId) {
+          return { tasks: cleaned, todos: cleaned, tasksBySession: nextTasksBySession }
+        }
+        return { tasksBySession: nextTasksBySession }
+      }
+
+      const hasCurrent = state.tasks.some((task) => task.id === id)
+      if (!hasCurrent) return {}
+      const tasks = state.tasks.filter((task) => task.id !== id)
+      return { tasks, todos: tasks }
+    })
+  },
+
+  applySyncedDeleteSessionTasks: (sessionId) => {
+    set((state) => {
+      const nextTasksBySession = { ...state.tasksBySession }
+      delete nextTasksBySession[sessionId]
+
+      if (state.currentSessionId !== sessionId) {
+        return { tasksBySession: nextTasksBySession }
+      }
+
+      return {
+        tasks: [],
+        todos: [],
+        currentSessionId: null,
+        tasksBySession: nextTasksBySession
+      }
+    })
   },
 
   // --- Backward-compatible aliases ---

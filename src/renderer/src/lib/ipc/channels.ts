@@ -273,6 +273,8 @@ export const IPC = {
   SESSION_WINDOW_OPEN: 'session-window:open',
   SESSION_WINDOW_FOCUS_IF_OPEN: 'session-window:focus-if-open',
   SESSION_RUNTIME_SYNC: 'session-runtime:sync',
+  SESSION_CONTROL_SYNC: 'session-control:sync',
+  AGENT_RUNTIME_SYNC: 'agent-runtime:sync',
 
   // Images
   IMAGE_PERSIST_GENERATED: 'image:persist-generated',

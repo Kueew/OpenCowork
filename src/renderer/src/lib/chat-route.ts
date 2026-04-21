@@ -1,3 +1,4 @@
+import { ipcClient } from '@renderer/lib/ipc/ipc-client'
 import type { ChatView } from '@renderer/stores/ui-store'
 
 export interface ChatRouteState {
@@ -10,6 +11,35 @@ const DEFAULT_ROUTE: ChatRouteState = {
   chatView: 'home',
   projectId: null,
   sessionId: null
+}
+
+const LAST_CHAT_ROUTE_SETTINGS_KEY = 'lastChatRoute'
+const VALID_CHAT_VIEWS: ReadonlySet<ChatView> = new Set([
+  'home',
+  'project',
+  'archive',
+  'channels',
+  'git',
+  'session'
+])
+
+function sanitizeChatRouteState(value: unknown): ChatRouteState | null {
+  if (!value || typeof value !== 'object') return null
+
+  const candidate = value as Partial<ChatRouteState>
+  const chatView = VALID_CHAT_VIEWS.has(candidate.chatView as ChatView)
+    ? (candidate.chatView as ChatView)
+    : null
+
+  if (!chatView) return null
+
+  return {
+    chatView,
+    projectId:
+      typeof candidate.projectId === 'string' && candidate.projectId ? candidate.projectId : null,
+    sessionId:
+      typeof candidate.sessionId === 'string' && candidate.sessionId ? candidate.sessionId : null
+  }
 }
 
 function normalizeHash(hash: string): string {
@@ -82,8 +112,29 @@ export function buildChatRoute(state: ChatRouteState): string {
   return `#/project/${encodedProjectId}`
 }
 
+export async function readPersistedChatRoute(): Promise<ChatRouteState | null> {
+  try {
+    const value = await ipcClient.invoke('settings:get', LAST_CHAT_ROUTE_SETTINGS_KEY)
+    return sanitizeChatRouteState(value)
+  } catch {
+    return null
+  }
+}
+
+export function persistChatRoute(state: ChatRouteState): void {
+  void ipcClient.invoke('settings:set', {
+    key: LAST_CHAT_ROUTE_SETTINGS_KEY,
+    value: {
+      chatView: state.chatView,
+      projectId: state.projectId,
+      sessionId: state.sessionId
+    }
+  })
+}
+
 export function replaceChatRoute(state: ChatRouteState): void {
   const nextHash = buildChatRoute(state)
+  persistChatRoute(state)
   if (window.location.hash === nextHash) return
   window.history.replaceState(null, '', nextHash)
 }

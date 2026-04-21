@@ -124,6 +124,9 @@ interface UIStore {
   rightPanelOpen: boolean
   toggleRightPanel: () => void
   setRightPanelOpen: (open: boolean) => void
+  workingFolderSheetOpen: boolean
+  toggleWorkingFolderSheet: () => void
+  setWorkingFolderSheetOpen: (open: boolean) => void
   rightPanelTab: RightPanelTab
   setRightPanelTab: (tab: RightPanelTab) => void
   rightPanelSection: RightPanelSection
@@ -293,7 +296,11 @@ export const useUIStore = create<UIStore>((set, get) => ({
   rightPanelOpen: false,
   toggleRightPanel: () => set((state) => ({ rightPanelOpen: !state.rightPanelOpen })),
   setRightPanelOpen: (open) => set({ rightPanelOpen: open }),
-  rightPanelTab: 'files',
+  workingFolderSheetOpen: false,
+  toggleWorkingFolderSheet: () =>
+    set((state) => ({ workingFolderSheetOpen: !state.workingFolderSheetOpen })),
+  setWorkingFolderSheetOpen: (open) => set({ workingFolderSheetOpen: open }),
+  rightPanelTab: 'preview',
   setRightPanelTab: (tab) => set({ rightPanelTab: tab }),
   rightPanelSection: 'execution',
   setRightPanelSection: (section) => set({ rightPanelSection: section }),
@@ -647,11 +654,14 @@ export const useUIStore = create<UIStore>((set, get) => ({
   applyChatRouteFromLocation: () => {
     const route = parseChatRoute(window.location.hash)
     const chatStore = useChatStore.getState()
+    let resolvedRouteProjectId = route.projectId
 
     if (route.projectId) {
       const hasProject = chatStore.projects.some((project) => project.id === route.projectId)
       if (hasProject) {
         chatStore.setActiveProject(route.projectId)
+      } else {
+        resolvedRouteProjectId = null
       }
     }
 
@@ -664,8 +674,10 @@ export const useUIStore = create<UIStore>((set, get) => ({
       }
     }
 
+    chatStore.setActiveSession(null)
+
     if (route.chatView !== 'home') {
-      const resolvedProjectId = route.projectId ?? chatStore.activeProjectId ?? null
+      const resolvedProjectId = resolvedRouteProjectId ?? chatStore.activeProjectId ?? null
       if (!resolvedProjectId) {
         set({ activeNavItem: 'chat', chatView: 'home' })
         replaceChatRoute({ chatView: 'home', projectId: null, sessionId: null })
@@ -676,7 +688,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
     set({ activeNavItem: 'chat', chatView: route.chatView })
     replaceChatRoute({
       chatView: route.chatView,
-      projectId: route.projectId ?? chatStore.activeProjectId ?? null,
+      projectId: resolvedRouteProjectId ?? chatStore.activeProjectId ?? null,
       sessionId: null
     })
   }

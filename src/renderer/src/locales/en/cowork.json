@@ -85,6 +85,7 @@
     "selectFolder": "Select a working folder to view files",
     "searchPlaceholder": "Search file names or paths",
     "searching": "Searching files...",
+    "searchHint": "Click to preview, or drag files into the composer to insert references",
     "noSearchResults": "No matching files",
     "newFile": "New File",
     "newFolder": "New Folder",

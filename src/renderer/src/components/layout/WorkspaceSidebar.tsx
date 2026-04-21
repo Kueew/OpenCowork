@@ -83,10 +83,7 @@ import {
   subscribePendingSessionMessages
 } from '@renderer/hooks/use-chat-actions'
 import { sessionToMarkdown } from '@renderer/lib/utils/export-chat'
-import {
-  openDetachedSessionWindow,
-  openSessionOrFocusDetached
-} from '@renderer/lib/session-window'
+import { openDetachedSessionWindow, openSessionOrFocusDetached } from '@renderer/lib/session-window'
 import { cn } from '@renderer/lib/utils'
 import { clampLeftSidebarWidth, LEFT_SIDEBAR_DEFAULT_WIDTH } from './right-panel-defs'
 import { WorkingFolderSelectorDialog } from '@renderer/components/chat/WorkingFolderSelectorDialog'
@@ -100,12 +97,12 @@ const DAY_MS = 24 * HOUR_MS
 const WEEK_MS = 7 * DAY_MS
 const SIDEBAR_TREE_ROW_CLASS = 'min-h-8 rounded-lg border border-transparent'
 const SIDEBAR_TREE_ACTIVE_CLASS =
-  'border-border/70 bg-accent text-accent-foreground shadow-[0_1px_2px_rgba(15,23,42,0.06)]'
+  'border-border/80 bg-accent text-foreground shadow-[0_2px_6px_rgba(15,23,42,0.06)]'
 const SIDEBAR_TREE_HOVER_CLASS =
-  'text-foreground/85 hover:border-border/70 hover:bg-accent hover:text-accent-foreground'
+  'text-foreground/90 hover:border-border/80 hover:bg-accent hover:text-foreground hover:shadow-[0_1px_3px_rgba(15,23,42,0.04)]'
 const SIDEBAR_TREE_SUBITEM_HOVER_CLASS =
-  'text-foreground/80 hover:border-border/60 hover:bg-accent/80 hover:text-accent-foreground'
-const SIDEBAR_TREE_ACTION_BUTTON_CLASS = 'size-6 rounded-md text-muted-foreground'
+  'text-foreground/85 hover:border-border/70 hover:bg-accent/90 hover:text-foreground hover:shadow-[0_1px_2px_rgba(15,23,42,0.04)]'
+const SIDEBAR_TREE_ACTION_BUTTON_CLASS = 'size-6 rounded-md text-muted-foreground/80'
 const SIDEBAR_TREE_LABEL_CLASS = 'text-[13px] leading-5'
 const SIDEBAR_TREE_META_CLASS = 'text-[10px]'
 
@@ -838,7 +835,7 @@ export function WorkspaceSidebar(): React.JSX.Element {
                   {pendingCount > 99 ? '99+' : pendingCount}
                 </span>
               )}
-              <span className={cn('text-muted-foreground/70', SIDEBAR_TREE_META_CLASS)}>
+              <span className={cn('text-muted-foreground/80', SIDEBAR_TREE_META_CLASS)}>
                 {formatRelativeTime(session.updatedAt, locale)}
               </span>
             </span>
@@ -1039,9 +1036,7 @@ export function WorkspaceSidebar(): React.JSX.Element {
                     className={cn(
                       'flex h-7 w-full items-center gap-2 px-2 text-[12px] font-medium transition-colors',
                       SIDEBAR_TREE_ROW_CLASS,
-                      skillsPageOpen
-                        ? SIDEBAR_TREE_ACTIVE_CLASS
-                        : SIDEBAR_TREE_SUBITEM_HOVER_CLASS
+                      skillsPageOpen ? SIDEBAR_TREE_ACTIVE_CLASS : SIDEBAR_TREE_SUBITEM_HOVER_CLASS
                     )}
                   >
                     <Wand2 className="size-3.5 shrink-0" />
@@ -1059,7 +1054,7 @@ export function WorkspaceSidebar(): React.JSX.Element {
               <span className="text-[9px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/80">
                 {t('sidebar.projects')}
               </span>
-              <span className="rounded-full border border-border/60 bg-muted/30 px-1 py-0.5 text-[9px] text-muted-foreground">
+              <span className="rounded-full border border-border/60 bg-muted/45 px-1 py-0.5 text-[9px] text-muted-foreground">
                 {visibleProjects.length}
               </span>
             </div>
@@ -1144,9 +1139,7 @@ export function WorkspaceSidebar(): React.JSX.Element {
                             className={cn(
                               'group/project flex items-center gap-1.5 px-1.5 py-1 transition-colors',
                               SIDEBAR_TREE_ROW_CLASS,
-                              isProjectActive
-                                ? SIDEBAR_TREE_ACTIVE_CLASS
-                                : SIDEBAR_TREE_HOVER_CLASS
+                              isProjectActive ? SIDEBAR_TREE_ACTIVE_CLASS : SIDEBAR_TREE_HOVER_CLASS
                             )}
                           >
                             <Button
@@ -1178,7 +1171,7 @@ export function WorkspaceSidebar(): React.JSX.Element {
                                     'size-3.5 shrink-0',
                                     isProjectActive
                                       ? 'text-accent-foreground/80'
-                                      : 'text-muted-foreground/70'
+                                      : 'text-muted-foreground/80'
                                   )}
                                 />
                                 <span
@@ -1208,7 +1201,7 @@ export function WorkspaceSidebar(): React.JSX.Element {
                                 {project.pinned ? (
                                   <Pin className="size-3.5 text-amber-500" />
                                 ) : null}
-                                <span className="text-muted-foreground/70">
+                                <span className="text-muted-foreground/80">
                                   {project.sshConnectionId ? 'SSH' : '本地'}
                                 </span>
                                 <span>{group.sessions.length}</span>
@@ -1500,7 +1493,7 @@ export function WorkspaceSidebar(): React.JSX.Element {
                   <span className="text-[9px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/80">
                     {t('sidebar.chats', { defaultValue: '聊天' })}
                   </span>
-                  <span className="rounded-full border border-border/60 bg-muted/30 px-1 py-0.5 text-[9px] text-muted-foreground">
+                  <span className="rounded-full border border-border/60 bg-muted/45 px-1 py-0.5 text-[9px] text-muted-foreground">
                     {chatSessions.length}
                   </span>
                 </div>
@@ -1595,7 +1588,7 @@ export function WorkspaceSidebar(): React.JSX.Element {
                 <Settings className="size-4 shrink-0" />
                 <span className="truncate">{t('sidebar.systemSettings')}</span>
               </span>
-              <span className="shrink-0 text-[10px] text-muted-foreground/70">
+              <span className="shrink-0 text-[10px] text-muted-foreground/80">
                 v{packageJson.version}
               </span>
             </Button>

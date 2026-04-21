@@ -116,6 +116,11 @@ import {
   updateRuntimeToolUseInput
 } from '@renderer/lib/agent/session-runtime-router'
 import { emitSessionRuntimeSync } from '@renderer/lib/session-runtime-sync'
+import {
+  emitSessionControlSync,
+  installSessionControlSyncListener,
+  type SessionControlSyncEvent
+} from '@renderer/lib/session-control-sync'
 import type { CompressionConfig } from '@renderer/lib/agent/context-compression'
 import { useChannelStore } from '@renderer/stores/channel-store'
 import { useAppPluginStore } from '@renderer/stores/app-plugin-store'
@@ -171,6 +176,7 @@ const sessionSidecarRunIds = new Map<string, string>()
 const longRunningVerificationPasses = new Map<string, number>()
 let sidecarApprovalListenerAttached = false
 let sidecarRendererToolListenerAttached = false
+let sessionControlListenerAttached = false
 
 function addMessageWithSync(sessionId: string, message: UnifiedMessage): void {
   useChatStore.getState().addMessage(sessionId, message)
@@ -1568,43 +1574,70 @@ export function dispatchNextQueuedMessageForSession(sessionId: string): boolean 
   return dispatchNextQueuedMessage(sessionId)
 }
 
-/**
- * Abort all running tasks for a specific session (agent loop + teammates).
- * Safe to call even if the session has nothing running.
- */
-export function abortSession(sessionId: string): void {
+function abortTeamForSession(sessionId: string, clearPendingApprovals = false): void {
+  const team = useTeamStore.getState().activeTeam
+  if (team?.sessionId !== sessionId) return
+
+  resetTeamAutoTrigger()
+  abortAllTeammates()
+
+  if (clearPendingApprovals) {
+    useAgentStore.getState().clearPendingApprovals()
+  }
+}
+
+function finishStoppingSession(sessionId: string): void {
   setPendingSessionDispatchPaused(sessionId, true)
 
-  // Abort session agent loop
   const ac = sessionAbortControllers.get(sessionId)
   if (ac) {
     ac.abort()
     sessionAbortControllers.delete(sessionId)
   }
+
   void cancelSidecarRun(sessionId)
-  // Clean up streaming / status state
   setStreamingMessageIdWithSync(sessionId, null)
   useAgentStore.getState().setSessionStatus(sessionId, null)
 
-  // Clear any pending AskUserQuestion promises
   clearPendingQuestions()
 
-  // If the active team belongs to this session, abort all teammates
-  const team = useTeamStore.getState().activeTeam
-  if (team?.sessionId === sessionId) {
-    resetTeamAutoTrigger()
-    abortAllTeammates()
-    useAgentStore.getState().clearPendingApprovals()
-  }
-
-  // Derive global isRunning from remaining running sessions
   const hasOtherRunning = Object.values(useAgentStore.getState().runningSessions).some(
-    (s) => s === 'running'
+    (status) => status === 'running'
   )
   if (!hasOtherRunning) {
     useAgentStore.getState().setRunning(false)
     useAgentStore.getState().abort()
   }
+}
+
+function stopSessionLocally(sessionId: string): void {
+  finishStoppingSession(sessionId)
+  abortTeamForSession(sessionId)
+}
+
+function abortSessionLocally(sessionId: string): void {
+  finishStoppingSession(sessionId)
+  abortTeamForSession(sessionId, true)
+}
+
+function applySessionControlSyncEvent(event: SessionControlSyncEvent): void {
+  switch (event.kind) {
+    case 'stop_streaming':
+      stopSessionLocally(event.sessionId)
+      return
+    case 'abort_session':
+      abortSessionLocally(event.sessionId)
+      return
+  }
+}
+
+/**
+ * Abort all running tasks for a specific session (agent loop + teammates).
+ * Safe to call even if the session has nothing running.
+ */
+export function abortSession(sessionId: string): void {
+  abortSessionLocally(sessionId)
+  emitSessionControlSync({ kind: 'abort_session', sessionId })
 }
 
 // 60fps flush causes expensive markdown + layout work during panel resizing.
@@ -4068,7 +4101,23 @@ export function useChatActions(): {
       attachRendererProviderBridge()
       sidecarRendererToolListenerAttached = true
     }
+  }, [])
 
+  useEffect(() => {
+    if (sessionControlListenerAttached) return
+    sessionControlListenerAttached = true
+
+    const off = installSessionControlSyncListener((event) => {
+      applySessionControlSyncEvent(event)
+    })
+
+    return () => {
+      sessionControlListenerAttached = false
+      off()
+    }
+  }, [])
+
+  useEffect(() => {
     if (sidecarApprovalListenerAttached) return
     sidecarApprovalListenerAttached = true
 
@@ -4146,32 +4195,9 @@ export function useChatActions(): {
     // Stop the active session's agent
     const activeId = useChatStore.getState().activeSessionId
     if (activeId) {
-      setPendingSessionDispatchPaused(activeId, true)
-      const ac = sessionAbortControllers.get(activeId)
-      if (ac) {
-        ac.abort()
-        sessionAbortControllers.delete(activeId)
-      }
-      void cancelSidecarRun(activeId)
-      setStreamingMessageIdWithSync(activeId, null)
-      useAgentStore.getState().setSessionStatus(activeId, null)
+      stopSessionLocally(activeId)
+      emitSessionControlSync({ kind: 'stop_streaming', sessionId: activeId })
     }
-    // Only do global abort (which denies ALL pending approvals) when
-    // no other sessions are still running — prevents cross-session interference.
-    const otherRunning = Object.entries(useAgentStore.getState().runningSessions).some(
-      ([id, s]) => id !== activeId && s === 'running'
-    )
-    if (!otherRunning) {
-      useAgentStore.getState().setRunning(false)
-      useAgentStore.getState().abort()
-    }
-    // Clear any pending AskUserQuestion promises so they don't hang
-    clearPendingQuestions()
-    // Reset team auto-trigger BEFORE aborting teammates.
-    // abortAllTeammates() causes each teammate's finally block to run,
-    // and we must ensure the queue is paused so no new turns are triggered.
-    resetTeamAutoTrigger()
-    abortAllTeammates()
   }, [])
 
   const continueLastToolExecution = useCallback(async () => {
