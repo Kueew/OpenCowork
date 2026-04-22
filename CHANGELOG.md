@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.7] - 2026-04-22
+
+### Added
+
+- Added Responses image generation support and connected it to the streaming preview/config flow.
+- Added richer SSH workstation capabilities, including cross-host transport, split-window sync, and theme synchronization.
+
+### Changed
+
+- Refactored the SSH and terminal systems to support more unified workspace behavior across local and remote sessions.
+- Improved SSH connection inspection, file browsing, SFTP workspace flows, terminal status panels, and related i18n coverage.
+- Updated theme presets and runtime theme sync so UI appearance stays consistent across layout and settings surfaces.
+- Reworked provider, settings, and chat-side flows to align with the new image-generation and SSH experience.
+
+### Fixed
+
+- Fixed several SSH, terminal, and session-store edge cases during navigation, switching, and remote workspace usage.
+- Fixed response-stream integration details so image-generation and related protocol changes remain compatible.
+
 ## [0.9.6] - 2026-04-21
 
 ### Added
