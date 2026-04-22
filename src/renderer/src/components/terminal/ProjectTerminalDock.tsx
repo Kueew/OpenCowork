@@ -2,6 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, MonitorSmartphone, Plus, SquareTerminal, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@renderer/components/ui/button'
+import {
+  BOTTOM_TERMINAL_DOCK_MAX_HEIGHT,
+  BOTTOM_TERMINAL_DOCK_MIN_HEIGHT,
+  clampBottomTerminalDockHeight
+} from '@renderer/components/layout/right-panel-defs'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { cn } from '@renderer/lib/utils'
 import {
@@ -20,7 +25,13 @@ import { useUIStore } from '@renderer/stores/ui-store'
 import { LocalTerminal } from './LocalTerminal'
 import { SshTerminal } from '../ssh/SshTerminal'
 
-const PROJECT_TERMINAL_DOCK_HEIGHT = 220
+function getViewportTerminalDockMaxHeight(): number {
+  if (typeof window === 'undefined') return BOTTOM_TERMINAL_DOCK_MAX_HEIGHT
+  return Math.max(
+    BOTTOM_TERMINAL_DOCK_MIN_HEIGHT,
+    Math.min(BOTTOM_TERMINAL_DOCK_MAX_HEIGHT, Math.floor(window.innerHeight * 0.72))
+  )
+}
 
 function StatusDot({
   status
@@ -77,7 +88,13 @@ export function ProjectTerminalDock({
   const setSshActiveTab = useSshStore((s) => s.setActiveTab)
 
   const setBottomTerminalDockOpen = useUIStore((s) => s.setBottomTerminalDockOpen)
+  const bottomTerminalDockHeight = useUIStore((s) => s.bottomTerminalDockHeight)
+  const setBottomTerminalDockHeight = useUIStore((s) => s.setBottomTerminalDockHeight)
   const [isEnsuringTerminal, setIsEnsuringTerminal] = useState(false)
+  const [isResizing, setIsResizing] = useState(false)
+  const resizeActiveRef = useRef(false)
+  const resizeStartYRef = useRef(0)
+  const resizeStartHeightRef = useRef(bottomTerminalDockHeight)
 
   useEffect(() => {
     initTerminal()
@@ -88,6 +105,47 @@ export function ProjectTerminalDock({
       void loadSsh()
     }
   }, [sshLoaded, loadSsh])
+
+  useEffect(() => {
+    const handleWindowResize = (): void => {
+      const nextHeight = clampBottomTerminalDockHeight(
+        useUIStore.getState().bottomTerminalDockHeight,
+        getViewportTerminalDockMaxHeight()
+      )
+      setBottomTerminalDockHeight(nextHeight)
+    }
+
+    window.addEventListener('resize', handleWindowResize)
+    handleWindowResize()
+    return () => {
+      window.removeEventListener('resize', handleWindowResize)
+    }
+  }, [setBottomTerminalDockHeight])
+
+  useEffect(() => {
+    if (!isResizing) return
+
+    const handleMouseMove = (event: MouseEvent): void => {
+      if (!resizeActiveRef.current) return
+      const delta = resizeStartYRef.current - event.clientY
+      const nextHeight = resizeStartHeightRef.current + delta
+      setBottomTerminalDockHeight(
+        clampBottomTerminalDockHeight(nextHeight, getViewportTerminalDockMaxHeight())
+      )
+    }
+
+    const handleMouseUp = (): void => {
+      resizeActiveRef.current = false
+      setIsResizing(false)
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [isResizing, setBottomTerminalDockHeight])
 
   const tabs = useMemo(
     () =>
@@ -203,10 +261,27 @@ export function ProjectTerminalDock({
     [closeLocalTab, closeSshSession, closeSshTab]
   )
 
+  const startResize = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>): void => {
+      event.preventDefault()
+      resizeActiveRef.current = true
+      resizeStartYRef.current = event.clientY
+      resizeStartHeightRef.current = bottomTerminalDockHeight
+      setIsResizing(true)
+    },
+    [bottomTerminalDockHeight]
+  )
+
   return (
-    <div className="shrink-0 border-t border-border/55 bg-background/95 backdrop-blur-sm">
-      <div className="flex flex-col" style={{ height: PROJECT_TERMINAL_DOCK_HEIGHT }}>
-        <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/45 px-3">
+    <div
+      className={cn(
+        'workspace-terminal-dock relative shrink-0',
+        isResizing && 'workspace-terminal-dock--resizing select-none'
+      )}
+    >
+      <div className="workspace-terminal-resize-handle" onMouseDown={startResize} />
+      <div className="flex flex-col" style={{ height: bottomTerminalDockHeight }}>
+        <div className="workspace-terminal-header flex h-10 shrink-0 items-center gap-2 px-3">
           <div className="min-w-0 flex-1 overflow-x-auto [scrollbar-width:none]">
             <div className="flex min-w-max items-center gap-1">
               {tabs.map((tab) => (
@@ -214,10 +289,8 @@ export function ProjectTerminalDock({
                   key={tab.id}
                   type="button"
                   className={cn(
-                    'group inline-flex h-7 items-center gap-2 rounded-[10px] px-2.5 text-xs transition-colors',
-                    tab.id === activeTab?.id
-                      ? 'bg-muted text-foreground shadow-[inset_0_0_0_1px_rgba(0,0,0,0.05)]'
-                      : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
+                    'workspace-terminal-tab group inline-flex h-7 items-center gap-2 rounded-[10px] px-2.5 text-xs transition-colors',
+                    tab.id === activeTab?.id && 'workspace-terminal-tab--active'
                   )}
                   onClick={() => handleSetActive(tab)}
                   title={`${tab.title} · ${tab.meta}`}
@@ -232,7 +305,7 @@ export function ProjectTerminalDock({
                   <span
                     role="button"
                     tabIndex={0}
-                    className="shrink-0 rounded p-0.5 text-muted-foreground/70 transition-colors hover:bg-muted/70 hover:text-foreground"
+                    className="workspace-terminal-action shrink-0 rounded p-0.5 transition-colors"
                     onClick={(event) => {
                       event.stopPropagation()
                       void handleCloseTab(tab)
@@ -254,7 +327,7 @@ export function ProjectTerminalDock({
                   <Button
                     variant="ghost"
                     size="icon-xs"
-                    className="size-7 rounded-[10px] text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                    className="workspace-terminal-action size-7 rounded-[10px]"
                     onClick={handleCreateTerminal}
                     disabled={!sshConnectionId && !workingFolder}
                   >
@@ -272,7 +345,7 @@ export function ProjectTerminalDock({
                 <Button
                   variant="ghost"
                   size="icon-xs"
-                  className="size-7 rounded-[10px] text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                  className="workspace-terminal-action size-7 rounded-[10px]"
                   onClick={() => setBottomTerminalDockOpen(projectId, false)}
                 >
                   <ChevronDown className="size-3.5" />
@@ -339,6 +412,7 @@ export function ProjectTerminalDock({
           )}
         </div>
       </div>
+      {isResizing && <div className="fixed inset-0 z-[100] cursor-row-resize" />}
     </div>
   )
 }

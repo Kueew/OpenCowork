@@ -17,6 +17,10 @@ export type AppPluginToolName =
   | typeof DESKTOP_SCROLL_TOOL_NAME
   | typeof DESKTOP_WAIT_TOOL_NAME
 
+export function isAppPluginEnabledByDefault(id: AppPluginId): boolean {
+  return id === IMAGE_PLUGIN_ID
+}
+
 export interface AppPluginDescriptor {
   id: AppPluginId
   builtin: true

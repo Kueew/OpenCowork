@@ -158,7 +158,7 @@ function DepthGuides({ depth }: { depth: number }): React.JSX.Element | null {
       {Array.from({ length: depth }).map((_, index) => (
         <span
           key={index}
-          className="absolute inset-y-0 w-px bg-border/50"
+          className="workspace-filetree-guide absolute inset-y-0 w-px"
           style={{ left: `${index * 14 + 9}px` }}
         />
       ))}
@@ -203,7 +203,7 @@ function InlineInput({
       {icon}
       <input
         ref={ref}
-        className="flex-1 min-w-0 bg-muted/60 border border-border rounded px-1 py-0 text-[12px] text-foreground outline-none focus:ring-1 focus:ring-ring"
+        className="workspace-filetree-input flex-1 min-w-0 rounded border px-1 py-0 text-[12px] text-foreground outline-none focus:ring-1 focus:ring-ring"
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => {
@@ -277,13 +277,13 @@ function TreeItem({
   const rowContent = (
     <div
       className={cn(
-        'group relative flex items-center gap-2 rounded-xl border px-2 py-1.5 text-[12px] transition-all',
+        'workspace-filetree-row group relative flex items-center gap-2 rounded-xl px-2 py-1.5 text-[12px] transition-all',
         isDir ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing',
         isActive
-          ? 'border-primary/25 bg-primary/10 text-foreground shadow-sm'
+          ? 'workspace-filetree-row--active text-foreground'
           : isDir && node.expanded
-            ? 'border-border/50 bg-muted/35'
-            : 'border-transparent hover:border-border/50 hover:bg-muted/55',
+            ? 'workspace-filetree-row--expanded workspace-filetree-row--interactive'
+            : 'workspace-filetree-row--interactive',
         isIgnored && 'opacity-40'
       )}
       style={{ paddingLeft: `${depth * 14 + 6}px` }}
@@ -299,7 +299,7 @@ function TreeItem({
       <DepthGuides depth={depth} />
       {depth > 0 && (
         <span
-          className="absolute top-1/2 h-px w-2 bg-border/60 pointer-events-none"
+          className="workspace-filetree-guide absolute top-1/2 h-px w-2 pointer-events-none"
           style={{ left: `${(depth - 1) * 14 + 9}px` }}
         />
       )}
@@ -327,7 +327,7 @@ function TreeItem({
       {isRenaming ? (
         <input
           autoFocus
-          className="flex-1 min-w-0 bg-muted/60 border border-border rounded px-1 py-0 text-[12px] text-foreground outline-none focus:ring-1 focus:ring-ring"
+          className="workspace-filetree-input flex-1 min-w-0 rounded border px-1 py-0 text-[12px] text-foreground outline-none focus:ring-1 focus:ring-ring"
           defaultValue={node.name}
           onClick={(e) => e.stopPropagation()}
           onKeyDown={(e) => {
@@ -355,7 +355,7 @@ function TreeItem({
             {node.name}
           </span>
           {!isDir && (
-            <span className="rounded-full border border-border/50 bg-background/70 px-1.5 py-0.5 text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100">
+            <span className="workspace-filetree-chip rounded-full px-1.5 py-0.5 text-[10px] opacity-0 transition-opacity group-hover:opacity-100">
               {t('fileTree.dragToReference')}
             </span>
           )}
@@ -364,7 +364,7 @@ function TreeItem({
 
       {!isDir && !isRenaming && (
         <button
-          className="shrink-0 rounded-md p-1 text-muted-foreground/35 opacity-0 transition-all hover:bg-muted hover:text-muted-foreground group-hover:opacity-100"
+          className="workspace-filetree-action shrink-0 rounded-md p-1 opacity-0 transition-all group-hover:opacity-100"
           onClick={(e) => {
             e.stopPropagation()
             handleCopy()
@@ -825,7 +825,7 @@ export function FileTreePanel({
 
   if (!workingFolder) {
     return (
-      <div className="flex flex-col items-center justify-center gap-2 py-8 text-muted-foreground/60">
+      <div className="workspace-filetree-empty flex flex-col items-center justify-center gap-2 rounded-xl py-8 text-muted-foreground/70">
         <FolderPlus className="size-8" />
         <p className="text-xs">{t('fileTree.selectFolder')}</p>
       </div>
@@ -836,18 +836,16 @@ export function FileTreePanel({
     <div className="flex h-full min-h-0 flex-col">
       <div
         className={cn(
-          'flex min-h-0 flex-1 flex-col overflow-hidden',
+          'workspace-filetree-surface flex min-h-0 flex-1 flex-col overflow-hidden',
           compactSheetSurface
-            ? 'bg-background'
-            : 'rounded-[20px] border border-border/60 bg-background/70 shadow-[0_10px_30px_rgba(0,0,0,0.12)]'
+            ? 'workspace-filetree-surface--sheet'
+            : 'workspace-filetree-surface--card rounded-[20px]'
         )}
       >
         <div
           className={cn(
-            'border-b border-border/60',
-            compactSheetSurface
-              ? 'bg-background px-3 py-3'
-              : 'bg-gradient-to-b from-muted/30 to-background/30 px-3 py-3'
+            'workspace-filetree-header',
+            compactSheetSurface ? 'px-3 py-3' : 'px-3 py-3'
           )}
         >
           {!compactSheetSurface && (
@@ -864,7 +862,7 @@ export function FileTreePanel({
                     >
                       {workingFolder.split(/[\\/]/).pop()}
                     </div>
-                    <span className="rounded-full border border-primary/15 bg-primary/8 px-1.5 py-0.5 text-[10px] text-primary/80">
+                    <span className="workspace-filetree-chip rounded-full px-1.5 py-0.5 text-[10px]">
                       {t('fileTree.dragToReference')}
                     </span>
                   </div>
@@ -902,10 +900,10 @@ export function FileTreePanel({
               </div>
 
               <div className="mt-3 flex items-center gap-2 text-[10px] text-muted-foreground">
-                <span className="rounded-full border border-border/60 bg-background/80 px-2 py-1">
+                <span className="workspace-filetree-chip rounded-full px-2 py-1">
                   {treeStats.folders} {t('unit.folders', { ns: 'common' })}
                 </span>
-                <span className="rounded-full border border-border/60 bg-background/80 px-2 py-1">
+                <span className="workspace-filetree-chip rounded-full px-2 py-1">
                   {treeStats.files} {t('unit.files', { ns: 'common' })}
                 </span>
                 {isSearching && (
@@ -923,12 +921,12 @@ export function FileTreePanel({
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
               placeholder={t('fileTree.searchPlaceholder', { defaultValue: '搜索文件名或路径' })}
-              className="h-9 rounded-xl border-border/60 bg-background/70 pl-9 pr-9 text-sm"
+              className="workspace-filetree-input h-9 rounded-xl pl-9 pr-9 text-sm"
             />
             {searchQuery && (
               <button
                 type="button"
-                className="absolute right-2 top-1/2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                className="workspace-filetree-action absolute right-2 top-1/2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-md transition-colors"
                 onClick={() => setSearchQuery('')}
               >
                 <X className="size-3.5" />
@@ -938,7 +936,7 @@ export function FileTreePanel({
         </div>
 
         {error && (
-          <div className="flex items-center gap-1.5 border-b border-border/50 px-3 py-2 text-[11px] text-destructive">
+          <div className="workspace-filetree-header flex items-center gap-1.5 px-3 py-2 text-[11px] text-destructive">
             <AlertCircle className="size-3 shrink-0" />
             <span className="truncate">{error}</span>
           </div>
@@ -956,12 +954,12 @@ export function FileTreePanel({
             </div>
           ) : isSearching ? (
             searchLoading ? (
-              <div className="flex items-center gap-2 rounded-xl border border-border/60 bg-muted/20 px-3 py-3 text-xs text-muted-foreground">
+              <div className="workspace-filetree-empty flex items-center gap-2 rounded-xl px-3 py-3 text-xs text-muted-foreground">
                 <RefreshCw className="size-3.5 animate-spin" />
                 <span>{t('fileTree.searching', { defaultValue: '搜索文件中...' })}</span>
               </div>
             ) : searchResults.length === 0 ? (
-              <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border/60 bg-muted/15 px-4 py-10 text-center">
+              <div className="workspace-filetree-empty workspace-filetree-empty--dashed flex flex-col items-center justify-center gap-2 rounded-xl px-4 py-10 text-center">
                 <Search className="size-5 text-muted-foreground/50" />
                 <div className="text-xs text-muted-foreground">
                   {t('fileTree.noSearchResults', { defaultValue: '没有匹配的文件' })}
@@ -977,10 +975,10 @@ export function FileTreePanel({
                       key={file.path}
                       type="button"
                       className={cn(
-                        'group flex w-full items-center gap-2 rounded-xl border px-2.5 py-2 text-left transition-all',
+                        'workspace-filetree-row group flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left transition-all',
                         isActive
-                          ? 'border-primary/25 bg-primary/10 shadow-sm'
-                          : 'border-transparent bg-background/50 hover:border-border/50 hover:bg-muted/55'
+                          ? 'workspace-filetree-row--active'
+                          : 'workspace-filetree-row--interactive'
                       )}
                       draggable
                       onDragStart={(event) => handleFileDragStart(event, file.path)}
@@ -997,7 +995,7 @@ export function FileTreePanel({
                           {relativePath}
                         </div>
                       </div>
-                      <span className="rounded-full border border-border/60 bg-background/80 px-1.5 py-0.5 text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100">
+                      <span className="workspace-filetree-chip rounded-full px-1.5 py-0.5 text-[10px] opacity-0 transition-opacity group-hover:opacity-100">
                         {t('fileTree.dragToReference')}
                       </span>
                     </button>
@@ -1006,7 +1004,7 @@ export function FileTreePanel({
               </div>
             )
           ) : tree.length === 0 ? (
-            <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border/60 bg-muted/15 px-4 py-10 text-center">
+            <div className="workspace-filetree-empty workspace-filetree-empty--dashed flex flex-col items-center justify-center gap-2 rounded-xl px-4 py-10 text-center">
               <Folder className="size-5 text-muted-foreground/50" />
               <div className="text-xs text-muted-foreground">
                 {t('fileTree.empty', { defaultValue: '当前目录没有文件' })}
@@ -1033,7 +1031,7 @@ export function FileTreePanel({
         </div>
 
         {!compactSheetSurface && (
-          <div className="border-t border-border/60 bg-background/40 px-3 py-2 text-[10px] text-muted-foreground/80">
+          <div className="workspace-filetree-footer px-3 py-2 text-[10px] text-muted-foreground/80">
             {isSearching
               ? t('fileTree.searchHint', { defaultValue: '点击预览，拖到输入框可插入文件引用' })
               : t('fileTree.stats', {

@@ -159,7 +159,7 @@ export function WorkingFolderSheet({
       style={{ width: open ? panelWidth : 0 }}
     >
       <aside
-        className={`relative flex h-full w-[420px] flex-col border-l border-border/60 bg-background/92 backdrop-blur-xl transition-opacity duration-200 ${
+        className={`workspace-folder-sheet relative flex h-full w-[420px] flex-col border-l transition-opacity duration-200 ${
           open ? 'opacity-100' : 'pointer-events-none opacity-0'
         }`}
         style={{ width: panelWidth }}
@@ -176,7 +176,7 @@ export function WorkingFolderSheet({
             )
           ) : (
             <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-              <div className="flex size-12 items-center justify-center rounded-2xl border border-border/60 bg-muted/25">
+              <div className="workspace-filetree-empty flex size-12 items-center justify-center rounded-2xl">
                 <FolderTree className="size-5 text-muted-foreground" />
               </div>
               <div>
@@ -192,7 +192,7 @@ export function WorkingFolderSheet({
 
         {open && (
           <div
-            className="absolute bottom-0 left-0 top-0 z-20 w-1.5 cursor-col-resize transition-colors hover:bg-primary/30"
+            className="workspace-folder-sheet-resize absolute bottom-0 left-0 top-0 z-20 w-1.5 cursor-col-resize transition-colors"
             onMouseDown={startResize}
           />
         )}

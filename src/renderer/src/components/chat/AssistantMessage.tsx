@@ -1186,7 +1186,12 @@ export function AssistantMessage({
         : (generatingImagePreview?.source.url ?? '')
 
     if (shouldShowImageGeneratingLoader && hasEmptyContent) {
-      return <ImageGeneratingLoader previewSrc={generatingImagePreviewSrc || undefined} />
+      return (
+        <ImageGeneratingLoader
+          previewSrc={generatingImagePreviewSrc || undefined}
+          previewFilePath={generatingImagePreview?.source.filePath}
+        />
+      )
     }
 
     if (generatingImagePreviewSrc && hasEmptyContent) {
@@ -1690,7 +1695,10 @@ export function AssistantMessage({
         {isStreaming && <span className={getLiveOutputCursorClass(liveOutputAnimationStyle)} />}
         {shouldShowImageGeneratingLoader && (
           <div className="pt-3">
-            <ImageGeneratingLoader previewSrc={generatingImagePreviewSrc || undefined} />
+            <ImageGeneratingLoader
+              previewSrc={generatingImagePreviewSrc || undefined}
+              previewFilePath={generatingImagePreview?.source.filePath}
+            />
           </div>
         )}
       </div>

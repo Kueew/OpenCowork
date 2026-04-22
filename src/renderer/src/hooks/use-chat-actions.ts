@@ -644,6 +644,133 @@ function resolveDebugContextWindowPayload(debugInfo?: RequestDebugInfo | null): 
   return null
 }
 
+interface ContextEstimatePayloadInfo {
+  serialized: string
+  hadBase64Payload: boolean
+}
+
+const CONTEXT_ESTIMATE_BASE64_DATA_URL_PATTERN = /^data:([^;,]+);base64,/i
+const CONTEXT_ESTIMATE_BASE64_VALUE_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/
+const CONTEXT_ESTIMATE_BASE64_MIN_LENGTH = 256
+const CONTEXT_ESTIMATE_BASE64_PLACEHOLDER = '[base64 omitted]'
+const CONTEXT_ESTIMATE_DATA_URL_PLACEHOLDER = '[image omitted]'
+const CONTEXT_ESTIMATE_BINARY_KEYS = new Set(['data', 'result'])
+
+function isLikelyBase64Payload(value: string): boolean {
+  const normalized = value.replace(/\s+/g, '')
+  if (normalized.length < CONTEXT_ESTIMATE_BASE64_MIN_LENGTH) return false
+  if (normalized.length % 4 !== 0) return false
+  return CONTEXT_ESTIMATE_BASE64_VALUE_PATTERN.test(normalized)
+}
+
+function sanitizeContextEstimateString(args: {
+  value: string
+  key?: string
+  parentType?: string
+}): { sanitized: string; hadBase64Payload: boolean } {
+  const trimmed = args.value.trim()
+  if (CONTEXT_ESTIMATE_BASE64_DATA_URL_PATTERN.test(trimmed)) {
+    return {
+      sanitized: CONTEXT_ESTIMATE_DATA_URL_PLACEHOLDER,
+      hadBase64Payload: true
+    }
+  }
+
+  const shouldSanitizeRawBase64 =
+    (CONTEXT_ESTIMATE_BINARY_KEYS.has(args.key ?? '') ||
+      (args.parentType === 'image_generation_call' && args.key === 'result')) &&
+    isLikelyBase64Payload(trimmed)
+  if (shouldSanitizeRawBase64) {
+    return {
+      sanitized: CONTEXT_ESTIMATE_BASE64_PLACEHOLDER,
+      hadBase64Payload: true
+    }
+  }
+
+  return {
+    sanitized: args.value,
+    hadBase64Payload: false
+  }
+}
+
+function sanitizeContextEstimateValue(
+  value: unknown,
+  key?: string,
+  parentType?: string
+): { sanitized: unknown; hadBase64Payload: boolean } {
+  if (typeof value === 'string') {
+    const sanitized = sanitizeContextEstimateString({ value, key, parentType })
+    return {
+      sanitized: sanitized.sanitized,
+      hadBase64Payload: sanitized.hadBase64Payload
+    }
+  }
+
+  if (Array.isArray(value)) {
+    let hadBase64Payload = false
+    const sanitized = value.map((entry) => {
+      const next = sanitizeContextEstimateValue(entry, key, parentType)
+      hadBase64Payload ||= next.hadBase64Payload
+      return next.sanitized
+    })
+    return { sanitized, hadBase64Payload }
+  }
+
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    const childParentType = typeof record.type === 'string' ? record.type : parentType
+    let hadBase64Payload = false
+    const sanitized: Record<string, unknown> = {}
+    for (const [childKey, childValue] of Object.entries(record)) {
+      const next = sanitizeContextEstimateValue(childValue, childKey, childParentType)
+      sanitized[childKey] = next.sanitized
+      hadBase64Payload ||= next.hadBase64Payload
+    }
+    return { sanitized, hadBase64Payload }
+  }
+
+  return { sanitized: value, hadBase64Payload: false }
+}
+
+function serializeContextEstimatePayload(value: unknown): ContextEstimatePayloadInfo {
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value) as unknown
+      const sanitized = sanitizeContextEstimateValue(parsed)
+      return {
+        serialized: JSON.stringify(sanitized.sanitized),
+        hadBase64Payload: sanitized.hadBase64Payload
+      }
+    } catch {
+      const sanitized = sanitizeContextEstimateString({ value })
+      return {
+        serialized: sanitized.sanitized,
+        hadBase64Payload: sanitized.hadBase64Payload
+      }
+    }
+  }
+
+  try {
+    const sanitized = sanitizeContextEstimateValue(value)
+    return {
+      serialized: JSON.stringify(sanitized.sanitized),
+      hadBase64Payload: sanitized.hadBase64Payload
+    }
+  } catch {
+    return {
+      serialized: String(value ?? ''),
+      hadBase64Payload: false
+    }
+  }
+}
+
+function resolveDebugContextEstimatePayload(
+  debugInfo?: RequestDebugInfo | null
+): ContextEstimatePayloadInfo | null {
+  const payload = resolveDebugContextWindowPayload(debugInfo)
+  return payload ? serializeContextEstimatePayload(payload) : null
+}
+
 interface ApiRequestResult {
   statusCode?: number
   body?: string
@@ -680,7 +807,7 @@ function buildResponsesInputTokensRequestBody(debugInfo?: RequestDebugInfo | nul
   delete parsed.stream
   delete parsed.background
 
-  return JSON.stringify(parsed)
+  return serializeContextEstimatePayload(parsed).serialized
 }
 
 function buildResponsesInputTokensHeaders(
@@ -773,15 +900,6 @@ function shouldUseEstimatedContextTokens(debugInfo?: RequestDebugInfo | null): b
   return debugInfo?.transport === 'websocket' && !!resolveDebugContextWindowPayload(debugInfo)
 }
 
-function serializeContextEstimatePayload(value: unknown): string {
-  if (typeof value === 'string') return value
-  try {
-    return JSON.stringify(value)
-  } catch {
-    return String(value ?? '')
-  }
-}
-
 function estimateContextTokensForRequest(args: {
   messages: UnifiedMessage[]
   tools: ToolDefinition[]
@@ -796,7 +914,7 @@ function estimateContextTokensForRequest(args: {
       messages: provider.formatMessages(args.messages),
       ...(args.tools.length > 0 ? { tools: provider.formatTools(args.tools) } : {})
     }
-    return estimateTokens(serializeContextEstimatePayload(payload))
+    return estimateTokens(serializeContextEstimatePayload(payload).serialized)
   } catch (error) {
     console.warn('[ChatActions] Failed to estimate request context tokens', error)
     return 0
@@ -825,15 +943,29 @@ function estimateCurrentIterationContextTokens(args: {
   })
 }
 
-function estimateContextTokensFromDebugInfo(debugInfo?: RequestDebugInfo | null): number {
-  const payload = resolveDebugContextWindowPayload(debugInfo)
-  if (!payload) return 0
+function estimateContextTokensFromDebugInfo(debugInfo?: RequestDebugInfo | null): {
+  tokenCount: number
+  hadBase64Payload: boolean
+} {
+  const payload = resolveDebugContextEstimatePayload(debugInfo)
+  if (!payload) {
+    return {
+      tokenCount: 0,
+      hadBase64Payload: false
+    }
+  }
 
   try {
-    return estimateTokens(payload)
+    return {
+      tokenCount: estimateTokens(payload.serialized),
+      hadBase64Payload: payload.hadBase64Payload
+    }
   } catch (error) {
     console.warn('[ChatActions] Failed to estimate debug context tokens', error)
-    return 0
+    return {
+      tokenCount: 0,
+      hadBase64Payload: payload.hadBase64Payload
+    }
   }
 }
 
@@ -842,14 +974,14 @@ function normalizeUsageWithEstimatedContext(args: {
   contextLength?: number
   debugInfo?: RequestDebugInfo | null
   estimatedContextTokens?: number
+  preferEstimatedContextTokens?: boolean
 }): TokenUsage {
   const normalized = normalizeUsageForPersistence(args.usage, args.contextLength)
   const estimatedContextTokens = args.estimatedContextTokens ?? 0
   if (shouldUseEstimatedContextTokens(args.debugInfo) && estimatedContextTokens > 0) {
-    normalized.contextTokens = Math.max(
-      normalized.contextTokens ?? normalized.inputTokens,
-      estimatedContextTokens
-    )
+    normalized.contextTokens = args.preferEstimatedContextTokens
+      ? estimatedContextTokens
+      : Math.max(normalized.contextTokens ?? normalized.inputTokens, estimatedContextTokens)
   }
   return normalized
 }
@@ -1186,6 +1318,8 @@ interface RetryAssistantTarget {
   draft: EditableUserMessageDraft
 }
 
+type ChatStoreState = ReturnType<typeof useChatStore.getState>
+
 interface ResolvedUserCommand {
   command: SystemCommandSnapshot | null
   userText: string
@@ -1309,6 +1443,39 @@ function findRetryAssistantTarget(
     userIndex,
     draft: extractEditableUserMessageDraft(messages[userIndex].content)
   }
+}
+
+function shouldReloadSessionMessagesForMutation(
+  chatStore: ChatStoreState,
+  sessionId: string
+): boolean {
+  const session = chatStore.sessions.find((item) => item.id === sessionId)
+  if (!session) return false
+
+  const knownCount = session.messageCount ?? session.messages.length
+  return (
+    !session.messagesLoaded ||
+    session.messages.length === 0 ||
+    session.loadedRangeStart > 0 ||
+    session.loadedRangeEnd < knownCount
+  )
+}
+
+async function resolveSessionMessageTarget<T>(
+  chatStore: ChatStoreState,
+  sessionId: string,
+  resolver: (messages: UnifiedMessage[]) => T | null
+): Promise<{ messages: UnifiedMessage[]; target: T | null }> {
+  let messages = chatStore.getSessionMessages(sessionId)
+  let target = resolver(messages)
+  if (target || !shouldReloadSessionMessagesForMutation(chatStore, sessionId)) {
+    return { messages, target }
+  }
+
+  await chatStore.loadSessionMessages(sessionId, true)
+  messages = chatStore.getSessionMessages(sessionId)
+  target = resolver(messages)
+  return { messages, target }
 }
 
 function buildDeletedMessages(
@@ -3801,11 +3968,14 @@ export function useChatActions(): {
                 if (isSessionForeground(sessionId!)) {
                   setGeneratingImageWithSync(assistantMsgId, false)
                 }
+                const debugContextEstimate = shouldUseEstimatedContextTokens(lastRequestDebugInfo)
+                  ? estimateContextTokensFromDebugInfo(lastRequestDebugInfo)
+                  : null
                 const estimatedContextTokens =
                   preciseContextTokens && preciseContextTokens > 0
                     ? preciseContextTokens
-                    : shouldUseEstimatedContextTokens(lastRequestDebugInfo)
-                      ? estimateContextTokensFromDebugInfo(lastRequestDebugInfo) ||
+                    : debugContextEstimate
+                      ? debugContextEstimate.tokenCount ||
                         estimateCurrentIterationContextTokens({
                           sessionId: sessionId!,
                           assistantMessageId: assistantMsgId,
@@ -3818,7 +3988,8 @@ export function useChatActions(): {
                       usage: event.usage,
                       contextLength: compressionContextLength,
                       debugInfo: lastRequestDebugInfo,
-                      estimatedContextTokens
+                      estimatedContextTokens,
+                      preferEstimatedContextTokens: debugContextEstimate?.hadBase64Payload ?? false
                     })
                   : null
                 if (event.usage) {
@@ -3905,14 +4076,18 @@ export function useChatActions(): {
                   currentUsageModelId = event.debugInfo.model ?? currentUsageModelId
                   setLastDebugInfo(assistantMsgId, event.debugInfo)
                   if (shouldUseEstimatedContextTokens(lastRequestDebugInfo)) {
+                    const debugContextEstimate =
+                      estimateContextTokensFromDebugInfo(lastRequestDebugInfo)
+                    const provisionalContextTokens =
+                      debugContextEstimate.tokenCount ||
+                      estimateCurrentIterationContextTokens({
+                        sessionId: sessionId!,
+                        assistantMessageId: assistantMsgId,
+                        tools: effectiveToolDefs,
+                        providerConfig: agentProviderConfig
+                      })
                     const provisionalUsage = buildStreamingContextUsage(
-                      estimateContextTokensFromDebugInfo(lastRequestDebugInfo) ||
-                        estimateCurrentIterationContextTokens({
-                          sessionId: sessionId!,
-                          assistantMessageId: assistantMsgId,
-                          tools: effectiveToolDefs,
-                          providerConfig: agentProviderConfig
-                        }),
+                      provisionalContextTokens,
                       compressionContextLength
                     )
                     if (provisionalUsage) {
@@ -4450,24 +4625,24 @@ export function useChatActions(): {
       if (!sessionId) return
 
       clearPendingSessionMessages(sessionId)
-      await chatStore.loadRecentSessionMessages(sessionId)
-      const messages = chatStore.getSessionMessages(sessionId)
-      const target = assistantMessageId
-        ? findRetryAssistantTarget(messages, assistantMessageId)
-        : (() => {
-            const lastEditable = findLastEditableUserMessage(messages)
-            if (!lastEditable) return null
-            const assistantIndex = messages.findLastIndex((message, index) => {
-              if (index <= lastEditable.index) return false
-              return message.role === 'assistant'
-            })
-            if (assistantIndex < 0) return null
-            return {
-              assistantIndex,
-              userIndex: lastEditable.index,
-              draft: lastEditable.draft
-            }
-          })()
+      const { target } = await resolveSessionMessageTarget(chatStore, sessionId, (messages) =>
+        assistantMessageId
+          ? findRetryAssistantTarget(messages, assistantMessageId)
+          : (() => {
+              const lastEditable = findLastEditableUserMessage(messages)
+              if (!lastEditable) return null
+              const assistantIndex = messages.findLastIndex((message, index) => {
+                if (index <= lastEditable.index) return false
+                return message.role === 'assistant'
+              })
+              if (assistantIndex < 0) return null
+              return {
+                assistantIndex,
+                userIndex: lastEditable.index,
+                draft: lastEditable.draft
+              }
+            })()
+      )
       if (!target) return
 
       chatStore.truncateMessagesFrom(sessionId, target.userIndex)
@@ -4500,9 +4675,9 @@ export function useChatActions(): {
       if (!sessionId) return
 
       clearPendingSessionMessages(sessionId)
-      await chatStore.loadRecentSessionMessages(sessionId)
-      const messages = chatStore.getSessionMessages(sessionId)
-      const target = findEditableUserMessageById(messages, messageId)
+      const { target } = await resolveSessionMessageTarget(chatStore, sessionId, (messages) =>
+        findEditableUserMessageById(messages, messageId)
+      )
       if (!target) return
 
       const nextDraft: EditableUserMessageDraft = {
@@ -4538,9 +4713,11 @@ export function useChatActions(): {
       if (!sessionId) return
 
       clearPendingSessionMessages(sessionId)
-      await chatStore.loadRecentSessionMessages(sessionId)
-      const messages = chatStore.getSessionMessages(sessionId)
-      const nextMessages = buildDeletedMessages(messages, messageId)
+      const { messages, target: nextMessages } = await resolveSessionMessageTarget(
+        chatStore,
+        sessionId,
+        (messages) => buildDeletedMessages(messages, messageId)
+      )
       if (!nextMessages || nextMessages.length === messages.length) return
 
       if (nextMessages.length === 0) {
@@ -5071,11 +5248,14 @@ async function runSimpleChat(
           }
           setGeneratingImageWithSync(assistantMsgId, false)
           if (event.usage) {
+            const debugContextEstimate = shouldUseEstimatedContextTokens(lastRequestDebugInfo)
+              ? estimateContextTokensFromDebugInfo(lastRequestDebugInfo)
+              : null
             const contextTokensOverride =
               preciseContextTokens && preciseContextTokens > 0
                 ? preciseContextTokens
-                : shouldUseEstimatedContextTokens(lastRequestDebugInfo)
-                  ? estimateContextTokensFromDebugInfo(lastRequestDebugInfo) ||
+                : debugContextEstimate
+                  ? debugContextEstimate.tokenCount ||
                     estimateContextTokensForRequest({
                       messages: requestMessages,
                       tools: [],
@@ -5088,7 +5268,8 @@ async function runSimpleChat(
                 ? resolveCompressionContextLength(chatModelConfig)
                 : undefined,
               debugInfo: lastRequestDebugInfo,
-              estimatedContextTokens: contextTokensOverride
+              estimatedContextTokens: contextTokensOverride,
+              preferEstimatedContextTokens: debugContextEstimate?.hadBase64Payload ?? false
             })
             const messageUsage = event.timing
               ? {
@@ -5128,8 +5309,9 @@ async function runSimpleChat(
               ...lastRequestDebugInfo
             })
             if (shouldUseEstimatedContextTokens(lastRequestDebugInfo)) {
+              const debugContextEstimate = estimateContextTokensFromDebugInfo(lastRequestDebugInfo)
               const provisionalUsage = buildStreamingContextUsage(
-                estimateContextTokensFromDebugInfo(lastRequestDebugInfo) ||
+                debugContextEstimate.tokenCount ||
                   estimateContextTokensForRequest({
                     messages: requestMessages,
                     tools: [],

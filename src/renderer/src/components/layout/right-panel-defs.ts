@@ -23,6 +23,9 @@ export const RIGHT_PANEL_RAIL_SLIM_WIDTH = 12
 export const WORKING_FOLDER_PANEL_DEFAULT_WIDTH = 420
 export const WORKING_FOLDER_PANEL_MIN_WIDTH = 280
 export const WORKING_FOLDER_PANEL_MAX_WIDTH = 560
+export const BOTTOM_TERMINAL_DOCK_DEFAULT_HEIGHT = 220
+export const BOTTOM_TERMINAL_DOCK_MIN_HEIGHT = 160
+export const BOTTOM_TERMINAL_DOCK_MAX_HEIGHT = 560
 
 export interface RightPanelTabDef {
   value: RightPanelTab
@@ -98,4 +101,11 @@ export function clampRightPanelWidth(width: number): number {
 
 export function clampWorkingFolderPanelWidth(width: number): number {
   return Math.min(WORKING_FOLDER_PANEL_MAX_WIDTH, Math.max(WORKING_FOLDER_PANEL_MIN_WIDTH, width))
+}
+
+export function clampBottomTerminalDockHeight(
+  height: number,
+  maxHeight = BOTTOM_TERMINAL_DOCK_MAX_HEIGHT
+): number {
+  return Math.min(maxHeight, Math.max(BOTTOM_TERMINAL_DOCK_MIN_HEIGHT, height))
 }

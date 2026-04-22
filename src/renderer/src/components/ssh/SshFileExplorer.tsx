@@ -203,23 +203,25 @@ function LegacySshFileExplorer({
   }, [connectSftpConnection, connectionId, currentPath, loadSftpEntries])
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-white">
-      <div className="border-b border-[#dce4ee] px-4 py-3">
-        <div className="flex items-center gap-2 rounded-[14px] border border-[#d7e0ea] bg-[#f9fbfd] px-2 py-2">
+    <div className="workspace-sftp-surface flex h-full flex-col overflow-hidden">
+      <div className="workspace-sftp-section px-4 py-3">
+        <div className="workspace-sftp-control flex items-center gap-2 rounded-[14px] border px-2 py-2">
           <Button
             variant="ghost"
             size="icon-sm"
-            className="size-8 rounded-[10px] text-[#6f7f96] hover:bg-[#eef3f8]"
+            className="workspace-sftp-action size-8 rounded-[10px]"
             onClick={() => setCurrentPath(getParentPath(currentPath))}
             disabled={currentPath === rootPath || currentPath === '/'}
           >
             <ArrowUp className="size-4" />
           </Button>
-          <div className="min-w-0 flex-1 truncate text-[12px] text-[#607088]">{currentPath}</div>
+          <div className="min-w-0 flex-1 truncate text-[12px] text-muted-foreground">
+            {currentPath}
+          </div>
           <Button
             variant="ghost"
             size="icon-sm"
-            className="size-8 rounded-[10px] text-[#6f7f96] hover:bg-[#eef3f8]"
+            className="workspace-sftp-action size-8 rounded-[10px]"
             onClick={() => void loadSftpEntries(connectionId, currentPath, true)}
           >
             <RefreshCw className={cn('size-4', loading && 'animate-spin')} />
@@ -230,10 +232,10 @@ function LegacySshFileExplorer({
       <div className="min-h-0 flex-1 overflow-y-auto">
         {loading && entries.length === 0 ? (
           <div className="flex h-full items-center justify-center">
-            <Loader2 className="size-5 animate-spin text-[#2f8cf3]" />
+            <Loader2 className="size-5 animate-spin text-primary" />
           </div>
         ) : error && entries.length === 0 ? (
-          <div className="flex h-full items-center justify-center px-6 text-center text-sm text-[#8795aa]">
+          <div className="flex h-full items-center justify-center px-6 text-center text-sm text-muted-foreground">
             {error}
           </div>
         ) : (
@@ -244,7 +246,7 @@ function LegacySshFileExplorer({
                 <button
                   key={entry.path}
                   type="button"
-                  className="grid w-full grid-cols-[minmax(0,1fr)_120px_110px] items-center px-4 py-3 text-left transition-colors hover:bg-[#f6f9fc]"
+                  className="workspace-sftp-row workspace-sftp-row--interactive grid w-full grid-cols-[minmax(0,1fr)_120px_110px] items-center px-4 py-3 text-left transition-colors"
                   onClick={() => {
                     if (entry.type === 'directory') {
                       setCurrentPath(entry.path)
@@ -257,19 +259,19 @@ function LegacySshFileExplorer({
                     <Icon
                       className={cn(
                         'size-4 shrink-0',
-                        entry.type === 'directory' ? 'text-[#c58617]' : 'text-[#607088]'
+                        entry.type === 'directory' ? 'text-amber-400' : 'text-muted-foreground'
                       )}
                     />
-                    <span className="truncate text-[13px] font-medium text-[#22304a]">
+                    <span className="truncate text-[13px] font-medium text-foreground">
                       {entry.name}
                     </span>
                   </div>
-                  <div className="text-[12px] text-[#7d8ba0]">
+                  <div className="text-[12px] text-muted-foreground">
                     {entry.type === 'directory'
                       ? t('workspace.sftp.directory', { defaultValue: 'Directory' })
                       : formatBytes(entry.size)}
                   </div>
-                  <div className="truncate text-right text-[12px] text-[#7d8ba0]">
+                  <div className="truncate text-right text-[12px] text-muted-foreground">
                     {formatModifiedTime(entry.modifyTime)}
                   </div>
                 </button>

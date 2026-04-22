@@ -1581,14 +1581,34 @@ export function InputArea({
     setHomeLongRunningMode((current) => !current)
   }, [activeSessionId, longRunningMode, setHomeLongRunningMode, setSessionLongRunningMode])
 
+  const getLiveEditorState = React.useCallback(() => {
+    const liveDocument = editorRef.current?.getDocumentSnapshot() ?? documentRef.current
+    const referencedFileIds = new Set(
+      liveDocument
+        .filter(
+          (node): node is Extract<EditorDocumentNode, { type: 'file' }> => node.type === 'file'
+        )
+        .map((node) => node.fileId)
+    )
+    const liveSelectedFiles = selectedFilesRef.current.filter((file) =>
+      referencedFileIds.has(file.id)
+    )
+
+    return {
+      plainText: editorDocumentToPlainText(liveDocument, liveSelectedFiles),
+      serializedText: serializeEditorDocument(liveDocument, liveSelectedFiles)
+    }
+  }, [])
+
   const handleSend = React.useCallback((): void => {
-    const serialized = finalSerializedText.trim()
+    const liveEditorState = getLiveEditorState()
+    const serialized = liveEditorState.serializedText.trim()
     if (!serialized && attachedImages.length === 0) return
     if (disabled || needsWorkingFolder) return
 
     cancelPromptRecommendation()
 
-    const hasLeadingSlashCommand = text.trimStart().startsWith('/')
+    const hasLeadingSlashCommand = liveEditorState.plainText.trimStart().startsWith('/')
     const message =
       selectedSkill && !hasLeadingSlashCommand
         ? `[Skill: ${selectedSkill}]\n${serialized}`
@@ -1613,12 +1633,11 @@ export function InputArea({
       editorRef.current?.setSelectionOffsets(0, 0)
     })
   }, [
-    finalSerializedText,
+    getLiveEditorState,
     attachedImages,
     disabled,
     needsWorkingFolder,
     cancelPromptRecommendation,
-    text,
     selectedSkill,
     onSend,
     effectiveLongRunningMode,
@@ -2132,6 +2151,9 @@ export function InputArea({
             usesProjectComposerChrome ? 'rounded-full' : 'rounded-xl px-3.5'
           )}
           data-composer-variant={composerVariant}
+          onMouseDown={(event) => {
+            event.preventDefault()
+          }}
           onClick={handleSend}
           disabled={
             (!finalSerializedText.trim() && attachedImages.length === 0) ||
@@ -2699,12 +2721,7 @@ export function InputArea({
                 onReferencePreview={handlePreviewFile}
                 onReferenceLocate={handleLocateFileReference}
                 onReferenceDelete={handleRemoveFileReference}
-                className={cn(
-                  'w-full',
-                  usesProjectComposerChrome && (selectedSkill || attachedImages.length > 0)
-                    ? 'h-auto'
-                    : 'h-full'
-                )}
+                className="h-full w-full"
               />
               {fileMenuOpen && (
                 <div className="composer-flyout absolute inset-x-0 bottom-full z-30 mb-2 overflow-hidden rounded-[18px]">

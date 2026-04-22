@@ -8,6 +8,7 @@ import {
   APP_PLUGIN_DESCRIPTORS,
   DESKTOP_CONTROL_PLUGIN_ID,
   IMAGE_PLUGIN_ID,
+  isAppPluginEnabledByDefault,
   type AppPluginDescriptor,
   type AppPluginId,
   type AppPluginInstance
@@ -16,7 +17,7 @@ import {
 function createDefaultPlugin(id: AppPluginId): AppPluginInstance {
   return {
     id,
-    enabled: false,
+    enabled: isAppPluginEnabledByDefault(id),
     useGlobalModel: true,
     providerId: null,
     modelId: null
@@ -35,11 +36,7 @@ function provisionBuiltinPlugins(plugins: AppPluginInstance[]): AppPluginInstanc
   for (const descriptor of APP_PLUGIN_DESCRIPTORS) {
     const existing = next.find((plugin) => plugin.id === descriptor.id)
     if (!existing) {
-      const created = createDefaultPlugin(descriptor.id)
-      if (descriptor.id === DESKTOP_CONTROL_PLUGIN_ID) {
-        created.enabled = false
-      }
-      next.push(created)
+      next.push(createDefaultPlugin(descriptor.id))
       continue
     }
     if (descriptor.id === DESKTOP_CONTROL_PLUGIN_ID) {
@@ -60,6 +57,32 @@ function provisionBuiltinPlugins(plugins: AppPluginInstance[]): AppPluginInstanc
   return next
 }
 
+function migrateProjectPlugins(
+  plugins: AppPluginInstance[],
+  persistedVersion?: number
+): AppPluginInstance[] {
+  const next = provisionBuiltinPlugins(plugins)
+  const storedVersion = typeof persistedVersion === 'number' ? persistedVersion : 0
+
+  if (storedVersion >= 3) {
+    return next
+  }
+
+  return next.map((plugin) => {
+    if (
+      plugin.id === IMAGE_PLUGIN_ID &&
+      !plugin.enabled &&
+      plugin.useGlobalModel &&
+      plugin.providerId === null &&
+      plugin.modelId === null
+    ) {
+      return { ...plugin, enabled: true }
+    }
+
+    return plugin
+  })
+}
+
 function isImageModelEnabled(providerId: string, modelId: string): boolean {
   const provider = useProviderStore.getState().providers.find((item) => item.id === providerId)
   if (!provider || !provider.enabled) return false
@@ -72,7 +95,11 @@ interface AppPluginStore {
   pluginsByProject: Record<string, AppPluginInstance[]>
   getDescriptors: () => AppPluginDescriptor[]
   getPlugin: (id: AppPluginId, projectId?: string | null) => AppPluginInstance | null
-  updatePlugin: (id: AppPluginId, patch: Partial<AppPluginInstance>, projectId?: string | null) => void
+  updatePlugin: (
+    id: AppPluginId,
+    patch: Partial<AppPluginInstance>,
+    projectId?: string | null
+  ) => void
   togglePluginEnabled: (id: AppPluginId, projectId?: string | null) => void
   getEnabledPlugins: (projectId?: string | null) => AppPluginInstance[]
   getResolvedImagePluginConfig: (projectId?: string | null) => ProviderConfig | null
@@ -118,7 +145,9 @@ export const useAppPluginStore = create<AppPluginStore>()(
       },
 
       getEnabledPlugins: (projectId) =>
-        (get().pluginsByProject[resolveProjectId(projectId)] ?? []).filter((plugin) => plugin.enabled),
+        (get().pluginsByProject[resolveProjectId(projectId)] ?? []).filter(
+          (plugin) => plugin.enabled
+        ),
 
       getResolvedImagePluginConfig: (projectId) => {
         const plugin = get().getPlugin(IMAGE_PLUGIN_ID, projectId)
@@ -142,9 +171,9 @@ export const useAppPluginStore = create<AppPluginStore>()(
     }),
     {
       name: 'opencowork-app-plugins',
-      version: 2,
+      version: 3,
       storage: createJSONStorage(() => configStorage),
-      migrate: (persisted) => {
+      migrate: (persisted, version) => {
         const state = (persisted ?? {}) as {
           plugins?: AppPluginInstance[]
           pluginsByProject?: Record<string, AppPluginInstance[]>
@@ -155,7 +184,7 @@ export const useAppPluginStore = create<AppPluginStore>()(
             pluginsByProject: Object.fromEntries(
               Object.entries(state.pluginsByProject).map(([projectId, plugins]) => [
                 projectId,
-                provisionBuiltinPlugins(Array.isArray(plugins) ? plugins : [])
+                migrateProjectPlugins(Array.isArray(plugins) ? plugins : [], version)
               ])
             )
           }
@@ -163,7 +192,10 @@ export const useAppPluginStore = create<AppPluginStore>()(
 
         return {
           pluginsByProject: {
-            [GLOBAL_PROJECT_ID]: provisionBuiltinPlugins(Array.isArray(state.plugins) ? state.plugins : [])
+            [GLOBAL_PROJECT_ID]: migrateProjectPlugins(
+              Array.isArray(state.plugins) ? state.plugins : [],
+              version
+            )
           }
         }
       },

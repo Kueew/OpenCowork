@@ -194,7 +194,10 @@ export function LocalTerminal({ terminalId }: { terminalId: string }): React.JSX
   }, [terminalId, t])
 
   return (
-    <div className="relative flex h-full flex-col overflow-hidden bg-background">
+    <div
+      className="relative flex h-full flex-col overflow-hidden"
+      style={{ backgroundColor: terminalTheme.background }}
+    >
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div

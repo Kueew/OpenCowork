@@ -1,9 +1,17 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { X, Download, Copy, Check } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { toast } from 'sonner'
 import { IPC } from '@renderer/lib/ipc/channels'
 import { ipcClient } from '@renderer/lib/ipc/ipc-client'
+import {
+  buildImageDimensionCacheKey,
+  cacheImageDimensions,
+  dataUrlToBlob,
+  getCachedImageDimensions,
+  useImageDisplaySrc,
+  type ImageDimensions
+} from './use-image-display-src'
 
 interface ImagePreviewProps {
   src: string
@@ -24,28 +32,6 @@ function getDownloadExtension(imageSrc: string): string {
 
   const fileExt = imageSrc.split('?')[0].split('.').pop()?.toLowerCase()
   return fileExt ? `.${fileExt}` : '.png'
-}
-
-function dataUrlToBlob(dataUrl: string): Blob {
-  const commaIndex = dataUrl.indexOf(',')
-  if (commaIndex === -1) throw new Error('Invalid data URL')
-
-  const metadata = dataUrl.slice(5, commaIndex)
-  const data = dataUrl.slice(commaIndex + 1)
-  const mimeType = metadata.split(';')[0] || 'application/octet-stream'
-
-  if (metadata.includes(';base64')) {
-    const binary = window.atob(data)
-    const bytes = new Uint8Array(binary.length)
-
-    for (let index = 0; index < binary.length; index += 1) {
-      bytes[index] = binary.charCodeAt(index)
-    }
-
-    return new Blob([bytes], { type: mimeType })
-  }
-
-  return new Blob([decodeURIComponent(data)], { type: mimeType })
 }
 
 function getFileName(filePath: string): string {
@@ -98,51 +84,74 @@ export function ImagePreview({
 }: ImagePreviewProps): React.JSX.Element {
   const [isOpen, setIsOpen] = useState(false)
   const [copied, setCopied] = useState(false)
-  const [resolvedSrc, setResolvedSrc] = useState(src)
+  const displaySrc = useImageDisplaySrc(src, filePath)
+  const effectiveSrc = displaySrc || src
+  const imageDimensionKey = buildImageDimensionCacheKey(src, filePath)
+  const cachedImageDimensions = getCachedImageDimensions(src, filePath, effectiveSrc)
+  const [imageDimensionState, setImageDimensionState] = useState<{
+    key: string
+    dimensions: ImageDimensions | null
+  }>(() => ({
+    key: imageDimensionKey,
+    dimensions: cachedImageDimensions
+  }))
+  const imageDimensions =
+    imageDimensionState.key === imageDimensionKey
+      ? (imageDimensionState.dimensions ?? cachedImageDimensions)
+      : cachedImageDimensions
 
-  useEffect(() => {
-    let cancelled = false
+  const handleImageLoad = useCallback(
+    (event: React.SyntheticEvent<HTMLImageElement>) => {
+      const { naturalWidth, naturalHeight, currentSrc } = event.currentTarget
+      if (!naturalWidth || !naturalHeight) return
 
-    if (!/^https?:\/\//i.test(src)) {
-      setResolvedSrc(src)
-      return () => {
-        cancelled = true
-      }
-    }
-
-    setResolvedSrc('')
-    void window.api
-      .fetchImageBase64({ url: src })
-      .then((result) => {
-        if (cancelled) return
-        if (result.data) {
-          setResolvedSrc(`data:${result.mimeType || 'image/png'};base64,${result.data}`)
-          return
+      const nextDimensions = { width: naturalWidth, height: naturalHeight }
+      setImageDimensionState((current) => {
+        if (
+          current.key === imageDimensionKey &&
+          current.dimensions?.width === nextDimensions.width &&
+          current.dimensions?.height === nextDimensions.height
+        ) {
+          return current
         }
-        setResolvedSrc(src)
+        return {
+          key: imageDimensionKey,
+          dimensions: cacheImageDimensions(src, nextDimensions, {
+            filePath,
+            displaySrc: currentSrc
+          })
+        }
       })
-      .catch(() => {
-        if (!cancelled) setResolvedSrc(src)
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [src])
-
-  const effectiveSrc = resolvedSrc || src
+    },
+    [filePath, imageDimensionKey, src]
+  )
 
   const handleDownload = async (): Promise<void> => {
     try {
       const defaultName = filePath
         ? getFileName(filePath)
-        : `image-${Date.now()}${getDownloadExtension(effectiveSrc)}`
+        : `image-${Date.now()}${getDownloadExtension(src)}`
 
       if (filePath) {
         const result = await downloadPersistedImage(filePath, defaultName)
         if (result.canceled) return
-      } else if (effectiveSrc.startsWith('data:')) {
-        const blob = dataUrlToBlob(effectiveSrc)
+      } else if (src.startsWith('data:')) {
+        const blob = dataUrlToBlob(src)
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = defaultName
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+      } else if (/^https?:\/\//i.test(src)) {
+        const result = await window.api.downloadImage({ url: src, defaultName })
+        if (result.error) throw new Error(result.error)
+        if (result.canceled) return
+      } else if (effectiveSrc.startsWith('blob:')) {
+        const response = await fetch(effectiveSrc)
+        const blob = await response.blob()
         const url = URL.createObjectURL(blob)
         const a = document.createElement('a')
         a.href = url
@@ -152,9 +161,12 @@ export function ImagePreview({
         document.body.removeChild(a)
         window.setTimeout(() => URL.revokeObjectURL(url), 1000)
       } else {
-        const result = await window.api.downloadImage({ url: effectiveSrc, defaultName })
-        if (result.error) throw new Error(result.error)
-        if (result.canceled) return
+        const a = document.createElement('a')
+        a.href = effectiveSrc
+        a.download = defaultName
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
       }
 
       toast.success('Image downloaded')
@@ -168,12 +180,20 @@ export function ImagePreview({
     try {
       let imageBase64: string
 
-      if (effectiveSrc.startsWith('data:')) {
-        const parts = effectiveSrc.split(',', 2)
+      if (filePath) {
+        const result = (await ipcClient.invoke(IPC.FS_READ_FILE_BINARY, {
+          path: filePath
+        })) as { data?: string; error?: string }
+        if (result.error || !result.data) {
+          throw new Error(result.error || 'Failed to read image file')
+        }
+        imageBase64 = result.data
+      } else if (src.startsWith('data:')) {
+        const parts = src.split(',', 2)
         if (parts.length !== 2) throw new Error('Invalid data URL')
         imageBase64 = parts[1]
       } else {
-        const result = await window.api.fetchImageBase64({ url: effectiveSrc })
+        const result = await window.api.fetchImageBase64({ url: src })
         if (result.error || !result.data) {
           throw new Error(result.error || 'Failed to fetch image data')
         }
@@ -197,12 +217,26 @@ export function ImagePreview({
       {/* Thumbnail */}
       <div
         className="relative max-w-lg overflow-hidden rounded-lg border border-border/50 transition-colors group hover:border-primary/50"
+        style={
+          imageDimensions
+            ? { aspectRatio: `${imageDimensions.width} / ${imageDimensions.height}` }
+            : undefined
+        }
         onClick={() => {
           if (effectiveSrc) setIsOpen(true)
         }}
       >
         {effectiveSrc ? (
-          <img src={effectiveSrc} alt={alt} className="w-full h-auto" loading="lazy" />
+          <img
+            src={effectiveSrc}
+            alt={alt}
+            className="block w-full h-auto"
+            loading="lazy"
+            onLoad={handleImageLoad}
+            {...(imageDimensions
+              ? { width: imageDimensions.width, height: imageDimensions.height }
+              : {})}
+          />
         ) : (
           <div className="flex aspect-square w-full items-center justify-center bg-muted/20 text-xs text-muted-foreground">
             Loading image...
@@ -267,7 +301,11 @@ export function ImagePreview({
               src={effectiveSrc}
               alt={alt}
               className="max-w-full max-h-full object-contain"
+              onLoad={handleImageLoad}
               onClick={(e) => e.stopPropagation()}
+              {...(imageDimensions
+                ? { width: imageDimensions.width, height: imageDimensions.height }
+                : {})}
             />
 
             {/* Close hint */}

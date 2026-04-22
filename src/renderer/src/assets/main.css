@@ -261,6 +261,45 @@
   --activity-card-divider: color-mix(in srgb, var(--border) 76%, transparent);
   --activity-card-header-hover: color-mix(in srgb, var(--accent) 76%, white 24%);
   --activity-card-shadow: 0 14px 28px -20px color-mix(in srgb, var(--foreground) 24%, transparent);
+  --workspace-filetree-bg: var(--background);
+  --workspace-filetree-card-bg: var(--card);
+  --workspace-filetree-border: color-mix(in srgb, var(--border) 90%, transparent);
+  --workspace-filetree-divider: color-mix(in srgb, var(--border) 84%, transparent);
+  --workspace-filetree-control-bg: color-mix(in srgb, var(--background) 94%, var(--muted) 6%);
+  --workspace-filetree-control-border: color-mix(in srgb, var(--border) 92%, transparent);
+  --workspace-filetree-row-hover-bg: color-mix(in srgb, var(--accent) 84%, white 16%);
+  --workspace-filetree-row-hover-border: color-mix(in srgb, var(--border) 86%, transparent);
+  --workspace-filetree-row-expanded-bg: color-mix(in srgb, var(--accent) 74%, white 26%);
+  --workspace-filetree-row-expanded-border: color-mix(in srgb, var(--border) 88%, transparent);
+  --workspace-filetree-row-active-bg: color-mix(in srgb, var(--foreground) 7%, var(--accent));
+  --workspace-filetree-row-active-border: color-mix(in srgb, var(--foreground) 14%, var(--border));
+  --workspace-filetree-row-active-shadow: 0 8px 18px -16px
+    color-mix(in srgb, var(--foreground) 22%, transparent);
+  --workspace-filetree-chip-bg: color-mix(in srgb, var(--background) 92%, var(--muted) 8%);
+  --workspace-filetree-chip-border: color-mix(in srgb, var(--border) 88%, transparent);
+  --workspace-filetree-chip-text: color-mix(
+    in srgb,
+    var(--foreground) 66%,
+    var(--muted-foreground) 34%
+  );
+  --workspace-filetree-empty-bg: color-mix(in srgb, var(--muted) 38%, transparent);
+  --workspace-filetree-guide: color-mix(in srgb, var(--border) 72%, transparent);
+  --workspace-terminal-bg: var(--background);
+  --workspace-terminal-border: color-mix(in srgb, var(--border) 90%, transparent);
+  --workspace-terminal-divider: color-mix(in srgb, var(--border) 80%, transparent);
+  --workspace-terminal-tab-hover-bg: color-mix(in srgb, var(--accent) 82%, white 18%);
+  --workspace-terminal-tab-active-bg: color-mix(in srgb, var(--foreground) 7%, var(--accent));
+  --workspace-terminal-tab-active-border: color-mix(in srgb, var(--foreground) 12%, var(--border));
+  --workspace-sftp-surface-bg: var(--background);
+  --workspace-sftp-panel-bg: var(--card);
+  --workspace-sftp-border: color-mix(in srgb, var(--border) 90%, transparent);
+  --workspace-sftp-divider: color-mix(in srgb, var(--border) 82%, transparent);
+  --workspace-sftp-control-bg: color-mix(in srgb, var(--background) 94%, var(--muted) 6%);
+  --workspace-sftp-control-hover-bg: color-mix(in srgb, var(--accent) 82%, white 18%);
+  --workspace-sftp-row-hover-bg: color-mix(in srgb, var(--accent) 80%, white 20%);
+  --workspace-sftp-row-selected-bg: color-mix(in srgb, var(--foreground) 7%, var(--accent));
+  --workspace-sftp-table-header-bg: color-mix(in srgb, var(--muted) 72%, transparent);
+  --workspace-sftp-shadow: 0 18px 34px -28px color-mix(in srgb, var(--foreground) 20%, transparent);
   --composer-shell-top: var(--card);
   --composer-shell-bottom: var(--card);
   --composer-shell-border: color-mix(in srgb, var(--border) 92%, black 4%);
@@ -361,6 +400,44 @@
   --activity-card-divider: color-mix(in srgb, var(--border) 68%, black 32%);
   --activity-card-header-hover: color-mix(in srgb, var(--accent) 62%, black 38%);
   --activity-card-shadow: 0 18px 32px -24px rgba(0, 0, 0, 0.48);
+  --workspace-filetree-bg: var(--background);
+  --workspace-filetree-card-bg: var(--card);
+  --workspace-filetree-border: color-mix(in srgb, var(--border) 78%, black 22%);
+  --workspace-filetree-divider: color-mix(in srgb, var(--border) 70%, black 30%);
+  --workspace-filetree-control-bg: color-mix(in srgb, var(--background) 82%, var(--muted) 18%);
+  --workspace-filetree-control-border: color-mix(in srgb, var(--border) 82%, black 18%);
+  --workspace-filetree-row-hover-bg: color-mix(in srgb, var(--accent) 72%, black 28%);
+  --workspace-filetree-row-hover-border: color-mix(in srgb, var(--border) 78%, black 22%);
+  --workspace-filetree-row-expanded-bg: color-mix(in srgb, var(--accent) 82%, black 18%);
+  --workspace-filetree-row-expanded-border: color-mix(in srgb, var(--border) 84%, black 16%);
+  --workspace-filetree-row-active-bg: color-mix(in srgb, var(--foreground) 8%, var(--accent));
+  --workspace-filetree-row-active-border: color-mix(in srgb, var(--foreground) 16%, var(--border));
+  --workspace-filetree-row-active-shadow: 0 12px 22px -20px rgba(0, 0, 0, 0.42);
+  --workspace-filetree-chip-bg: color-mix(in srgb, var(--background) 74%, var(--muted) 26%);
+  --workspace-filetree-chip-border: color-mix(in srgb, var(--border) 78%, black 22%);
+  --workspace-filetree-chip-text: color-mix(
+    in srgb,
+    var(--foreground) 76%,
+    var(--muted-foreground) 24%
+  );
+  --workspace-filetree-empty-bg: color-mix(in srgb, var(--muted) 32%, transparent);
+  --workspace-filetree-guide: color-mix(in srgb, var(--border) 64%, black 36%);
+  --workspace-terminal-bg: var(--background);
+  --workspace-terminal-border: color-mix(in srgb, var(--border) 78%, black 22%);
+  --workspace-terminal-divider: color-mix(in srgb, var(--border) 68%, black 32%);
+  --workspace-terminal-tab-hover-bg: color-mix(in srgb, var(--accent) 72%, black 28%);
+  --workspace-terminal-tab-active-bg: color-mix(in srgb, var(--foreground) 8%, var(--accent));
+  --workspace-terminal-tab-active-border: color-mix(in srgb, var(--foreground) 15%, var(--border));
+  --workspace-sftp-surface-bg: var(--background);
+  --workspace-sftp-panel-bg: var(--card);
+  --workspace-sftp-border: color-mix(in srgb, var(--border) 78%, black 22%);
+  --workspace-sftp-divider: color-mix(in srgb, var(--border) 68%, black 32%);
+  --workspace-sftp-control-bg: color-mix(in srgb, var(--background) 82%, var(--muted) 18%);
+  --workspace-sftp-control-hover-bg: color-mix(in srgb, var(--accent) 72%, black 28%);
+  --workspace-sftp-row-hover-bg: color-mix(in srgb, var(--accent) 70%, black 30%);
+  --workspace-sftp-row-selected-bg: color-mix(in srgb, var(--foreground) 8%, var(--accent));
+  --workspace-sftp-table-header-bg: color-mix(in srgb, var(--muted) 58%, transparent);
+  --workspace-sftp-shadow: 0 18px 32px -26px rgba(0, 0, 0, 0.46);
   --composer-shell-top: color-mix(in srgb, var(--card) 92%, var(--background) 8%);
   --composer-shell-bottom: color-mix(in srgb, var(--card) 92%, var(--background) 8%);
   --composer-shell-border: color-mix(in srgb, var(--border) 82%, black 18%);
@@ -835,6 +912,263 @@
     border-color: var(--composer-chip-border);
     background: transparent;
     box-shadow: none;
+  }
+
+  .workspace-folder-sheet {
+    border-left-color: var(--workspace-filetree-border);
+    background: var(--workspace-filetree-bg);
+    color: var(--foreground);
+    box-shadow: none;
+  }
+
+  .workspace-folder-sheet-resize:hover {
+    background: color-mix(in srgb, var(--foreground) 12%, transparent);
+  }
+
+  .workspace-filetree-surface {
+    background: var(--workspace-filetree-card-bg);
+    color: var(--foreground);
+  }
+
+  .workspace-filetree-surface--card {
+    border: 1px solid var(--workspace-filetree-border);
+    box-shadow: var(--activity-card-shadow);
+  }
+
+  .workspace-filetree-surface--sheet {
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .workspace-filetree-header {
+    border-bottom: 1px solid var(--workspace-filetree-divider);
+    background: transparent;
+  }
+
+  .workspace-filetree-footer {
+    border-top: 1px solid var(--workspace-filetree-divider);
+    background: transparent;
+  }
+
+  .workspace-filetree-input {
+    border-color: var(--workspace-filetree-control-border);
+    background: var(--workspace-filetree-control-bg);
+    box-shadow: none;
+  }
+
+  .workspace-filetree-row {
+    border: 1px solid transparent;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .workspace-filetree-row--interactive:hover {
+    border-color: var(--workspace-filetree-row-hover-border);
+    background: var(--workspace-filetree-row-hover-bg);
+  }
+
+  .workspace-filetree-row--expanded {
+    border-color: var(--workspace-filetree-row-expanded-border);
+    background: var(--workspace-filetree-row-expanded-bg);
+  }
+
+  .workspace-filetree-row--active {
+    border-color: var(--workspace-filetree-row-active-border);
+    background: var(--workspace-filetree-row-active-bg);
+    box-shadow: var(--workspace-filetree-row-active-shadow);
+  }
+
+  .workspace-filetree-chip {
+    border: 1px solid var(--workspace-filetree-chip-border);
+    background: var(--workspace-filetree-chip-bg);
+    color: var(--workspace-filetree-chip-text);
+  }
+
+  .workspace-filetree-empty {
+    border: 1px solid var(--workspace-filetree-border);
+    background: var(--workspace-filetree-empty-bg);
+  }
+
+  .workspace-filetree-empty--dashed {
+    border-style: dashed;
+  }
+
+  .workspace-filetree-guide {
+    background: var(--workspace-filetree-guide);
+  }
+
+  .workspace-filetree-action {
+    color: color-mix(in srgb, var(--foreground) 62%, var(--muted-foreground) 38%);
+  }
+
+  .workspace-filetree-action:hover {
+    background: var(--workspace-filetree-row-hover-bg);
+    color: var(--foreground);
+  }
+
+  .workspace-terminal-dock {
+    border-top: 1px solid var(--workspace-terminal-border);
+    background: var(--workspace-terminal-bg);
+    color: var(--foreground);
+  }
+
+  .workspace-terminal-resize-handle {
+    position: absolute;
+    z-index: 20;
+    top: -0.25rem;
+    right: 0;
+    left: 0;
+    height: 0.5rem;
+    cursor: row-resize;
+  }
+
+  .workspace-terminal-resize-handle::after {
+    position: absolute;
+    top: 0.1875rem;
+    left: 50%;
+    height: 0.1875rem;
+    width: 3.25rem;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--foreground) 24%, transparent);
+    opacity: 0;
+    transform: translateX(-50%);
+    transition: opacity 0.14s ease;
+    content: '';
+  }
+
+  .workspace-terminal-resize-handle:hover::after,
+  .workspace-terminal-dock--resizing .workspace-terminal-resize-handle::after {
+    opacity: 1;
+  }
+
+  .workspace-terminal-header {
+    border-bottom: 1px solid var(--workspace-terminal-divider);
+    background: transparent;
+  }
+
+  .workspace-terminal-tab {
+    border: 1px solid transparent;
+    background: transparent;
+    color: color-mix(in srgb, var(--foreground) 60%, var(--muted-foreground) 40%);
+    box-shadow: none;
+  }
+
+  .workspace-terminal-tab:hover {
+    background: var(--workspace-terminal-tab-hover-bg);
+    color: var(--foreground);
+  }
+
+  .workspace-terminal-tab--active {
+    border-color: var(--workspace-terminal-tab-active-border);
+    background: var(--workspace-terminal-tab-active-bg);
+    color: var(--foreground);
+    box-shadow: var(--workspace-filetree-row-active-shadow);
+  }
+
+  .workspace-terminal-action {
+    color: color-mix(in srgb, var(--foreground) 62%, var(--muted-foreground) 38%);
+  }
+
+  .workspace-terminal-action:hover {
+    background: var(--workspace-terminal-tab-hover-bg);
+    color: var(--foreground);
+  }
+
+  .workspace-terminal-overlay {
+    background: color-mix(in srgb, var(--background) 82%, transparent);
+    backdrop-filter: blur(8px);
+  }
+
+  .workspace-sftp-panel {
+    border: 1px solid var(--workspace-sftp-border);
+    background: var(--workspace-sftp-panel-bg);
+    color: var(--foreground);
+    box-shadow: var(--workspace-sftp-shadow);
+  }
+
+  .workspace-sftp-panel--active {
+    border-color: color-mix(in srgb, var(--ring) 32%, var(--workspace-sftp-border));
+  }
+
+  .workspace-sftp-surface {
+    background: var(--workspace-sftp-surface-bg);
+    color: var(--foreground);
+  }
+
+  .workspace-sftp-section {
+    border-bottom: 1px solid var(--workspace-sftp-divider);
+  }
+
+  .workspace-sftp-control {
+    border-color: var(--workspace-sftp-border);
+    background: var(--workspace-sftp-control-bg);
+    color: var(--foreground);
+    box-shadow: none;
+  }
+
+  .workspace-sftp-control:hover {
+    background: var(--workspace-sftp-control-hover-bg);
+  }
+
+  .workspace-sftp-pill {
+    background: var(--workspace-sftp-control-bg);
+    color: color-mix(in srgb, var(--foreground) 72%, var(--muted-foreground) 28%);
+  }
+
+  .workspace-sftp-table-header {
+    border-bottom: 1px solid var(--workspace-sftp-divider);
+    background: var(--workspace-sftp-table-header-bg);
+    color: color-mix(in srgb, var(--foreground) 48%, var(--muted-foreground) 52%);
+  }
+
+  .workspace-sftp-row {
+    background: transparent;
+    color: var(--foreground);
+  }
+
+  .workspace-sftp-row--interactive:hover {
+    background: var(--workspace-sftp-row-hover-bg);
+  }
+
+  .workspace-sftp-row--selected {
+    background: var(--workspace-sftp-row-selected-bg);
+  }
+
+  .workspace-sftp-action {
+    color: color-mix(in srgb, var(--foreground) 56%, var(--muted-foreground) 44%);
+  }
+
+  .workspace-sftp-action:hover {
+    background: var(--workspace-sftp-control-hover-bg);
+    color: var(--foreground);
+  }
+
+  .workspace-sftp-action--danger:hover {
+    color: var(--destructive);
+  }
+
+  .workspace-sftp-status {
+    border: 1px solid transparent;
+  }
+
+  .workspace-sftp-status--connected {
+    background: color-mix(in srgb, #22c55e 16%, var(--background));
+    color: color-mix(in srgb, #22c55e 72%, var(--foreground));
+  }
+
+  .workspace-sftp-status--connecting {
+    background: color-mix(in srgb, #f59e0b 16%, var(--background));
+    color: color-mix(in srgb, #f59e0b 72%, var(--foreground));
+  }
+
+  .workspace-sftp-status--error {
+    background: color-mix(in srgb, var(--destructive) 16%, var(--background));
+    color: color-mix(in srgb, var(--destructive) 72%, var(--foreground));
+  }
+
+  .workspace-sftp-status--idle {
+    background: var(--workspace-sftp-control-bg);
+    color: color-mix(in srgb, var(--foreground) 58%, var(--muted-foreground) 42%);
   }
 
   .workspace-sidebar-surface {

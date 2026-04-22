@@ -1,7 +1,9 @@
 import { create } from 'zustand'
 import {
+  BOTTOM_TERMINAL_DOCK_DEFAULT_HEIGHT,
   LEFT_SIDEBAR_DEFAULT_WIDTH,
   WORKING_FOLDER_PANEL_DEFAULT_WIDTH,
+  clampBottomTerminalDockHeight,
   clampLeftSidebarWidth,
   clampWorkingFolderPanelWidth
 } from '@renderer/components/layout/right-panel-defs'
@@ -134,6 +136,8 @@ interface UIStore {
   setBottomTerminalDockOpen: (projectId: string, open: boolean) => void
   toggleBottomTerminalDock: (projectId: string) => void
   isBottomTerminalDockOpen: (projectId?: string | null) => boolean
+  bottomTerminalDockHeight: number
+  setBottomTerminalDockHeight: (height: number) => void
   rightPanelTab: RightPanelTab
   setRightPanelTab: (tab: RightPanelTab) => void
   rightPanelSection: RightPanelSection
@@ -311,6 +315,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   setWorkingFolderPanelWidth: (width) =>
     set({ workingFolderPanelWidth: clampWorkingFolderPanelWidth(width) }),
   bottomTerminalDockOpenByProjectId: {},
+  bottomTerminalDockHeight: BOTTOM_TERMINAL_DOCK_DEFAULT_HEIGHT,
   setBottomTerminalDockOpen: (projectId, open) =>
     set((state) => ({
       bottomTerminalDockOpenByProjectId: {
@@ -327,6 +332,8 @@ export const useUIStore = create<UIStore>((set, get) => ({
     })),
   isBottomTerminalDockOpen: (projectId) =>
     projectId ? Boolean(get().bottomTerminalDockOpenByProjectId[projectId]) : false,
+  setBottomTerminalDockHeight: (height) =>
+    set({ bottomTerminalDockHeight: clampBottomTerminalDockHeight(height) }),
   rightPanelTab: 'preview',
   setRightPanelTab: (tab) => set({ rightPanelTab: tab }),
   rightPanelSection: 'execution',

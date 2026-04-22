@@ -17,6 +17,7 @@ export interface FileAwareEditorHandle {
   focusAtEnd: () => void
   setSelectionOffsets: (start: number, end?: number) => void
   getSelectionOffsets: () => EditorSelectionOffsets
+  getDocumentSnapshot: () => EditorDocumentNode[]
   getScrollMetrics: () => { scrollHeight: number; clientHeight: number }
   scrollToReference: (fileId: string) => boolean
 }
@@ -537,6 +538,11 @@ export const FileAwareEditor = React.forwardRef<FileAwareEditorHandle, FileAware
           if (!root) return selectionRef.current
           return getSelectionOffsets(root, files, selectionRef.current)
         },
+        getDocumentSnapshot: () => {
+          const root = editorRef.current
+          if (!root) return document
+          return parseDomToDocument(root)
+        },
         getScrollMetrics: () => {
           const root = editorRef.current
           return {
@@ -638,7 +644,7 @@ export const FileAwareEditor = React.forwardRef<FileAwareEditorHandle, FileAware
     const hasContent = document.length > 0 && plainText.length > 0
 
     return (
-      <div className={cn('relative flex min-h-0 flex-col', className)}>
+      <div className={cn('relative flex min-h-0 min-w-0 flex-col overflow-hidden', className)}>
         {!hasContent && placeholder && (
           <div className="composer-editor-placeholder pointer-events-none absolute inset-0 p-2 pb-12 pr-3 text-base md:text-sm">
             {placeholder}
@@ -659,7 +665,7 @@ export const FileAwareEditor = React.forwardRef<FileAwareEditorHandle, FileAware
           suppressContentEditableWarning
           spellCheck={false}
           data-gramm="false"
-          className="composer-editor-content block min-h-[60px] flex-1 overflow-y-auto whitespace-pre-wrap break-words p-2 pb-12 pr-3 text-base outline-none md:text-sm"
+          className="composer-editor-content block min-h-[60px] min-w-0 max-h-full flex-1 overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-words p-2 pb-12 pr-3 text-base outline-none md:text-sm"
           style={{ scrollbarGutter: 'stable' }}
           onInput={handleInput}
           onKeyDown={onKeyDown}

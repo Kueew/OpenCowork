@@ -277,10 +277,13 @@ export function SshTerminal({ sessionId }: SshTerminalProps): React.JSX.Element 
   }, [])
 
   return (
-    <div className="relative flex h-full flex-col overflow-hidden bg-[#151b30]">
+    <div
+      className="relative flex h-full flex-col overflow-hidden"
+      style={{ backgroundColor: terminalTheme.background }}
+    >
       {/* Disconnected overlay */}
       {session && session.status !== 'connected' && session.status !== 'connecting' && (
-        <div className="absolute inset-0 z-10 flex items-center justify-center bg-[#11162a]/80 backdrop-blur-sm">
+        <div className="workspace-terminal-overlay absolute inset-0 z-10 flex items-center justify-center">
           <div className="flex flex-col items-center gap-2 text-center">
             <Badge variant="destructive" className="rounded-full px-3 py-1 text-xs">
               {session.status === 'error'
@@ -291,7 +294,7 @@ export function SshTerminal({ sessionId }: SshTerminalProps): React.JSX.Element 
             <Button
               variant="outline"
               size="sm"
-              className="mt-1 h-8 gap-1 rounded-full border-white/10 bg-white/5 text-xs text-white hover:bg-white/10"
+              className="mt-1 h-8 gap-1 rounded-full text-xs"
               onClick={() => void handleReconnect()}
             >
               <RotateCcw className="size-3" />

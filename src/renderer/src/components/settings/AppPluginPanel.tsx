@@ -26,6 +26,7 @@ import {
   DESKTOP_WAIT_TOOL_NAME,
   IMAGE_GENERATE_TOOL_NAME,
   IMAGE_PLUGIN_ID,
+  isAppPluginEnabledByDefault,
   type AppPluginDescriptor,
   type AppPluginId,
   type AppPluginInstance
@@ -60,7 +61,7 @@ function getPluginIcon(id: AppPluginId): React.JSX.Element {
 function createFallbackPlugin(id: AppPluginId): AppPluginInstance {
   return {
     id,
-    enabled: false,
+    enabled: isAppPluginEnabledByDefault(id),
     useGlobalModel: true,
     providerId: null,
     modelId: null
