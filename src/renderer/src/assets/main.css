@@ -1227,12 +1227,6 @@
     color: var(--foreground);
   }
 
-  .workspace-titlebar-toolgroup {
-    background: var(--workspace-titlebar-toolgroup-bg);
-    border-color: var(--workspace-titlebar-toolgroup-border);
-    box-shadow: 0 1px 2px color-mix(in srgb, var(--foreground) 8%, transparent);
-  }
-
   .workspace-titlebar-toolbutton {
     color: color-mix(in srgb, var(--foreground) 68%, var(--muted-foreground) 32%);
   }

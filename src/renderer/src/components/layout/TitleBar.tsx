@@ -266,7 +266,7 @@ export function TitleBar({
         <PendingInboxPopover />
 
         {showProjectToolGroup && (
-          <div className="workspace-titlebar-toolgroup titlebar-no-drag flex items-center gap-0.5 rounded-[14px] border p-0.5">
+          <div className="titlebar-no-drag flex items-center gap-1">
             {showProjectTerminalToggle && sessionContext.terminalProjectId && (
               <Tooltip>
                 <TooltipTrigger asChild>
