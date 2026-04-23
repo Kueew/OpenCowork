@@ -1,8 +1,7 @@
-import { ipcMain, app, BrowserWindow } from 'electron'
+import { ipcMain, BrowserWindow } from 'electron'
 import { safeSendToWindow } from '../window-ipc'
-import { spawn, type ChildProcess } from 'child_process'
-import * as path from 'path'
 import * as fs from 'fs'
+import * as path from 'path'
 import {
   DESKTOP_INPUT_CLICK,
   DESKTOP_INPUT_SCROLL,
@@ -16,30 +15,9 @@ import {
 } from './desktop-control'
 import { listAgents } from './agents-handlers'
 import { recordLocalTextWriteChange } from './agent-change-handlers'
+import { JsAgentRuntimeManager } from './js-agent-runtime'
 
-const SIDECAR_RESTART_DELAY_MS = 2000
-const SIDECAR_MAX_RESTARTS = 5
-const SIDECAR_PING_INTERVAL_MS = 30_000
-const SIDECAR_PING_TIMEOUT_MS = 5000
 const SIDECAR_RENDERER_REQUEST_TIMEOUT_MS = 10 * 60_000
-// Sidecar JSON-RPC is newline-delimited. Image events can carry large base64 payloads,
-// so we must tolerate a large in-flight partial line before the trailing newline arrives.
-const SIDECAR_MAX_PENDING_LINE_BYTES = 64 * 1024 * 1024 // 64 MB
-
-interface JsonRpcMessage {
-  jsonrpc: '2.0'
-  id?: number | string
-  method?: string
-  params?: unknown
-  result?: unknown
-  error?: { code: number; message: string; data?: unknown }
-}
-
-type PendingRequest = {
-  resolve: (value: unknown) => void
-  reject: (error: Error) => void
-  timer: ReturnType<typeof setTimeout>
-}
 
 type PendingRendererApprovalResponse = { approved: boolean; reason?: string }
 
@@ -60,507 +38,25 @@ type ElectronInvokeParams = {
   args?: unknown[]
 }
 
-export class SidecarManager {
-  private process: ChildProcess | null = null
-  private restartCount = 0
-  private nextRequestId = 1
-  private pendingRequests = new Map<number | string, PendingRequest>()
-  private buffer = ''
-  private isShuttingDown = false
-  private pingTimer: ReturnType<typeof setInterval> | null = null
-  private onEvent: ((method: string, params: unknown) => void) | null = null
-  private onRequestFromSidecar:
-    | ((id: number | string, method: string, params: unknown) => Promise<unknown>)
-    | null = null
-  private devPublishPromise: Promise<boolean> | null = null
-  private initializePromise: Promise<boolean> | null = null
-  private initialized = false
-
-  /**
-   * Register a callback for notifications (events) from the sidecar.
-   */
-  setEventHandler(handler: (method: string, params: unknown) => void): void {
-    this.onEvent = handler
-  }
-
-  /**
-   * Register a handler for requests FROM the sidecar (e.g. approval, electron/invoke).
-   */
-  setRequestHandler(
+type SidecarBridgeManager = {
+  setEventHandler: (handler: (method: string, params: unknown) => void) => void
+  setRequestHandler: (
     handler: (id: number | string, method: string, params: unknown) => Promise<unknown>
-  ): void {
-    this.onRequestFromSidecar = handler
-  }
-
-  private getSidecarRuntime(): string {
-    if (process.platform === 'win32') {
-      return process.arch === 'arm64' ? 'win-arm64' : 'win-x64'
-    }
-
-    if (process.platform === 'darwin') {
-      return process.arch === 'x64' ? 'osx-x64' : 'osx-arm64'
-    }
-
-    return process.arch === 'arm64' ? 'linux-arm64' : 'linux-x64'
-  }
-
-  private getDevPublishedSidecarPath(): string {
-    const ext = process.platform === 'win32' ? '.exe' : ''
-    return path.join(
-      app.getAppPath(),
-      'out',
-      'sidecar',
-      this.getSidecarRuntime(),
-      `OpenCowork.Agent${ext}`
-    )
-  }
-
-  private shouldAutoPublishDevSidecar(): boolean {
-    return !app.isPackaged && process.env.npm_lifecycle_event === 'dev'
-  }
-
-  private async ensureDevSidecarPublished(): Promise<boolean> {
-    if (!this.shouldAutoPublishDevSidecar()) return true
-    if (this.devPublishPromise) return this.devPublishPromise
-
-    this.devPublishPromise = new Promise<boolean>((resolve) => {
-      const projectPath = path.join(
-        app.getAppPath(),
-        'src',
-        'dotnet',
-        'OpenCowork.Agent',
-        'OpenCowork.Agent.csproj'
-      )
-      const outputDir = path.join(app.getAppPath(), 'out', 'sidecar', this.getSidecarRuntime())
-
-      if (!fs.existsSync(projectPath)) {
-        console.warn(`[Sidecar] Dev auto-publish skipped, project missing: ${projectPath}`)
-        resolve(false)
-        return
-      }
-
-      console.log(`[Sidecar] Dev auto-publish starting -> ${outputDir}`)
-      const child = spawn(
-        'dotnet',
-        [
-          'publish',
-          projectPath,
-          '--configuration',
-          'Release',
-          '--runtime',
-          this.getSidecarRuntime(),
-          '--output',
-          outputDir,
-          '/p:PublishAot=true',
-          '/p:TrimMode=full',
-          '/p:StripSymbols=true'
-        ],
-        {
-          cwd: app.getAppPath(),
-          windowsHide: true,
-          env: { ...process.env }
-        }
-      )
-
-      let stderr = ''
-      child.stdout?.on('data', (chunk: Buffer) => {
-        const text = chunk.toString().trim()
-        if (text) console.log(`[Sidecar build] ${text}`)
-      })
-      child.stderr?.on('data', (chunk: Buffer) => {
-        const text = chunk.toString().trim()
-        if (!text) return
-        stderr += `${text}\n`
-        console.warn(`[Sidecar build] ${text}`)
-      })
-      child.on('error', (error) => {
-        console.error(`[Sidecar] Dev auto-publish failed: ${error.message}`)
-        resolve(false)
-      })
-      child.on('exit', (code) => {
-        if (code === 0) {
-          console.log('[Sidecar] Dev auto-publish completed successfully')
-          resolve(true)
-          return
-        }
-        console.error(
-          `[Sidecar] Dev auto-publish failed with code=${code}${stderr ? ` stderr=${stderr.trim()}` : ''}`
-        )
-        resolve(false)
-      })
-    }).finally(() => {
-      this.devPublishPromise = null
-    })
-
-    return this.devPublishPromise
-  }
-
-  /**
-   * Find the sidecar binary path based on platform and packaging.
-   */
-  private getSidecarPath(): string {
-    const isDev = !app.isPackaged
-    const platform = process.platform
-    const ext = platform === 'win32' ? '.exe' : ''
-    const binaryName = `OpenCowork.Agent${ext}`
-
-    if (isDev) {
-      const runtime = this.getSidecarRuntime()
-
-      // In development, prefer the explicitly published sidecar output used by local packaging flows.
-      const outPath = path.join(app.getAppPath(), 'out', 'sidecar', runtime, binaryName)
-
-      // Fallback to the dotnet release output directory.
-      const devPath = path.join(
-        app.getAppPath(),
-        'src',
-        'dotnet',
-        'OpenCowork.Agent',
-        'bin',
-        'Release',
-        'net10.0',
-        runtime,
-        'publish',
-        binaryName
-      )
-
-      // Final fallback to Debug.
-      const debugPath = path.join(
-        app.getAppPath(),
-        'src',
-        'dotnet',
-        'OpenCowork.Agent',
-        'bin',
-        'Debug',
-        'net10.0',
-        binaryName
-      )
-
-      if (fs.existsSync(outPath)) return outPath
-      if (fs.existsSync(devPath)) return devPath
-      if (fs.existsSync(debugPath)) return debugPath
-      // Last resort: try dotnet run
-      return ''
-    }
-
-    const runtime = this.getSidecarRuntime()
-
-    // In production, tolerate both flattened and runtime-scoped sidecar layouts.
-    const prodCandidates = [
-      path.join(process.resourcesPath, 'sidecar', binaryName),
-      path.join(process.resourcesPath, 'sidecar', runtime, binaryName),
-      path.join(process.resourcesPath, 'resources', 'sidecar', binaryName),
-      path.join(process.resourcesPath, 'resources', 'sidecar', runtime, binaryName),
-      path.join(process.resourcesPath, 'app.asar.unpacked', 'resources', 'sidecar', binaryName),
-      path.join(
-        process.resourcesPath,
-        'app.asar.unpacked',
-        'resources',
-        'sidecar',
-        runtime,
-        binaryName
-      )
-    ]
-
-    for (const candidate of prodCandidates) {
-      if (fs.existsSync(candidate)) return candidate
-    }
-
-    console.warn(`[Sidecar] No production binary found. Checked: ${prodCandidates.join(', ')}`)
-    return prodCandidates[0]
-  }
-
-  async start(): Promise<boolean> {
-    if (this.process) {
-      console.log('[Sidecar] start() skipped: process already exists')
-      return true
-    }
-
-    this.isShuttingDown = false
-
-    if (this.shouldAutoPublishDevSidecar()) {
-      const published = await this.ensureDevSidecarPublished()
-      if (!published && !fs.existsSync(this.getDevPublishedSidecarPath())) {
-        console.warn('[Sidecar] Dev auto-publish did not produce a usable sidecar binary')
-      }
-    }
-
-    const sidecarPath = this.getSidecarPath()
-    console.log(
-      `[Sidecar] start() called. appPath=${app.getAppPath()} packaged=${app.isPackaged} resolvedPath=${sidecarPath || '<dotnet-run>'}`
-    )
-
-    if (!sidecarPath) {
-      // Dev mode without AOT build: run via dotnet
-      return this.startViaDotnetRun()
-    }
-
-    if (!fs.existsSync(sidecarPath)) {
-      console.warn(`[Sidecar] Binary not found at ${sidecarPath}`)
-      return false
-    }
-
-    return this.spawnProcess(sidecarPath, [])
-  }
-
-  private async startViaDotnetRun(): Promise<boolean> {
-    const projectDir = path.join(app.getAppPath(), 'src', 'dotnet', 'OpenCowork.Agent')
-    const projectFile = path.join(projectDir, 'OpenCowork.Agent.csproj')
-    console.log(`[Sidecar] startViaDotnetRun projectDir=${projectDir}`)
-    if (!fs.existsSync(projectFile)) {
-      console.warn(`[Sidecar] .NET project not found for dev mode: ${projectFile}`)
-      return false
-    }
-    return this.spawnProcess('dotnet', ['run', '--project', projectDir])
-  }
-
-  private spawnProcess(command: string, args: string[]): boolean {
-    try {
-      console.log(`[Sidecar] Starting: ${command} ${args.join(' ')}`)
-
-      this.process = spawn(command, args, {
-        stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env },
-        windowsHide: true
-      })
-
-      this.buffer = ''
-
-      this.process.stdout!.on('data', (chunk: Buffer) => {
-        this.buffer += chunk.toString()
-        this.processBuffer()
-        // After processBuffer() runs, this.buffer only contains the trailing partial line.
-        // Keep a generous cap to avoid dropping valid large image events while still
-        // protecting the main process from unbounded growth if framing breaks.
-        if (this.buffer.length > SIDECAR_MAX_PENDING_LINE_BYTES) {
-          console.warn(
-            `[Sidecar] Pending line exceeded ${SIDECAR_MAX_PENDING_LINE_BYTES} bytes, dropping incomplete payload`
-          )
-          this.buffer = ''
-        }
-      })
-
-      this.process.stderr!.on('data', (chunk: Buffer) => {
-        const text = chunk.toString().trim()
-        if (text) console.log(`[Sidecar stderr] ${text}`)
-      })
-
-      this.process.on('exit', (code, signal) => {
-        console.log(`[Sidecar] Exited with code=${code} signal=${signal}`)
-        this.process = null
-        this.initialized = false
-        this.initializePromise = null
-        this.stopPingTimer()
-        this.rejectAllPending('Sidecar process exited')
-
-        if (!this.isShuttingDown && this.restartCount < SIDECAR_MAX_RESTARTS) {
-          this.restartCount++
-          console.log(
-            `[Sidecar] Restarting (attempt ${this.restartCount}/${SIDECAR_MAX_RESTARTS})...`
-          )
-          setTimeout(() => this.start(), SIDECAR_RESTART_DELAY_MS)
-        }
-      })
-
-      this.process.on('error', (err) => {
-        console.error(`[Sidecar] Process error: ${err.message}`)
-        this.process = null
-        this.initialized = false
-        this.initializePromise = null
-        this.stopPingTimer()
-      })
-
-      this.startPingTimer()
-      return true
-    } catch (err) {
-      console.error(`[Sidecar] Failed to spawn: ${err}`)
-      return false
-    }
-  }
-
-  private processBuffer(): void {
-    const lines = this.buffer.split('\n')
-    this.buffer = lines.pop() || ''
-
-    for (const line of lines) {
-      const trimmed = line.trim()
-      if (!trimmed) continue
-
-      try {
-        const msg = JSON.parse(trimmed) as JsonRpcMessage
-        this.handleMessage(msg)
-      } catch {
-        console.warn(`[Sidecar] Failed to parse: ${trimmed.slice(0, 200)}`)
-      }
-    }
-  }
-
-  private handleMessage(msg: JsonRpcMessage): void {
-    // Response to our request
-    if (msg.id !== undefined && !msg.method) {
-      const pending = this.pendingRequests.get(msg.id)
-      if (pending) {
-        this.pendingRequests.delete(msg.id)
-        clearTimeout(pending.timer)
-        if (msg.error) {
-          pending.reject(new Error(`JSON-RPC error ${msg.error.code}: ${msg.error.message}`))
-        } else {
-          pending.resolve(msg.result)
-        }
-      }
-      return
-    }
-
-    // Notification from sidecar (no id)
-    if (msg.method && msg.id === undefined) {
-      this.onEvent?.(msg.method, msg.params)
-      return
-    }
-
-    // Request from sidecar (has id and method) -- e.g. approval, electron/invoke
-    if (msg.method && msg.id !== undefined) {
-      this.handleRequestFromSidecar(msg)
-    }
-  }
-
-  private async handleRequestFromSidecar(msg: JsonRpcMessage): Promise<void> {
-    if (!this.onRequestFromSidecar) {
-      this.sendMessage({
-        jsonrpc: '2.0',
-        id: msg.id,
-        error: { code: -32601, message: 'No handler registered' }
-      })
-      return
-    }
-
-    try {
-      const result = await this.onRequestFromSidecar(msg.id!, msg.method!, msg.params)
-      this.sendMessage({ jsonrpc: '2.0', id: msg.id, result })
-    } catch (err) {
-      this.sendMessage({
-        jsonrpc: '2.0',
-        id: msg.id,
-        error: { code: -32603, message: err instanceof Error ? err.message : String(err) }
-      })
-    }
-  }
-
-  /**
-   * Send a JSON-RPC request to the sidecar and wait for a response.
-   */
-  async request(method: string, params?: unknown, timeoutMs = 30_000): Promise<unknown> {
-    if (!this.process) throw new Error('Sidecar not running')
-
-    const id = this.nextRequestId++
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pendingRequests.delete(id)
-        reject(new Error(`Sidecar request timeout: ${method}`))
-      }, timeoutMs)
-
-      this.pendingRequests.set(id, { resolve, reject, timer })
-      this.sendMessage({ jsonrpc: '2.0', id, method, params })
-    })
-  }
-
-  /**
-   * Send a JSON-RPC notification to the sidecar (no response expected).
-   */
-  notify(method: string, params?: unknown): void {
-    this.sendMessage({ jsonrpc: '2.0', method, params })
-  }
-
-  private sendMessage(msg: JsonRpcMessage): void {
-    if (!this.process?.stdin?.writable) return
-    const line = JSON.stringify(msg) + '\n'
-    this.process.stdin.write(line)
-  }
-
-  private startPingTimer(): void {
-    this.stopPingTimer()
-    this.pingTimer = setInterval(async () => {
-      try {
-        await this.request('ping', { timestamp: Date.now() }, SIDECAR_PING_TIMEOUT_MS)
-        this.restartCount = 0 // Reset on successful ping
-      } catch {
-        console.warn('[Sidecar] Ping failed')
-      }
-    }, SIDECAR_PING_INTERVAL_MS)
-  }
-
-  private stopPingTimer(): void {
-    if (this.pingTimer) {
-      clearInterval(this.pingTimer)
-      this.pingTimer = null
-    }
-  }
-
-  private rejectAllPending(reason: string): void {
-    for (const [, pending] of this.pendingRequests) {
-      clearTimeout(pending.timer)
-      pending.reject(new Error(reason))
-    }
-    this.pendingRequests.clear()
-  }
-
-  get isRunning(): boolean {
-    return this.process !== null
-  }
-
-  async ensureStarted(): Promise<boolean> {
-    if (!this.process) {
-      const ok = await this.start()
-      if (!ok) return false
-    }
-
-    if (this.initialized) return true
-    if (this.initializePromise) return this.initializePromise
-
-    this.initializePromise = this.request('initialize', {}, 30_000)
-      .then(() => {
-        this.initialized = true
-        return true
-      })
-      .catch((error) => {
-        this.initialized = false
-        throw error
-      })
-      .finally(() => {
-        this.initializePromise = null
-      })
-
-    return this.initializePromise
-  }
-
-  async stop(): Promise<void> {
-    this.isShuttingDown = true
-    this.initialized = false
-    this.initializePromise = null
-    this.stopPingTimer()
-
-    if (!this.process) return
-
-    try {
-      await this.request('shutdown', undefined, 3000)
-    } catch {
-      // Force kill if graceful shutdown fails
-    }
-
-    if (this.process) {
-      this.process.kill()
-      this.process = null
-    }
-
-    this.rejectAllPending('Sidecar stopped')
-  }
+  ) => void
+  start: () => Promise<boolean>
+  ensureStarted: () => Promise<boolean>
+  stop: () => Promise<void>
+  request: (method: string, params?: unknown, timeoutMs?: number) => Promise<unknown>
+  notify: (method: string, params?: unknown) => void
+  readonly isRunning: boolean
 }
 
 // Singleton instance
-let sidecarInstance: SidecarManager | null = null
+let sidecarInstance: SidecarBridgeManager | null = null
 
-export function getSidecarManager(): SidecarManager {
+export function getSidecarManager(): SidecarBridgeManager {
   if (!sidecarInstance) {
-    sidecarInstance = new SidecarManager()
+    sidecarInstance = new JsAgentRuntimeManager()
   }
   return sidecarInstance
 }
@@ -576,18 +72,20 @@ export function registerSidecarHandlers(): void {
   const pendingRendererToolRequests = new Map<string, PendingRendererToolRequest>()
   const pendingProviderStreamRequests = new Map<string, PendingRendererToolRequest>()
 
-  const describeForwardedEvent = (payload: {
-    runId?: string
-    event?: {
-      type?: string
-      debugInfo?: {
-        transport?: string
-        fallbackReason?: string
-        reusedConnection?: boolean
-        url?: string
+  const describeForwardedEvent = (
+    payload: {
+      runId?: string
+      event?: {
+        type?: string
+        debugInfo?: {
+          transport?: string
+          fallbackReason?: string
+          reusedConnection?: boolean
+          url?: string
+        }
       }
-    }
-  } | null): string => {
+    } | null
+  ): string => {
     const eventType = payload?.event?.type ?? 'unknown'
     if (eventType !== 'request_debug') {
       return `${eventType} runId=${payload?.runId ?? ''}`
@@ -623,6 +121,40 @@ export function registerSidecarHandlers(): void {
     return details.join(' ')
   }
 
+  const EVENT_BATCH_INTERVAL_MS = 32
+  let eventBatchBuffer: Array<{
+    runId: string
+    event: Record<string, unknown>
+  }> = []
+  let eventBatchTimer: ReturnType<typeof setTimeout> | null = null
+
+  function flushEventBatch(): void {
+    eventBatchTimer = null
+    if (eventBatchBuffer.length === 0) return
+
+    const buffered = eventBatchBuffer
+    eventBatchBuffer = []
+
+    const byRunId = new Map<string, Array<Record<string, unknown>>>()
+    for (const item of buffered) {
+      let arr = byRunId.get(item.runId)
+      if (!arr) {
+        arr = []
+        byRunId.set(item.runId, arr)
+      }
+      arr.push(item.event)
+    }
+
+    for (const [runId, events] of byRunId) {
+      for (const win of BrowserWindow.getAllWindows()) {
+        safeSendToWindow(win, 'sidecar:event', {
+          method: 'agent/event-batch',
+          params: { runId, events }
+        })
+      }
+    }
+  }
+
   manager.setEventHandler((method, params) => {
     if (method === 'agent/event') {
       const payload = params as {
@@ -638,6 +170,16 @@ export function registerSidecarHandlers(): void {
         }
       } | null
       console.log(`[Sidecar] event forwarded: ${describeForwardedEvent(payload)}`)
+
+      const runId = payload?.runId
+      const event = payload?.event
+      if (runId && event) {
+        eventBatchBuffer.push({ runId, event: event as Record<string, unknown> })
+        if (eventBatchTimer === null) {
+          eventBatchTimer = setTimeout(flushEventBatch, EVENT_BATCH_INTERVAL_MS)
+        }
+        return
+      }
     }
     for (const win of BrowserWindow.getAllWindows()) {
       safeSendToWindow(win, 'sidecar:event', { method, params })
@@ -881,6 +423,13 @@ export function registerSidecarHandlers(): void {
       return { cancelled: false }
     }
     return await manager.request('agent/cancel', params, 10_000)
+  })
+
+  ipcMain.handle('agent:append-messages', async (_event, params: unknown) => {
+    if (!manager.isRunning) {
+      return { appended: false, count: 0 }
+    }
+    return await manager.request('agent/append-messages', params, 10_000)
   })
 
   ipcMain.on('sidecar:notify', (_event, method: string, params: unknown) => {

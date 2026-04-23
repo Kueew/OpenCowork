@@ -98,6 +98,14 @@ export interface AgentLoopConfig {
   captureFinalMessages?: (messages: UnifiedMessage[]) => void
 }
 
+export interface RequestRetryState {
+  attempt: number
+  maxAttempts: number
+  delayMs: number
+  statusCode?: number
+  reason: string
+}
+
 // --- Agent Loop Events ---
 
 export type AgentEvent =
@@ -140,6 +148,7 @@ export type AgentEvent =
   | { type: 'tool_call_start'; toolCall: ToolCallState }
   | { type: 'tool_call_approval_needed'; toolCall: ToolCallState }
   | { type: 'tool_call_result'; toolCall: ToolCallState }
+  | ({ type: 'request_retry' } & RequestRetryState)
   | {
       type: 'iteration_end'
       stopReason: string

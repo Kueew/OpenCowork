@@ -16,7 +16,6 @@ import { showSystemNotification } from '../ipc/notify-handlers'
 import { executePluginAction } from '../ipc/channel-handlers'
 import { safeSendToAllWindows } from '../window-ipc'
 import { getDb } from '../db/database'
-import { getSidecarManager } from '../ipc/sidecar-manager'
 import {
   resolveResponsesWebsocketConfig,
   type ResponsesWebsocketMode
@@ -25,7 +24,8 @@ import { ResponsesWebSocketSessionManager } from '../lib/responses-websocket-ses
 
 const DEFAULT_AGENT = 'CronAgent'
 const DEFAULT_BASH_TIMEOUT_MS = 600_000
-const MAX_PROVIDER_RETRIES = 3
+// One initial attempt plus at least five retries for retryable upstream failures.
+const MAX_PROVIDER_RETRIES = 6
 const BASE_RETRY_DELAY_MS = 1_500
 const PROMPTS_DIR = path.join(os.homedir(), '.open-cowork', 'prompts')
 const AGENTS_DIR = path.join(os.homedir(), '.open-cowork', 'agents')
@@ -119,6 +119,16 @@ interface TokenUsage {
 }
 
 type TextBlock = { type: 'text'; text: string }
+type ImageResultBlock = {
+  type: 'image'
+  source: {
+    type: 'base64' | 'url'
+    mediaType?: string
+    data?: string
+    url?: string
+    filePath?: string
+  }
+}
 type ThinkingBlock = {
   type: 'thinking'
   thinking: string
@@ -141,7 +151,7 @@ type ToolResultBlock = {
   isError?: boolean
 }
 type ContentBlock = TextBlock | ThinkingBlock | ToolUseBlock | ToolResultBlock
-type ToolResultContent = string
+export type ToolResultContent = string | Array<TextBlock | ImageResultBlock>
 
 interface UnifiedMessage {
   id: string
@@ -258,7 +268,7 @@ interface StreamEvent {
   error?: { type?: string; message?: string }
 }
 
-interface ToolCallState {
+export interface ToolCallState {
   id: string
   name: string
   input: Record<string, unknown>
@@ -270,28 +280,101 @@ interface ToolCallState {
   completedAt?: number
 }
 
-interface ToolContext {
+export interface ToolContext {
   sessionId?: string
   workingFolder?: string
   signal: AbortSignal
   currentToolUseId?: string
+  agentRunId?: string
   callerAgent?: string
   pluginId?: string
   pluginChatId?: string
+  pluginChatType?: 'p2p' | 'group'
+  pluginSenderId?: string
+  pluginSenderName?: string
+  sshConnectionId?: string
   sharedState?: { deliveryUsed?: boolean }
+  fallbackToolExecutor?: (
+    name: string,
+    input: Record<string, unknown>,
+    ctx: ToolContext
+  ) => Promise<{ content: ToolResultContent; isError?: boolean; error?: string }>
+  resolveRequiresApproval?: (
+    name: string,
+    input: Record<string, unknown>,
+    ctx: ToolContext
+  ) => Promise<boolean>
 }
 
 interface ToolHandler {
   definition: ToolDefinition
   execute: (input: Record<string, unknown>, ctx: ToolContext) => Promise<ToolResultContent>
+  requiresApproval?: (input: Record<string, unknown>, ctx: ToolContext) => boolean
 }
 
-interface AgentLoopConfig {
+interface MessageQueueLike {
+  drain(): UnifiedMessage[]
+}
+
+export interface AgentLoopConfig {
   maxIterations: number
   provider: ProviderConfig
   tools: ToolDefinition[]
   signal: AbortSignal
+  forceApproval?: boolean
+  onApprovalNeeded?: (toolCall: ToolCallState) => Promise<boolean>
+  messageQueue?: MessageQueueLike
+  captureFinalMessages?: boolean
 }
+
+export type InteractiveAgentEvent =
+  | { type: 'loop_start' }
+  | { type: 'iteration_start'; iteration: number }
+  | { type: 'thinking_delta'; thinking: string }
+  | {
+      type: 'thinking_encrypted'
+      thinkingEncryptedContent: string
+      thinkingEncryptedProvider: 'anthropic' | 'openai-responses' | 'google'
+    }
+  | { type: 'text_delta'; text: string }
+  | {
+      type: 'tool_use_streaming_start'
+      toolCallId: string
+      toolName: string
+      toolCallExtraContent?: Record<string, unknown>
+    }
+  | { type: 'tool_use_args_delta'; toolCallId: string; partialInput: Record<string, unknown> }
+  | {
+      type: 'tool_use_generated'
+      toolUseBlock: {
+        id: string
+        name: string
+        input: Record<string, unknown>
+        extraContent?: Record<string, unknown>
+      }
+    }
+  | { type: 'tool_call_start'; toolCall: ToolCallState }
+  | { type: 'tool_call_approval_needed'; toolCall: ToolCallState }
+  | { type: 'tool_call_result'; toolCall: ToolCallState }
+  | {
+      type: 'request_retry'
+      attempt: number
+      maxAttempts: number
+      delayMs: number
+      statusCode?: number
+      reason: string
+    }
+  | {
+      type: 'iteration_end'
+      toolResults: { toolUseId: string; content: ToolResultContent; isError?: boolean }[]
+    }
+  | { type: 'message_end'; usage?: TokenUsage; timing?: RequestTiming; providerResponseId?: string }
+  | { type: 'error'; error: Error }
+  | {
+      type: 'loop_end'
+      reason: 'completed' | 'max_iterations' | 'aborted' | 'error'
+      messages?: UnifiedMessage[]
+    }
 
 interface AgentDefinition {
   name: string
@@ -450,28 +533,6 @@ function buildCronSearchIgnore(pattern: string): string[] {
 
 function buildCronSearchWarnings(messages: Array<string | false | null | undefined>): string[] {
   return messages.filter((item): item is string => typeof item === 'string' && item.length > 0)
-}
-
-function extractSidecarGrepResult(value: unknown): {
-  matches: Array<{ file: string; line: number; text: string }>
-  truncated: boolean
-  timedOut: boolean
-  limitReason: SearchLimitReason
-} | null {
-  if (!value || typeof value !== 'object') return null
-  const result = value as {
-    results?: Array<{ file: string; line: number; text: string }>
-    truncated?: boolean
-    timedOut?: boolean
-    limitReason?: SearchLimitReason
-  }
-  if (!Array.isArray(result.results)) return null
-  return {
-    matches: result.results,
-    truncated: result.truncated === true,
-    timedOut: result.timedOut === true,
-    limitReason: result.limitReason ?? null
-  }
 }
 
 function isNonEmptyTextFile(filePath: string): Promise<boolean> {
@@ -1551,7 +1612,7 @@ async function* sendAnthropic(
     config.allowInsecureTls ?? true,
     config.useSystemProxy ?? false
   )
-  let activeToolCall: { id: string; name: string; input: string } | null = null
+  let activeToolCall: { id: string; name: string; input: string[] } | null = null
   for await (const sse of parseSSEStream(response)) {
     if (!sse.data || sse.data === '[DONE]') continue
     let data: {
@@ -1591,7 +1652,7 @@ async function* sendAnthropic(
           activeToolCall = {
             id: String(data.content_block.id ?? nanoid()),
             name: String(data.content_block.name ?? ''),
-            input: ''
+            input: []
           }
           yield {
             type: 'tool_call_start',
@@ -1625,7 +1686,7 @@ async function* sendAnthropic(
           typeof data.delta.partial_json === 'string' &&
           activeToolCall
         ) {
-          activeToolCall.input += data.delta.partial_json
+          activeToolCall.input.push(data.delta.partial_json)
           yield {
             type: 'tool_call_delta',
             toolCallId: activeToolCall.id,
@@ -1638,7 +1699,7 @@ async function* sendAnthropic(
         if (activeToolCall) {
           let parsedInput: Record<string, unknown> = {}
           try {
-            parsedInput = JSON.parse(activeToolCall.input || '{}')
+            parsedInput = JSON.parse(activeToolCall.input.join('') || '{}')
           } catch {
             parsedInput = {}
           }
@@ -2019,51 +2080,31 @@ async function* runAgentLoop(
   messages: UnifiedMessage[],
   config: AgentLoopConfig,
   toolCtx: ToolContext
-): AsyncGenerator<
-  | { type: 'loop_start' }
-  | { type: 'iteration_start'; iteration: number }
-  | { type: 'thinking_delta'; thinking: string }
-  | {
-      type: 'thinking_encrypted'
-      thinkingEncryptedContent: string
-      thinkingEncryptedProvider: 'anthropic' | 'openai-responses' | 'google'
-    }
-  | { type: 'text_delta'; text: string }
-  | {
-      type: 'tool_use_streaming_start'
-      toolCallId: string
-      toolName: string
-      toolCallExtraContent?: Record<string, unknown>
-    }
-  | { type: 'tool_use_args_delta'; toolCallId: string; partialInput: Record<string, unknown> }
-  | {
-      type: 'tool_use_generated'
-      toolUseBlock: {
-        id: string
-        name: string
-        input: Record<string, unknown>
-        extraContent?: Record<string, unknown>
-      }
-    }
-  | { type: 'tool_call_start'; toolCall: ToolCallState }
-  | { type: 'tool_call_result'; toolCall: ToolCallState }
-  | {
-      type: 'iteration_end'
-      toolResults: { toolUseId: string; content: ToolResultContent; isError?: boolean }[]
-    }
-  | { type: 'message_end'; usage?: TokenUsage; timing?: RequestTiming; providerResponseId?: string }
-  | { type: 'error'; error: Error }
-  | { type: 'loop_end'; reason: 'completed' | 'max_iterations' | 'aborted' | 'error' }
-> {
+): AsyncGenerator<InteractiveAgentEvent> {
   yield { type: 'loop_start' }
   const conversationMessages = [...messages]
   let iteration = 0
   const hasIterationLimit = Number.isFinite(config.maxIterations) && config.maxIterations > 0
+  const buildLoopEndEvent = (
+    reason: 'completed' | 'max_iterations' | 'aborted' | 'error'
+  ): InteractiveAgentEvent => ({
+    type: 'loop_end',
+    reason,
+    ...(config.captureFinalMessages ? { messages: [...conversationMessages] } : {})
+  })
   while (!hasIterationLimit || iteration < config.maxIterations) {
     if (config.signal.aborted) {
-      yield { type: 'loop_end', reason: 'aborted' }
+      yield buildLoopEndEvent('aborted')
       return
     }
+
+    if (config.messageQueue) {
+      const injected = config.messageQueue.drain()
+      for (const message of injected) {
+        conversationMessages.push(message)
+      }
+    }
+
     iteration += 1
     yield { type: 'iteration_start', iteration }
     let assistantContentBlocks: ContentBlock[] = []
@@ -2087,7 +2128,7 @@ async function* runAgentLoop(
           config.signal
         )) {
           if (config.signal.aborted) {
-            yield { type: 'loop_end', reason: 'aborted' }
+            yield buildLoopEndEvent('aborted')
             return
           }
           switch (event.type) {
@@ -2143,6 +2184,18 @@ async function* runAgentLoop(
               const nextArgs = `${toolArgsById.get(targetToolId) ?? ''}${event.argumentsDelta ?? ''}`
               toolArgsById.set(targetToolId, nextArgs)
               const targetToolName = toolNamesById.get(targetToolId) || currentToolName
+
+              // Skip emitting partial input for Edit/large Write — the full content
+              // is parsed once at tool_call_end. Avoids sending growing file content
+              // through IPC on every delta (can be 50KB+ per event for large edits).
+              if (targetToolName === 'Edit') {
+                break
+              }
+              const newLen = nextArgs.length
+              if (targetToolName === 'Write' && newLen > 200) {
+                break
+              }
+
               const partialInput = parseToolInputSnapshot(nextArgs, targetToolName)
               if (partialInput && Object.keys(partialInput).length > 0) {
                 yield {
@@ -2180,20 +2233,60 @@ async function* runAgentLoop(
               toolArgsById.delete(endToolId)
               toolNamesById.delete(endToolId)
               toolExtraContentById.delete(endToolId)
+              const requiresApproval =
+                config.forceApproval === true
+                  ? true
+                  : await resolveToolRequiresApproval(endToolName, toolInput, toolCtx)
               const toolCall: ToolCallState = {
                 id: toolUseBlock.id,
                 name: endToolName,
                 input: toolInput,
-                status: 'running',
-                requiresApproval: false
+                status: requiresApproval ? 'pending_approval' : 'running',
+                requiresApproval
               }
               toolCalls.push(toolCall)
+              // Compact large Edit/Write inputs before sending through IPC to avoid
+              // serializing full file contents (can be 100KB+) to the renderer.
+              // Keep preview fields so the UI can still display edit summaries.
+              const IPC_PREVIEW_CHARS = 800
+              let ipcToolInput = toolInput
+              if (
+                (endToolName === 'Edit' || endToolName === 'Write') &&
+                toolInput &&
+                typeof toolInput === 'object'
+              ) {
+                const compact: Record<string, unknown> = {}
+                if (toolInput.file_path !== undefined) compact.file_path = toolInput.file_path
+                if (toolInput.path !== undefined) compact.path = toolInput.path
+                if (toolInput.explanation !== undefined) compact.explanation = toolInput.explanation
+                if (toolInput.replace_all !== undefined) compact.replace_all = toolInput.replace_all
+                if (typeof toolInput.old_string === 'string') {
+                  const s = toolInput.old_string as string
+                  compact.old_string_chars = s.length
+                  compact.old_string_preview = s.slice(0, IPC_PREVIEW_CHARS)
+                  if (s.length > IPC_PREVIEW_CHARS) compact.old_string_truncated = true
+                }
+                if (typeof toolInput.new_string === 'string') {
+                  const s = toolInput.new_string as string
+                  compact.new_string_chars = s.length
+                  compact.new_string_preview = s.slice(0, IPC_PREVIEW_CHARS)
+                  if (s.length > IPC_PREVIEW_CHARS) compact.new_string_truncated = true
+                }
+                if (typeof toolInput.content === 'string') {
+                  const s = toolInput.content as string
+                  compact.content_chars = s.length
+                  compact.content_preview = s.slice(0, IPC_PREVIEW_CHARS)
+                  if (s.length > IPC_PREVIEW_CHARS) compact.content_truncated = true
+                }
+                compact._compacted = true
+                ipcToolInput = compact
+              }
               yield {
                 type: 'tool_use_generated',
                 toolUseBlock: {
                   id: toolUseBlock.id,
                   name: endToolName,
-                  input: toolInput,
+                  input: ipcToolInput,
                   ...(toolUseBlock.extraContent ? { extraContent: toolUseBlock.extraContent } : {})
                 }
               }
@@ -2226,6 +2319,10 @@ async function* runAgentLoop(
             const danglingName = toolNamesById.get(danglingToolId) || currentToolName
             const danglingInput =
               parseToolInputSnapshot(argsText, danglingName) ?? safeParseJSON(argsText)
+            const requiresApproval =
+              config.forceApproval === true
+                ? true
+                : await resolveToolRequiresApproval(danglingName, danglingInput, toolCtx)
             assistantContentBlocks.push({
               type: 'tool_use',
               id: danglingToolId,
@@ -2239,8 +2336,8 @@ async function* runAgentLoop(
               id: danglingToolId,
               name: danglingName,
               input: danglingInput,
-              status: 'running',
-              requiresApproval: false
+              status: requiresApproval ? 'pending_approval' : 'running',
+              requiresApproval
             })
             yield {
               type: 'tool_use_generated',
@@ -2253,17 +2350,31 @@ async function* runAgentLoop(
         break
       } catch (err) {
         if (config.signal.aborted) {
-          yield { type: 'loop_end', reason: 'aborted' }
+          yield buildLoopEndEvent('aborted')
           return
         }
         const delay = getRetryDelay(err, sendAttempt, streamedContent)
         if (delay === null || sendAttempt === MAX_PROVIDER_RETRIES - 1) {
           yield { type: 'error', error: err instanceof Error ? err : new Error(String(err)) }
-          yield { type: 'loop_end', reason: 'error' }
+          yield buildLoopEndEvent('error')
           return
         }
+        const statusCode = extractStatusCode(err)
+        yield {
+          type: 'request_retry',
+          attempt: sendAttempt + 1,
+          maxAttempts: MAX_PROVIDER_RETRIES - 1,
+          delayMs: delay,
+          ...(statusCode !== null ? { statusCode } : {}),
+          reason: err instanceof Error ? err.message : String(err)
+        }
         sendAttempt += 1
-        await delayWithAbort(delay, config.signal)
+        try {
+          await delayWithAbort(delay, config.signal)
+        } catch {
+          yield buildLoopEndEvent('aborted')
+          return
+        }
       }
     }
     const assistantMsg: UnifiedMessage = {
@@ -2275,11 +2386,45 @@ async function* runAgentLoop(
     }
     conversationMessages.push(assistantMsg)
     if (toolCalls.length === 0) {
-      yield { type: 'loop_end', reason: 'completed' }
+      yield buildLoopEndEvent('completed')
       return
     }
     const toolResults: ContentBlock[] = []
     for (const toolCall of toolCalls) {
+      if (toolCall.requiresApproval && config.onApprovalNeeded) {
+        yield {
+          type: 'tool_call_approval_needed',
+          toolCall: { ...toolCall }
+        }
+        const approved = await config.onApprovalNeeded(toolCall)
+        if (!approved) {
+          if (config.signal.aborted) {
+            yield buildLoopEndEvent('aborted')
+            return
+          }
+          const deniedAt = Date.now()
+          const deniedOutput = encodeToolError('User denied permission')
+          yield {
+            type: 'tool_call_result',
+            toolCall: {
+              ...toolCall,
+              status: 'error',
+              output: deniedOutput,
+              error: 'User denied permission',
+              startedAt: deniedAt,
+              completedAt: deniedAt
+            }
+          }
+          toolResults.push({
+            type: 'tool_result',
+            toolUseId: toolCall.id,
+            content: deniedOutput,
+            isError: true
+          })
+          continue
+        }
+      }
+
       const startedAt = Date.now()
       yield { type: 'tool_call_start', toolCall: { ...toolCall, status: 'running', startedAt } }
       let output: ToolResultContent
@@ -2328,8 +2473,10 @@ async function* runAgentLoop(
       }))
     }
   }
-  yield { type: 'loop_end', reason: 'max_iterations' }
+  yield buildLoopEndEvent('max_iterations')
 }
+
+export { runAgentLoop as runInteractiveAgentLoop }
 
 function appendThinkingToBlocks(blocks: ContentBlock[], thinking: string): void {
   const last = blocks[blocks.length - 1]
@@ -2817,37 +2964,6 @@ function buildToolHandlers(): Record<string, ToolHandler> {
       const include =
         typeof input.include === 'string' && input.include.trim() ? input.include.trim() : '**/*'
 
-      try {
-        const sidecar = getSidecarManager()
-        const ready = await sidecar.ensureStarted()
-        if (ready) {
-          const result = await sidecar.request(
-            'fs/grep',
-            {
-              pattern,
-              path: searchRoot,
-              include,
-              maxResults: 200,
-              maxLineLength: 500,
-              timeoutMs: 30_000
-            },
-            35_000
-          )
-
-          const normalized = extractSidecarGrepResult(result)
-          if (normalized) {
-            return formatGrepToolResult({
-              matches: normalized.matches,
-              truncated: normalized.truncated,
-              timedOut: normalized.timedOut,
-              limitReason: normalized.limitReason
-            })
-          }
-        }
-      } catch {
-        // fall through to local grep
-      }
-
       let regex: RegExp
       try {
         regex = new RegExp(pattern, 'i')
@@ -3159,16 +3275,52 @@ function buildToolHandlers(): Record<string, ToolHandler> {
 
 const toolHandlers = buildToolHandlers()
 
+function getToolHandler(name: string): ToolHandler | undefined {
+  return toolHandlers[name]
+}
+
+async function resolveToolRequiresApproval(
+  name: string,
+  input: Record<string, unknown>,
+  ctx: ToolContext
+): Promise<boolean> {
+  const localHandler = getToolHandler(name)
+
+  if (localHandler) {
+    return localHandler.requiresApproval?.(input, ctx) ?? false
+  }
+
+  if (ctx.resolveRequiresApproval) {
+    try {
+      return await ctx.resolveRequiresApproval(name, input, ctx)
+    } catch {
+      // fall through to unknown-tool default behavior
+    }
+  }
+
+  return true
+}
+
 function executeTool(
   name: string,
   input: Record<string, unknown>,
   ctx: ToolContext
 ): Promise<ToolResultContent> {
-  const handler = toolHandlers[name]
-  if (!handler) {
-    return Promise.resolve(encodeToolError(`Unknown tool: ${name}`))
+  const handler = getToolHandler(name)
+  if (handler) {
+    return handler.execute(input, ctx)
   }
-  return handler.execute(input, ctx)
+
+  if (ctx.fallbackToolExecutor) {
+    return ctx.fallbackToolExecutor(name, input, ctx).then((result) => {
+      if (result.isError) {
+        return encodeToolError(result.error || 'Renderer tool execution failed')
+      }
+      return result.content
+    })
+  }
+
+  return Promise.resolve(encodeToolError(`Unknown tool: ${name}`))
 }
 
 function buildAllowedToolDefinitions(allowedToolNames: string[]): ToolDefinition[] {

@@ -1148,7 +1148,7 @@ export function registerApiProxyHandlers(): void {
           result.status > 0
             ? `HTTP ${result.status}${trimmed ? `: ${trimmed}` : ''}`
             : trimmed || 'Unknown transport error'
-        return `Provider circuit is open after repeated upstream failures. Last error: ${lastError}`
+        return `Provider is temporarily pausing new requests after repeated upstream failures. Requests will resume automatically soon. Last error: ${lastError}`
       }
 
       while (true) {

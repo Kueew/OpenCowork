@@ -259,11 +259,11 @@ assistant: (launches a Task with subagent_type="custom", description="verify pri
 </example>
 
 <example>
-user: "investigate why the sidecar deadlocks on startup"
+user: "investigate why the main agent runtime hangs on startup"
 <commentary>
 Open-ended investigation across many files — exactly what Task is for.
 </commentary>
-assistant: (launches a Task with subagent_type="custom", description="investigate sidecar deadlock", prompt="Investigate why src/dotnet/OpenCowork.Agent deadlocks on startup. Trace the initialization path, identify the blocking await, and report the root cause with file:line evidence.")
+assistant: (launches a Task with subagent_type="custom", description="investigate runtime startup hang", prompt="Investigate why the main-process agent runtime hangs on startup. Trace the initialization path, identify the blocking await, and report the root cause with file:line evidence.")
 </example>`
 }
 

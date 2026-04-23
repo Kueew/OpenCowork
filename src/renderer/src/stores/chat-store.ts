@@ -332,6 +332,28 @@ function getSessionByIdFromState(
   return state.sessions.find((s) => s.id === sessionId)
 }
 
+const MESSAGE_LOAD_SNAPSHOT_TAIL_SIZE = 8
+
+function matchesMessageLoadSnapshot(
+  session: Pick<Session, 'messageCount' | 'messages'> | undefined,
+  expectedMessageCount: number,
+  expectedTailMessageIds: string[]
+): boolean {
+  if (!session) return false
+  const currentKnownCount = session.messageCount ?? session.messages.length
+  if (currentKnownCount !== expectedMessageCount) return false
+  if (expectedTailMessageIds.length === 0) return true
+
+  const currentTailMessageIds = session.messages
+    .slice(-expectedTailMessageIds.length)
+    .map((message) => message.id)
+
+  return (
+    currentTailMessageIds.length === expectedTailMessageIds.length &&
+    currentTailMessageIds.every((messageId, index) => messageId === expectedTailMessageIds[index])
+  )
+}
+
 /** Bump the monotonic revision counter used by React.memo equality checks. */
 function bumpMessageRevision(msg: UnifiedMessage): void {
   msg._revision = (msg._revision ?? 0) + 1
@@ -420,6 +442,12 @@ interface ChatStore {
 
   // Message operations
   addMessage: (sessionId: string, msg: UnifiedMessage) => void
+  beginUserTurn: (
+    sessionId: string,
+    userMsg: UnifiedMessage | null,
+    assistantMsg: UnifiedMessage | null,
+    streamingMessageId: string | null
+  ) => void
   updateMessage: (sessionId: string, msgId: string, patch: Partial<UnifiedMessage>) => void
   appendTextDelta: (sessionId: string, msgId: string, text: string) => void
   appendThinkingDelta: (sessionId: string, msgId: string, thinking: string) => void
@@ -1393,6 +1421,9 @@ export const useChatStore = create<ChatStore>()(
       const session = get().sessions.find((s) => s.id === sessionId)
       if (!session) return
       const knownCount = session.messageCount ?? session.messages.length
+      const sessionTailMessageIds = session.messages
+        .slice(-MESSAGE_LOAD_SNAPSHOT_TAIL_SIZE)
+        .map((message) => message.id)
       const requestedLimit = Math.max(
         MIN_INITIAL_SESSION_MESSAGE_PAGE_SIZE,
         Math.min(
@@ -1448,9 +1479,16 @@ export const useChatStore = create<ChatStore>()(
           windowStart = prependOffset
         }
 
+        const latestSession = get().sessions.find((s) => s.id === sessionId)
+        if (!matchesMessageLoadSnapshot(latestSession, knownCount, sessionTailMessageIds)) {
+          return
+        }
+
         set((state) => {
           const target = state.sessions.find((s) => s.id === sessionId)
-          if (!target) return
+          if (!target || !matchesMessageLoadSnapshot(target, knownCount, sessionTailMessageIds)) {
+            return
+          }
           target.messages = messages
           target.messagesLoaded = true
           target.messageCount = knownCount
@@ -1525,6 +1563,9 @@ export const useChatStore = create<ChatStore>()(
       const session = get().sessions.find((s) => s.id === sessionId)
       if (!session) return
       const knownCount = session.messageCount ?? session.messages.length
+      const sessionTailMessageIds = session.messages
+        .slice(-MESSAGE_LOAD_SNAPSHOT_TAIL_SIZE)
+        .map((message) => message.id)
       const shouldSkip =
         !force &&
         session.messagesLoaded &&
@@ -1534,9 +1575,15 @@ export const useChatStore = create<ChatStore>()(
       try {
         const msgRows = (await ipcClient.invoke('db:messages:list', sessionId)) as MessageRow[]
         const messages = msgRows.map(rowToMessage)
+        const latestSession = get().sessions.find((s) => s.id === sessionId)
+        if (!matchesMessageLoadSnapshot(latestSession, knownCount, sessionTailMessageIds)) {
+          return
+        }
         set((state) => {
           const target = state.sessions.find((s) => s.id === sessionId)
-          if (!target) return
+          if (!target || !matchesMessageLoadSnapshot(target, knownCount, sessionTailMessageIds)) {
+            return
+          }
           target.messages = messages
           target.messagesLoaded = true
           target.messageCount = messages.length
@@ -1552,6 +1599,10 @@ export const useChatStore = create<ChatStore>()(
     loadWindowSessionMessages: async (sessionId, offset, limit) => {
       const session = get().sessions.find((s) => s.id === sessionId)
       if (!session) return
+      const knownCount = session.messageCount ?? session.messages.length
+      const sessionTailMessageIds = session.messages
+        .slice(-MESSAGE_LOAD_SNAPSHOT_TAIL_SIZE)
+        .map((message) => message.id)
       const safeOffset = Math.max(0, offset)
       const safeLimit = Math.max(MIN_INITIAL_SESSION_MESSAGE_PAGE_SIZE, limit)
       try {
@@ -1561,9 +1612,15 @@ export const useChatStore = create<ChatStore>()(
           offset: safeOffset
         })) as MessageRow[]
         const messages = msgRows.map(rowToMessage)
+        const latestSession = get().sessions.find((s) => s.id === sessionId)
+        if (!matchesMessageLoadSnapshot(latestSession, knownCount, sessionTailMessageIds)) {
+          return
+        }
         set((state) => {
           const target = state.sessions.find((s) => s.id === sessionId)
-          if (!target) return
+          if (!target || !matchesMessageLoadSnapshot(target, knownCount, sessionTailMessageIds)) {
+            return
+          }
           target.messages = messages
           target.messagesLoaded = true
           target.loadedRangeStart = safeOffset
@@ -2615,6 +2672,58 @@ export const useChatStore = create<ChatStore>()(
       if (!shouldPersist) return
       dbAddMessage(sessionId, msg, sortOrder)
       dbUpdateSession(sessionId, { updatedAt: Date.now() })
+    },
+
+    beginUserTurn: (sessionId, userMsg, assistantMsg, streamingMessageId) => {
+      let userSortOrder = 0
+      let assistantSortOrder = 0
+      let shouldPersistUser = false
+      let shouldPersistAssistant = false
+      set((state) => {
+        const session = getSessionByIdFromState(state, sessionId)
+        if (!session) return
+        if (!session.messagesLoaded) {
+          session.messagesLoaded = true
+          session.messages = []
+          session.loadedRangeStart = session.messageCount
+          session.loadedRangeEnd = session.messageCount
+        }
+        if (userMsg) {
+          shouldPersistUser = true
+          userSortOrder = session.messageCount
+          userMsg._revision = (userMsg._revision ?? 0) + 1
+          session.messages.push(userMsg)
+          session.messageCount += 1
+        }
+        if (assistantMsg) {
+          shouldPersistAssistant = true
+          assistantSortOrder = session.messageCount
+          assistantMsg._revision = (assistantMsg._revision ?? 0) + 1
+          session.messages.push(assistantMsg)
+          session.messageCount += 1
+        }
+        session.loadedRangeEnd = session.messageCount
+        session.lastKnownMessageCount = session.messageCount
+        trimSessionMessageWindow(session)
+        session.updatedAt = Date.now()
+
+        if (streamingMessageId !== null) {
+          _streamingBackfillBlockedSessionIds.delete(sessionId)
+          state.streamingMessages[sessionId] = streamingMessageId
+          if (sessionId === state.activeSessionId) {
+            state.streamingMessageId = streamingMessageId
+          }
+        }
+
+        releaseDormantSessionMemory(state)
+      })
+      const now = Date.now()
+      if (shouldPersistUser && userMsg) dbAddMessage(sessionId, userMsg, userSortOrder)
+      if (shouldPersistAssistant && assistantMsg)
+        dbAddMessage(sessionId, assistantMsg, assistantSortOrder)
+      if (shouldPersistUser || shouldPersistAssistant) {
+        dbUpdateSession(sessionId, { updatedAt: now })
+      }
     },
 
     updateMessage: (sessionId, msgId, patch) => {

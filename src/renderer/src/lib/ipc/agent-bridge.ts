@@ -12,12 +12,8 @@ import {
 type AgentEventHandler = (event: { type: string; [key: string]: unknown }) => void
 
 /**
- * Bridge client for communicating with the .NET AOT sidecar agent.
- * Routes requests through the Electron main process which manages
- * the sidecar child process via stdio JSON-RPC.
- *
- * This provides the same interface pattern as the existing ipcClient
- * so tools and the agent loop can be migrated incrementally.
+ * Bridge client for communicating with the main-process agent runtime over the
+ * existing sidecar IPC protocol.
  */
 class AgentBridgeClient {
   private eventHandlers = new Map<string, Set<AgentEventHandler>>()
@@ -34,32 +30,29 @@ class AgentBridgeClient {
 
     // Listen for agent events forwarded from sidecar via main process
     if (!this.listenerAttached) {
-      ipc.on(
-        'sidecar:event',
-        (_event: unknown, payload: { method: string; params: unknown }) => {
-          if (payload.method === 'agent/event-batch') {
-            // Unpack batch into individual agent/event dispatches
-            const batch = payload.params as {
-              runId?: string
-              events?: Array<{ type?: string; [key: string]: unknown }>
-            } | null
-            if (batch?.runId && Array.isArray(batch.events)) {
-              for (const evt of batch.events) {
-                this.dispatchEvent('agent/event', {
-                  runId: batch.runId,
-                  event: evt,
-                  type: evt?.type ?? 'unknown'
-                })
-              }
+      ipc.on('sidecar:event', (_event: unknown, payload: { method: string; params: unknown }) => {
+        if (payload.method === 'agent/event-batch') {
+          // Unpack batch into individual agent/event dispatches
+          const batch = payload.params as {
+            runId?: string
+            events?: Array<{ type?: string; [key: string]: unknown }>
+          } | null
+          if (batch?.runId && Array.isArray(batch.events)) {
+            for (const evt of batch.events) {
+              this.dispatchEvent('agent/event', {
+                runId: batch.runId,
+                event: evt,
+                type: evt?.type ?? 'unknown'
+              })
             }
-          } else {
-            this.dispatchEvent(
-              payload.method,
-              payload.params as { type: string; [key: string]: unknown }
-            )
           }
+        } else {
+          this.dispatchEvent(
+            payload.method,
+            payload.params as { type: string; [key: string]: unknown }
+          )
         }
-      )
+      })
       this.listenerAttached = true
     }
 
@@ -159,6 +152,16 @@ class AgentBridgeClient {
     return window.electron.ipcRenderer.invoke('agent:cancel', { runId })
   }
 
+  async appendAgentMessages(
+    runId: string,
+    messages: UnifiedMessage[]
+  ): Promise<{ appended: boolean; runId?: string; count: number }> {
+    return window.electron.ipcRenderer.invoke('agent:append-messages', {
+      runId,
+      messages
+    })
+  }
+
   /**
    * Gracefully stop the sidecar.
    */
@@ -169,8 +172,7 @@ class AgentBridgeClient {
 }
 
 /**
- * Check if a capability is available via the sidecar.
- * Use this to decide whether to route through .NET sidecar or Node.js fallback.
+ * Check if a capability is available via the main-process runtime bridge.
  */
 export async function canSidecarHandle(capability: string): Promise<boolean> {
   try {
@@ -281,12 +283,12 @@ export async function runSidecarTextRequest(args: {
         if (!event) return
 
         if (!runId) {
-          pendingEvents.push(event)
+          pendingEvents.push(event as unknown as { type: string; [key: string]: unknown })
           return
         }
 
         if (recordRunId !== runId) return
-        handleEvent(event)
+        handleEvent(event as unknown as { type: string; [key: string]: unknown })
       })
 
       void (async () => {

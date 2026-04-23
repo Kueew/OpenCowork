@@ -64,7 +64,6 @@ export function ChatHomePage(): React.JSX.Element {
               preserveProjectless: true
             })
           : chatStore.createSession(mode, activeProject?.id ?? undefined, options)
-      chatStore.setActiveSession(sessionId)
       useUIStore.getState().navigateToSession(sessionId)
       void sendMessage(text, images, undefined, sessionId, undefined, undefined, {
         ...options,

@@ -1,16 +1,13 @@
 import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
 import { persist, createJSONStorage } from 'zustand/middleware'
-import type { ToolCallState } from '../lib/agent/types'
+import type { RequestRetryState, ToolCallState } from '../lib/agent/types'
 import type { SubAgentEvent } from '../lib/agent/sub-agents/types'
 import type { ToolResultContent, UnifiedMessage, ContentBlock, TokenUsage } from '../lib/api/types'
 import { ipcStorage } from '../lib/ipc/ipc-storage'
 import { ipcClient } from '../lib/ipc/ipc-client'
 import { IPC } from '../lib/ipc/channels'
-import {
-  emitAgentRuntimeSync,
-  isAgentRuntimeSyncSuppressed
-} from '../lib/agent-runtime-sync'
+import { emitAgentRuntimeSync, isAgentRuntimeSyncSuppressed } from '../lib/agent-runtime-sync'
 import { useTeamStore } from './team-store'
 import { sendApprovalResponse } from '../lib/agent/teams/inbox-poller'
 import { sendPlanApprovalResponse } from '../lib/agent/teams/plan-approval-bridge'
@@ -679,6 +676,8 @@ export interface AgentRunChangeSet {
   updatedAt: number
 }
 
+type SessionExecutionStatus = 'running' | 'retrying' | 'completed'
+
 function isAgentChangeError(value: unknown): value is { error: string } {
   if (!value || typeof value !== 'object') return false
   return typeof (value as { error?: unknown }).error === 'string'
@@ -815,7 +814,8 @@ interface AgentStore {
   sessionBackgroundProcessSummaries: Record<string, BackgroundProcessState[]>
 
   /** Per-session agent running state for sidebar indicators */
-  runningSessions: Record<string, 'running' | 'completed'>
+  runningSessions: Record<string, SessionExecutionStatus>
+  sessionRequestRetryState: Record<string, RequestRetryState>
 
   /** Per-session tool-call cache — stores tool calls when switching away from a session */
   sessionToolCallsCache: Record<string, SessionToolCallCache>
@@ -860,7 +860,8 @@ interface AgentStore {
   setRunning: (running: boolean) => void
   setCurrentLoopId: (id: string | null) => void
   /** Update per-session status. 'completed' auto-clears after ~3 s. null removes entry. */
-  setSessionStatus: (sessionId: string, status: 'running' | 'completed' | null) => void
+  setSessionStatus: (sessionId: string, status: SessionExecutionStatus | null) => void
+  setSessionRequestRetryState: (sessionId: string, state: RequestRetryState | null) => void
   isSessionActive: (sessionId: string | null | undefined) => boolean
   /** Switch active tool-call context: save current tool calls for prevSession, restore for nextSession */
   switchToolCallSession: (prevSessionId: string | null, nextSessionId: string | null) => void
@@ -905,6 +906,7 @@ export const useAgentStore = create<AgentStore>()(
       executedToolCalls: [],
       runChangesByRunId: {},
       runningSessions: {},
+      sessionRequestRetryState: {},
       sessionToolCallsCache: {},
       sessionSubAgentLiveCache: {},
       activeSubAgents: {},
@@ -933,6 +935,7 @@ export const useAgentStore = create<AgentStore>()(
             state.runningSessions[sessionId] = status
           } else {
             delete state.runningSessions[sessionId]
+            delete state.sessionRequestRetryState[sessionId]
           }
         })
         if (!isAgentRuntimeSyncSuppressed()) {
@@ -944,16 +947,41 @@ export const useAgentStore = create<AgentStore>()(
             set((state) => {
               if (state.runningSessions[sessionId] === 'completed') {
                 delete state.runningSessions[sessionId]
+                delete state.sessionRequestRetryState[sessionId]
               }
             })
           }, 3000)
         }
       },
 
+      setSessionRequestRetryState: (sessionId, requestRetryState) => {
+        const previousStatus = get().runningSessions[sessionId]
+        set((state) => {
+          if (requestRetryState) {
+            state.sessionRequestRetryState[sessionId] = requestRetryState
+            state.runningSessions[sessionId] = 'retrying'
+          } else {
+            delete state.sessionRequestRetryState[sessionId]
+            if (state.runningSessions[sessionId] === 'retrying') {
+              state.runningSessions[sessionId] = 'running'
+            }
+          }
+        })
+        const nextStatus = get().runningSessions[sessionId] ?? null
+        if (!isAgentRuntimeSyncSuppressed() && previousStatus !== nextStatus) {
+          emitAgentRuntimeSync({ kind: 'set_session_status', sessionId, status: nextStatus })
+        }
+      },
+
       isSessionActive: (sessionId) => {
         if (!sessionId) return false
         const state = get()
-        if (state.runningSessions[sessionId] === 'running') return true
+        if (
+          state.runningSessions[sessionId] === 'running' ||
+          state.runningSessions[sessionId] === 'retrying'
+        ) {
+          return true
+        }
         if (sigHasEntry(state.runningSubAgentSessionIdsSig, sessionId)) return true
         if (
           Object.values(state.backgroundProcesses).some(
@@ -1026,7 +1054,11 @@ export const useAgentStore = create<AgentStore>()(
           })
         })
         if (!isAgentRuntimeSyncSuppressed()) {
-          emitAgentRuntimeSync({ kind: 'add_tool_call', toolCall: tc, sessionId: resolvedSessionId })
+          emitAgentRuntimeSync({
+            kind: 'add_tool_call',
+            toolCall: tc,
+            sessionId: resolvedSessionId
+          })
         }
       },
 
