@@ -196,11 +196,14 @@ function buildToolCallRenderState(
 ): ToolCallRenderState {
   const result = options.toolResults?.get(block.id)
   const liveToolCall = options.liveToolCallMap?.get(block.id)
+  const liveInput = liveToolCall?.input
+  const effectiveInput =
+    liveInput && Object.keys(liveInput).length > 0 ? liveInput : block.input
   return {
     id: block.id,
     toolUseId: block.id,
     name: block.name,
-    input: block.input,
+    input: effectiveInput,
     output: liveToolCall?.output ?? result?.content,
     status: resolveToolCallStatus(options.isStreaming, liveToolCall, result),
     error: liveToolCall?.error,

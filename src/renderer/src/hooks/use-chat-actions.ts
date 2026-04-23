@@ -3908,9 +3908,6 @@ export function useChatActions(): {
                 case 'tool_use_args_delta': {
                   // Real-time partial args update via partial-json parsing
                   const toolName = liveToolNames.get(event.toolCallId) ?? ''
-                  if (toolName === 'Edit') {
-                    break
-                  }
                   const liveCardInput = summarizeToolInputForLiveCard(toolName, event.partialInput)
                   scheduleChatToolInputUpdate(event.toolCallId, liveCardInput, toolName)
                   scheduleToolInputUpdate(event.toolCallId, liveCardInput, toolName)

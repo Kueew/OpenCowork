@@ -1995,7 +1995,10 @@ function ToolCallCardInner({
     (name === 'Write' || name === 'Edit') &&
     input.content_hidden_until_complete === true
   const showSettledWriteContent =
-    name === 'Write' && status !== 'streaming' && status !== 'running' && !!input.content
+    name === 'Write' &&
+    status !== 'streaming' &&
+    status !== 'running' &&
+    !!(input.content || input.content_preview)
   const elapsed =
     startedAt && completedAt ? ((completedAt - startedAt) / 1000).toFixed(1) + 's' : null
   const useCompactToolHeader = !isActive && ['Bash', 'Read', 'Grep', 'Glob', 'LS'].includes(name)
@@ -2136,39 +2139,53 @@ function ToolCallCardInner({
               ) : (
                 <>
                   {/* Write: show content with syntax highlighting */}
-                  {showSettledWriteContent && name === 'Write' && (
-                    <div>
-                      <div className="mb-1 flex items-center gap-1.5">
-                        <p className="text-xs font-medium text-muted-foreground">
-                          {t('toolCall.content')}
-                        </p>
-                        <span className="text-[9px] text-muted-foreground/55 font-mono">
-                          {detectLang(String(input.file_path ?? input.path ?? ''))} ·{' '}
-                          {typeof input.content === 'string'
-                            ? input.content.split('\n').length
-                            : '?'}{' '}
-                          lines
-                        </span>
-                        <CopyBtn text={String(input.content)} />
+                  {showSettledWriteContent && name === 'Write' && (() => {
+                    const writeContent = typeof input.content === 'string' ? input.content : null
+                    const writePreview = typeof input.content_preview === 'string' ? input.content_preview : null
+                    const writePreviewTail = typeof input.content_preview_tail === 'string' ? input.content_preview_tail : null
+                    const displayContent = writeContent ?? (writePreviewTail ? `${writePreview}\n…\n${writePreviewTail}` : writePreview) ?? ''
+                    const isOmitted = !writeContent && !!input.content_omitted
+                    const totalLines = typeof input.content_lines === 'number'
+                      ? input.content_lines
+                      : writeContent
+                        ? writeContent.split('\n').length
+                        : null
+                    return (
+                      <div>
+                        <div className="mb-1 flex items-center gap-1.5">
+                          <p className="text-xs font-medium text-muted-foreground">
+                            {t('toolCall.content')}
+                          </p>
+                          <span className="text-[9px] text-muted-foreground/55 font-mono">
+                            {detectLang(String(input.file_path ?? input.path ?? ''))}
+                            {totalLines !== null ? ` · ${totalLines} lines` : ''}
+                          </span>
+                          {isOmitted && (
+                            <span className="rounded bg-muted px-1 py-0.5 text-[9px] text-muted-foreground/60">
+                              preview
+                            </span>
+                          )}
+                          {writeContent && <CopyBtn text={writeContent} />}
+                        </div>
+                        <LazySyntaxHighlighter
+                          language={detectLang(String(input.file_path ?? input.path ?? ''))}
+                          wrapLongLines
+                          customStyle={{
+                            margin: 0,
+                            padding: '0.5rem',
+                            borderRadius: '0.375rem',
+                            fontSize: '11px',
+                            maxHeight: '200px',
+                            overflow: 'auto',
+                            fontFamily: MONO_FONT
+                          }}
+                          codeTagProps={{ style: { fontFamily: 'inherit' } }}
+                        >
+                          {displayContent}
+                        </LazySyntaxHighlighter>
                       </div>
-                      <LazySyntaxHighlighter
-                        language={detectLang(String(input.file_path ?? input.path ?? ''))}
-                        wrapLongLines
-                        customStyle={{
-                          margin: 0,
-                          padding: '0.5rem',
-                          borderRadius: '0.375rem',
-                          fontSize: '11px',
-                          maxHeight: '200px',
-                          overflow: 'auto',
-                          fontFamily: MONO_FONT
-                        }}
-                        codeTagProps={{ style: { fontFamily: 'inherit' } }}
-                      >
-                        {String(input.content)}
-                      </LazySyntaxHighlighter>
-                    </div>
-                  )}
+                    )
+                  })()}
                   {/* Structured Input — tool-specific rendering */}
                   {!(showSettledWriteContent || isTaskTool) && (
                     <StructuredInput name={name} input={input} />
