@@ -1,3 +1,4 @@
+import type React from 'react'
 import { create } from 'zustand'
 import {
   BOTTOM_TERMINAL_DOCK_DEFAULT_HEIGHT,
@@ -227,6 +228,18 @@ interface UIStore {
   browserUrl: string
   setBrowserUrl: (url: string) => void
   openBrowserTab: (url?: string) => void
+  browserLoading: boolean
+  setBrowserLoading: (loading: boolean) => void
+  browserPageTitle: string
+  setBrowserPageTitle: (title: string) => void
+  browserCanGoBack: boolean
+  setBrowserCanGoBack: (can: boolean) => void
+  browserCanGoForward: boolean
+  setBrowserCanGoForward: (can: boolean) => void
+  browserErrorInfo: { code: number; desc: string; url: string } | null
+  setBrowserErrorInfo: (info: { code: number; desc: string; url: string } | null) => void
+  browserWebviewRef: React.RefObject<Electron.WebviewTag | null> | null
+  setBrowserWebviewRef: (ref: React.RefObject<Electron.WebviewTag | null> | null) => void
   subAgentExecutionDetailOpen: boolean
   subAgentExecutionDetailToolUseId: string | null
   subAgentExecutionDetailInlineText: string | null
@@ -600,8 +613,21 @@ export const useUIStore = create<UIStore>((set, get) => ({
     set({
       rightPanelTab: 'browser',
       rightPanelOpen: true,
+      browserErrorInfo: null,
       ...(url !== undefined ? { browserUrl: url } : {})
     }),
+  browserLoading: false,
+  setBrowserLoading: (loading) => set({ browserLoading: loading }),
+  browserPageTitle: '',
+  setBrowserPageTitle: (title) => set({ browserPageTitle: title }),
+  browserCanGoBack: false,
+  setBrowserCanGoBack: (can) => set({ browserCanGoBack: can }),
+  browserCanGoForward: false,
+  setBrowserCanGoForward: (can) => set({ browserCanGoForward: can }),
+  browserErrorInfo: null,
+  setBrowserErrorInfo: (info) => set({ browserErrorInfo: info }),
+  browserWebviewRef: null,
+  setBrowserWebviewRef: (ref) => set({ browserWebviewRef: ref }),
   subAgentExecutionDetailOpen: false,
   subAgentExecutionDetailToolUseId: null,
   subAgentExecutionDetailInlineText: null,

@@ -546,7 +546,8 @@ async function openDetachedSessionWindow(
     icon: icon,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false
+      sandbox: false,
+      webviewTag: true
     }
   })
 
@@ -747,8 +748,8 @@ function createWindow(): void {
 
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-
-      sandbox: false
+      sandbox: false,
+      webviewTag: true
     }
   })
 
@@ -795,8 +796,8 @@ async function createSshWindow(): Promise<void> {
 
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-
-      sandbox: false
+      sandbox: false,
+      webviewTag: true
     }
   })
 

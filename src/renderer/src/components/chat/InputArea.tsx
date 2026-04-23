@@ -2152,11 +2152,7 @@ export function InputArea({
   )
 
   return (
-    <div
-      ref={rootRef}
-      data-tour="composer"
-      className="px-4 py-3 pb-4"
-    >
+    <div ref={rootRef} data-tour="composer" className="px-4 py-3 pb-4">
       {/* API key warning */}
       {!hasApiKey && (
         <button
@@ -2850,67 +2846,67 @@ export function InputArea({
                 {folderControl}
               </div>
 
-                <div className="flex shrink-0 items-center gap-1.5">
-                  <ContextRing />
+              <div className="flex shrink-0 items-center gap-1.5">
+                <ContextRing />
 
-                  {debouncedTokens > 0 && (
-                    <span className="select-none tabular-nums text-[10px] text-muted-foreground/60">
-                      {formatTokens(debouncedTokens)} tokens
-                    </span>
-                  )}
+                {debouncedTokens > 0 && (
+                  <span className="select-none tabular-nums text-[10px] text-muted-foreground/60">
+                    {formatTokens(debouncedTokens)} tokens
+                  </span>
+                )}
 
-                  {showInlineClearConversation && hasMessages && !isStreaming && (
-                    <AlertDialog>
-                      <AlertDialogTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          className="composer-control rounded-lg"
-                          data-tone="danger"
-                          aria-label={t('input.clearConversation')}
-                          title={t('input.clearConversation')}
+                {showInlineClearConversation && hasMessages && !isStreaming && (
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        className="composer-control rounded-lg"
+                        data-tone="danger"
+                        aria-label={t('input.clearConversation')}
+                        title={t('input.clearConversation')}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent size="sm">
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>{t('input.clearConfirmTitle')}</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          {queuedMessages.length > 0
+                            ? t('input.clearConfirmDescWithQueue', {
+                                defaultValue:
+                                  '这将删除此对话中的所有消息，并清空当前会话的 {{count}} 条待发送消息。此操作不可撤销。',
+                                count: queuedMessages.length
+                              })
+                            : t('input.clearConfirmDesc')}
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel size="sm">
+                          {t('action.cancel', { ns: 'common' })}
+                        </AlertDialogCancel>
+                        <AlertDialogAction
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => {
+                            if (!activeSessionId) return
+                            clearSessionMessages(activeSessionId)
+                            clearPendingSessionMessages(activeSessionId)
+                          }}
                         >
-                          <Trash2 className="size-3.5" />
-                        </Button>
-                      </AlertDialogTrigger>
-                      <AlertDialogContent size="sm">
-                        <AlertDialogHeader>
-                          <AlertDialogTitle>{t('input.clearConfirmTitle')}</AlertDialogTitle>
-                          <AlertDialogDescription>
-                            {queuedMessages.length > 0
-                              ? t('input.clearConfirmDescWithQueue', {
-                                  defaultValue:
-                                    '这将删除此对话中的所有消息，并清空当前会话的 {{count}} 条待发送消息。此操作不可撤销。',
-                                  count: queuedMessages.length
-                                })
-                              : t('input.clearConfirmDesc')}
-                          </AlertDialogDescription>
-                        </AlertDialogHeader>
-                        <AlertDialogFooter>
-                          <AlertDialogCancel size="sm">
-                            {t('action.cancel', { ns: 'common' })}
-                          </AlertDialogCancel>
-                          <AlertDialogAction
-                            variant="destructive"
-                            size="sm"
-                            onClick={() => {
-                              if (!activeSessionId) return
-                              clearSessionMessages(activeSessionId)
-                              clearPendingSessionMessages(activeSessionId)
-                            }}
-                          >
-                            {t('action.clear', { ns: 'common' })}
-                          </AlertDialogAction>
-                        </AlertDialogFooter>
-                      </AlertDialogContent>
-                    </AlertDialog>
-                  )}
+                          {t('action.clear', { ns: 'common' })}
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                )}
 
-                  {stopControl}
-                  {optimizeControl}
-                  {sendControl}
-                </div>
+                {stopControl}
+                {optimizeControl}
+                {sendControl}
               </div>
+            </div>
           </div>
         </div>
       </div>

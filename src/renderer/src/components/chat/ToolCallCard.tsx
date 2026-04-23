@@ -1314,11 +1314,13 @@ function visualizeWhitespace(text: string): string {
 function EditPayloadPane({
   label,
   value,
-  tone = 'default'
+  tone = 'default',
+  truncated
 }: {
   label: string
   value: string
   tone?: 'default' | 'old' | 'new'
+  truncated?: boolean
 }): React.JSX.Element {
   const borderTone =
     tone === 'old'
@@ -1339,6 +1341,11 @@ function EditPayloadPane({
         <span className={headerTone}>{label}</span>
         <span className="text-muted-foreground/55">{lineCount(value)} lines</span>
         <span className="text-muted-foreground/55">{value.length} chars</span>
+        {truncated && (
+          <span className="rounded bg-muted px-1 py-0.5 text-[9px] normal-case text-muted-foreground/60">
+            preview
+          </span>
+        )}
         <CopyBtn text={value} />
       </div>
       <pre
@@ -1454,6 +1461,8 @@ function StructuredInput({
     const replaceAll = input.replace_all === true
     const visibleOld = oldStr || oldPreview
     const visibleNew = newStr || newPreview
+    const oldTruncated = !oldStr && !!oldPreview
+    const newTruncated = !newStr && !!newPreview
     const oldLineTotal =
       typeof input.old_string_lines === 'number'
         ? input.old_string_lines
@@ -1507,8 +1516,22 @@ function StructuredInput({
         )}
         {(visibleOld || visibleNew) && (
           <div className="space-y-2 pl-[18px]">
-            {visibleOld && <EditPayloadPane label="old_string" value={visibleOld} tone="old" />}
-            {visibleNew && <EditPayloadPane label="new_string" value={visibleNew} tone="new" />}
+            {visibleOld && (
+              <EditPayloadPane
+                label="old_string"
+                value={visibleOld}
+                tone="old"
+                truncated={oldTruncated}
+              />
+            )}
+            {visibleNew && (
+              <EditPayloadPane
+                label="new_string"
+                value={visibleNew}
+                tone="new"
+                truncated={newTruncated}
+              />
+            )}
           </div>
         )}
       </div>
@@ -2139,53 +2162,65 @@ function ToolCallCardInner({
               ) : (
                 <>
                   {/* Write: show content with syntax highlighting */}
-                  {showSettledWriteContent && name === 'Write' && (() => {
-                    const writeContent = typeof input.content === 'string' ? input.content : null
-                    const writePreview = typeof input.content_preview === 'string' ? input.content_preview : null
-                    const writePreviewTail = typeof input.content_preview_tail === 'string' ? input.content_preview_tail : null
-                    const displayContent = writeContent ?? (writePreviewTail ? `${writePreview}\n…\n${writePreviewTail}` : writePreview) ?? ''
-                    const isOmitted = !writeContent && !!input.content_omitted
-                    const totalLines = typeof input.content_lines === 'number'
-                      ? input.content_lines
-                      : writeContent
-                        ? writeContent.split('\n').length
-                        : null
-                    return (
-                      <div>
-                        <div className="mb-1 flex items-center gap-1.5">
-                          <p className="text-xs font-medium text-muted-foreground">
-                            {t('toolCall.content')}
-                          </p>
-                          <span className="text-[9px] text-muted-foreground/55 font-mono">
-                            {detectLang(String(input.file_path ?? input.path ?? ''))}
-                            {totalLines !== null ? ` · ${totalLines} lines` : ''}
-                          </span>
-                          {isOmitted && (
-                            <span className="rounded bg-muted px-1 py-0.5 text-[9px] text-muted-foreground/60">
-                              preview
+                  {showSettledWriteContent &&
+                    name === 'Write' &&
+                    (() => {
+                      const writeContent = typeof input.content === 'string' ? input.content : null
+                      const writePreview =
+                        typeof input.content_preview === 'string' ? input.content_preview : null
+                      const writePreviewTail =
+                        typeof input.content_preview_tail === 'string'
+                          ? input.content_preview_tail
+                          : null
+                      const displayContent =
+                        writeContent ??
+                        (writePreviewTail
+                          ? `${writePreview}\n…\n${writePreviewTail}`
+                          : writePreview) ??
+                        ''
+                      const isOmitted = !writeContent && !!input.content_omitted
+                      const totalLines =
+                        typeof input.content_lines === 'number'
+                          ? input.content_lines
+                          : writeContent
+                            ? writeContent.split('\n').length
+                            : null
+                      return (
+                        <div>
+                          <div className="mb-1 flex items-center gap-1.5">
+                            <p className="text-xs font-medium text-muted-foreground">
+                              {t('toolCall.content')}
+                            </p>
+                            <span className="text-[9px] text-muted-foreground/55 font-mono">
+                              {detectLang(String(input.file_path ?? input.path ?? ''))}
+                              {totalLines !== null ? ` · ${totalLines} lines` : ''}
                             </span>
-                          )}
-                          {writeContent && <CopyBtn text={writeContent} />}
+                            {isOmitted && (
+                              <span className="rounded bg-muted px-1 py-0.5 text-[9px] text-muted-foreground/60">
+                                preview
+                              </span>
+                            )}
+                            {writeContent && <CopyBtn text={writeContent} />}
+                          </div>
+                          <LazySyntaxHighlighter
+                            language={detectLang(String(input.file_path ?? input.path ?? ''))}
+                            wrapLongLines
+                            customStyle={{
+                              margin: 0,
+                              padding: '0.5rem',
+                              borderRadius: '0.375rem',
+                              fontSize: '11px',
+                              maxHeight: '200px',
+                              overflow: 'auto',
+                              fontFamily: MONO_FONT
+                            }}
+                            codeTagProps={{ style: { fontFamily: 'inherit' } }}
+                          >
+                            {displayContent}
+                          </LazySyntaxHighlighter>
                         </div>
-                        <LazySyntaxHighlighter
-                          language={detectLang(String(input.file_path ?? input.path ?? ''))}
-                          wrapLongLines
-                          customStyle={{
-                            margin: 0,
-                            padding: '0.5rem',
-                            borderRadius: '0.375rem',
-                            fontSize: '11px',
-                            maxHeight: '200px',
-                            overflow: 'auto',
-                            fontFamily: MONO_FONT
-                          }}
-                          codeTagProps={{ style: { fontFamily: 'inherit' } }}
-                        >
-                          {displayContent}
-                        </LazySyntaxHighlighter>
-                      </div>
-                    )
-                  })()}
+                      )
+                    })()}
                   {/* Structured Input — tool-specific rendering */}
                   {!(showSettledWriteContent || isTaskTool) && (
                     <StructuredInput name={name} input={input} />

@@ -157,7 +157,8 @@ const MemberDetailRow = React.memo(function MemberDetailRow({
   }, [isWorking])
 
   const elapsed = (member.completedAt ?? now) - member.startedAt
-  const lastTool = member.toolCalls.length > 0 ? member.toolCalls[member.toolCalls.length - 1] : null
+  const lastTool =
+    member.toolCalls.length > 0 ? member.toolCalls[member.toolCalls.length - 1] : null
   const currentAction = isWorking
     ? lastTool?.status === 'running'
       ? lastTool.name
@@ -177,7 +178,9 @@ const MemberDetailRow = React.memo(function MemberDetailRow({
             open && 'bg-muted/30'
           )}
         >
-          <span className={cn('size-2 shrink-0 rounded-full', statusDots[member.status] ?? 'bg-muted')} />
+          <span
+            className={cn('size-2 shrink-0 rounded-full', statusDots[member.status] ?? 'bg-muted')}
+          />
           <span className="min-w-0 flex-1 truncate text-xs font-semibold text-cyan-600 dark:text-cyan-400">
             {member.name}
           </span>
@@ -278,12 +281,18 @@ const MemberDetailRow = React.memo(function MemberDetailRow({
               <CollapsibleTrigger asChild>
                 <button className="flex w-full items-center gap-1.5 py-0.5 text-[10px] text-muted-foreground/60 transition-colors hover:text-muted-foreground">
                   <Wrench className="size-2.5" />
-                  <span className="font-medium uppercase tracking-wider">{t('team.toolCalls')}</span>
+                  <span className="font-medium uppercase tracking-wider">
+                    {t('team.toolCalls')}
+                  </span>
                   <Badge variant="secondary" className="ml-0.5 h-3.5 px-1 text-[8px]">
                     {member.toolCalls.length}
                   </Badge>
                   <span className="flex-1" />
-                  {toolsOpen ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+                  {toolsOpen ? (
+                    <ChevronDown className="size-3" />
+                  ) : (
+                    <ChevronRight className="size-3" />
+                  )}
                 </button>
               </CollapsibleTrigger>
               <CollapsibleContent>
@@ -339,7 +348,11 @@ const MemberDetailRow = React.memo(function MemberDetailRow({
   )
 })
 
-const MessageRow = React.memo(function MessageRow({ msg }: { msg: TeamMessage }): React.JSX.Element {
+const MessageRow = React.memo(function MessageRow({
+  msg
+}: {
+  msg: TeamMessage
+}): React.JSX.Element {
   const { t } = useTranslation('cowork')
   const [expanded, setExpanded] = React.useState(false)
   const isLong = msg.content.length > 120
@@ -493,7 +506,9 @@ export function TeamPanel(): React.JSX.Element {
                 </span>
               )}
             </div>
-            <p className="truncate text-[10px] text-muted-foreground/60">{activeTeam.description}</p>
+            <p className="truncate text-[10px] text-muted-foreground/60">
+              {activeTeam.description}
+            </p>
           </div>
           <button
             onClick={handleClearAll}

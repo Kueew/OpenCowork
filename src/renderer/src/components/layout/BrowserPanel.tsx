@@ -1,89 +1,189 @@
-import { useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, RefreshCw, Globe } from 'lucide-react'
+import { useEffect, useRef, useState, useCallback } from 'react'
+import { ArrowLeft, ArrowRight, RefreshCw, Square, Globe, AlertCircle } from 'lucide-react'
 import { Button } from '@renderer/components/ui/button'
 import { useUIStore } from '@renderer/stores/ui-store'
+import { useTranslation } from 'react-i18next'
 
 export function BrowserPanel(): React.JSX.Element {
+  const { t } = useTranslation('layout')
+
   const storedUrl = useUIStore((s) => s.browserUrl)
   const setBrowserUrl = useUIStore((s) => s.setBrowserUrl)
+  const loading = useUIStore((s) => s.browserLoading)
+  const setBrowserLoading = useUIStore((s) => s.setBrowserLoading)
+  const setBrowserPageTitle = useUIStore((s) => s.setBrowserPageTitle)
+  const canGoBack = useUIStore((s) => s.browserCanGoBack)
+  const setBrowserCanGoBack = useUIStore((s) => s.setBrowserCanGoBack)
+  const canGoForward = useUIStore((s) => s.browserCanGoForward)
+  const setBrowserCanGoForward = useUIStore((s) => s.setBrowserCanGoForward)
+  const errorInfo = useUIStore((s) => s.browserErrorInfo)
+  const setBrowserErrorInfo = useUIStore((s) => s.setBrowserErrorInfo)
+  const setBrowserWebviewRef = useUIStore((s) => s.setBrowserWebviewRef)
 
   const [lastSeenStoredUrl, setLastSeenStoredUrl] = useState(storedUrl)
   const [inputUrl, setInputUrl] = useState(storedUrl)
   const [committedUrl, setCommittedUrl] = useState(storedUrl)
-  const [iframeKey, setIframeKey] = useState(0)
-  const iframeRef = useRef<HTMLIFrameElement>(null)
+  const webviewRef = useRef<Electron.WebviewTag | null>(null)
 
-  // Derived state sync: when agent calls openBrowserTab, storedUrl changes externally
+  useEffect(() => {
+    setBrowserWebviewRef(webviewRef)
+    return () => setBrowserWebviewRef(null)
+  }, [setBrowserWebviewRef])
+
   if (storedUrl !== lastSeenStoredUrl && storedUrl) {
     setLastSeenStoredUrl(storedUrl)
     setInputUrl(storedUrl)
     setCommittedUrl(storedUrl)
   }
 
-  const navigate = (url: string): void => {
+  const normalizeUrl = (url: string): string => {
     let normalized = url.trim()
-    if (!normalized) return
+    if (!normalized) return ''
     if (!/^https?:\/\//i.test(normalized) && !normalized.startsWith('http://localhost')) {
       normalized = `https://${normalized}`
     }
-    setInputUrl(normalized)
-    setCommittedUrl(normalized)
-    setBrowserUrl(normalized)
+    return normalized
   }
+
+  const navigate = useCallback(
+    (url: string): void => {
+      const normalized = normalizeUrl(url)
+      if (!normalized) return
+      setInputUrl(normalized)
+      setCommittedUrl(normalized)
+      setBrowserUrl(normalized)
+      setBrowserErrorInfo(null)
+      const wv = webviewRef.current
+      if (wv) {
+        wv.src = normalized
+      }
+    },
+    [setBrowserUrl, setBrowserErrorInfo]
+  )
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
     if (e.key === 'Enter') navigate(inputUrl)
   }
 
-  const handleBack = (): void => {
-    try {
-      iframeRef.current?.contentWindow?.history.back()
-    } catch {
-      // cross-origin — ignore
-    }
-  }
+  const updateNavState = useCallback(() => {
+    const wv = webviewRef.current
+    if (!wv) return
+    setBrowserCanGoBack(wv.canGoBack())
+    setBrowserCanGoForward(wv.canGoForward())
+  }, [setBrowserCanGoBack, setBrowserCanGoForward])
 
-  const handleForward = (): void => {
-    try {
-      iframeRef.current?.contentWindow?.history.forward()
-    } catch {
-      // cross-origin — ignore
-    }
-  }
+  useEffect(() => {
+    const wv = webviewRef.current
+    if (!wv) return
 
-  const handleRefresh = (): void => {
-    try {
-      iframeRef.current?.contentWindow?.location.reload()
-    } catch {
-      setIframeKey((k) => k + 1)
+    const onStartLoading = (): void => {
+      setBrowserLoading(true)
+      setBrowserErrorInfo(null)
     }
-  }
+
+    const onStopLoading = (): void => {
+      setBrowserLoading(false)
+      updateNavState()
+    }
+
+    const onNavigate = (e: Electron.DidNavigateEvent): void => {
+      setInputUrl(e.url)
+      setBrowserUrl(e.url)
+      updateNavState()
+    }
+
+    const onNavigateInPage = (e: Electron.DidNavigateInPageEvent): void => {
+      setInputUrl(e.url)
+      setBrowserUrl(e.url)
+      updateNavState()
+    }
+
+    const onTitleUpdated = (e: Electron.PageTitleUpdatedEvent): void => {
+      setBrowserPageTitle(e.title)
+    }
+
+    const onFailLoad = (e: Electron.DidFailLoadEvent): void => {
+      if (!e.isMainFrame || e.errorCode === -3) return
+      setBrowserErrorInfo({ code: e.errorCode, desc: e.errorDescription, url: e.validatedURL })
+      setBrowserLoading(false)
+    }
+
+    const onNewWindow = (e: Event & { url: string; preventDefault: () => void }): void => {
+      e.preventDefault()
+      window.electron.ipcRenderer.invoke('shell:openExternal', e.url)
+    }
+
+    wv.addEventListener('did-start-loading', onStartLoading)
+    wv.addEventListener('did-stop-loading', onStopLoading)
+    wv.addEventListener('did-navigate', onNavigate as EventListener)
+    wv.addEventListener('did-navigate-in-page', onNavigateInPage as EventListener)
+    wv.addEventListener('page-title-updated', onTitleUpdated as EventListener)
+    wv.addEventListener('did-fail-load', onFailLoad as EventListener)
+    wv.addEventListener('new-window', onNewWindow as EventListener)
+
+    return () => {
+      wv.removeEventListener('did-start-loading', onStartLoading)
+      wv.removeEventListener('did-stop-loading', onStopLoading)
+      wv.removeEventListener('did-navigate', onNavigate as EventListener)
+      wv.removeEventListener('did-navigate-in-page', onNavigateInPage as EventListener)
+      wv.removeEventListener('page-title-updated', onTitleUpdated as EventListener)
+      wv.removeEventListener('did-fail-load', onFailLoad as EventListener)
+      wv.removeEventListener('new-window', onNewWindow as EventListener)
+    }
+  }, [
+    committedUrl,
+    setBrowserLoading,
+    setBrowserErrorInfo,
+    setBrowserUrl,
+    setBrowserPageTitle,
+    updateNavState
+  ])
 
   return (
     <div className="flex h-full flex-col">
       {/* Toolbar */}
       <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border/50 px-2">
-        <Button variant="ghost" size="icon" className="size-6" onClick={handleBack} title="Back">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-6"
+          onClick={() => webviewRef.current?.goBack()}
+          disabled={!canGoBack}
+          title="Back"
+        >
           <ArrowLeft className="size-3.5" />
         </Button>
         <Button
           variant="ghost"
           size="icon"
           className="size-6"
-          onClick={handleForward}
+          onClick={() => webviewRef.current?.goForward()}
+          disabled={!canGoForward}
           title="Forward"
         >
           <ArrowRight className="size-3.5" />
         </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-6"
-          onClick={handleRefresh}
-          title="Refresh"
-        >
-          <RefreshCw className="size-3.5" />
-        </Button>
+        {loading ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-6"
+            onClick={() => webviewRef.current?.stop()}
+            title="Stop"
+          >
+            <Square className="size-3" />
+          </Button>
+        ) : (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-6"
+            onClick={() => webviewRef.current?.reload()}
+            title="Refresh"
+          >
+            <RefreshCw className="size-3.5" />
+          </Button>
+        )}
 
         <div className="flex flex-1 items-center gap-1 rounded-md border border-border/60 bg-muted/30 px-2 h-6">
           <Globe className="size-3 shrink-0 text-muted-foreground" />
@@ -107,21 +207,48 @@ export function BrowserPanel(): React.JSX.Element {
         </Button>
       </div>
 
-      {/* Iframe */}
-      <div className="min-h-0 flex-1">
+      {/* Loading bar */}
+      {loading && (
+        <div className="h-0.5 w-full overflow-hidden bg-muted">
+          <div className="h-full w-full animate-progress bg-primary/60" />
+        </div>
+      )}
+
+      {/* Content */}
+      <div className="relative min-h-0 flex-1">
         {committedUrl ? (
-          <iframe
-            key={iframeKey}
-            ref={iframeRef}
-            src={committedUrl}
-            className="size-full border-0"
-            title="Browser"
-            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
-          />
+          <>
+            <webview
+              ref={webviewRef as React.Ref<Electron.WebviewTag>}
+              src={committedUrl}
+              className="size-full"
+              allowpopups={true}
+            />
+            {errorInfo && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-background text-sm text-muted-foreground">
+                <AlertCircle className="size-10 opacity-30" />
+                <p className="font-medium">{t('rightPanel.browserLoadFailed')}</p>
+                <p className="text-xs opacity-70">
+                  {errorInfo.desc} ({errorInfo.code})
+                </p>
+                <p className="max-w-[80%] truncate text-xs opacity-50">{errorInfo.url}</p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setBrowserErrorInfo(null)
+                    webviewRef.current?.reload()
+                  }}
+                >
+                  {t('rightPanel.browserRetry')}
+                </Button>
+              </div>
+            )}
+          </>
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-2 text-xs text-muted-foreground">
             <Globe className="size-8 opacity-20" />
-            <span>Enter a URL above to browse</span>
+            <span>{t('rightPanel.browserEmptyState')}</span>
           </div>
         )}
       </div>
