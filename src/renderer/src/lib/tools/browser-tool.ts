@@ -47,18 +47,23 @@ const browserNavigateHandler: ToolHandler = {
   definition: {
     name: 'BrowserNavigate',
     description:
-      'Navigate the built-in browser. Use action "goto" to open a URL, or "back"/"forward"/"refresh" to control navigation. The browser panel opens automatically. Waits for the page to finish loading before returning.',
+      'Navigate the built-in browser to a URL or control page history.\n\n' +
+      'This is the entry point for all browser interactions. The browser panel opens automatically on the right side.\n\n' +
+      'Usage:\n' +
+      '- Use action "goto" (default) with a url to open a new page. Waits for the page to fully load before returning.\n' +
+      '- Use action "back", "forward", or "refresh" to control navigation history (no url needed).\n' +
+      '- After navigating, use BrowserSnapshot or BrowserScreenshot to observe the page before interacting.\n' +
+      '- URLs without a protocol prefix automatically get "https://" prepended. For local dev servers, use "http://localhost:<port>".',
     inputSchema: {
       type: 'object',
       properties: {
         url: {
           type: 'string',
-          description: 'The URL to navigate to (required when action is "goto").'
+          description: 'The URL to navigate to. Required when action is "goto". Example: "https://example.com" or "http://localhost:3000".'
         },
         action: {
           type: 'string',
-          description:
-            'Navigation action: "goto" (default), "back", "forward", or "refresh".'
+          description: 'Navigation action: "goto" (default) opens a URL, "back"/"forward" navigate history, "refresh" reloads the current page.'
         }
       }
     }
@@ -191,13 +196,24 @@ const browserGetContentHandler: ToolHandler = {
   definition: {
     name: 'BrowserGetContent',
     description:
-      'Get the current page content as Markdown. Optionally pass a CSS selector to extract only a specific section.',
+      'Extract the current page content as Markdown text.\n\n' +
+      'Usage:\n' +
+      '- Returns the full page body converted to Markdown by default (headings, links, lists, tables, code blocks, images preserved).\n' +
+      '- Set type to "html" to get the raw HTML source instead of Markdown.\n' +
+      '- Pass a CSS selector to extract only a specific section (e.g. "main", "#content", ".article-body").\n' +
+      '- Best for reading articles, documentation, or extracting structured data from a page.\n' +
+      '- For discovering interactive elements (buttons, inputs, links) to click or type into, use BrowserSnapshot instead.\n' +
+      '- A page must already be loaded via BrowserNavigate before calling this tool.',
     inputSchema: {
       type: 'object',
       properties: {
         selector: {
           type: 'string',
-          description: 'Optional CSS selector to extract content from a specific element.'
+          description: 'CSS selector to scope extraction to a specific element. Omit to extract the entire page body.'
+        },
+        type: {
+          type: 'string',
+          description: 'Output format: "markdown" (default) converts HTML to readable Markdown, "html" returns raw HTML source.'
         }
       }
     }
@@ -205,6 +221,27 @@ const browserGetContentHandler: ToolHandler = {
   execute: async (input) => {
     const wv = requireWebview()
     const sel = (input.selector as string) || ''
+    const outputType = (input.type as string) || 'markdown'
+
+    if (outputType === 'html') {
+      const raw = await wv.executeJavaScript(
+        `(function(sel) {
+          var root = sel ? document.querySelector(sel) : document.body
+          if (!root) return JSON.stringify({ error: 'Element not found: ' + sel })
+          return JSON.stringify({ title: document.title, content: root.innerHTML })
+        })(${sel ? JSON.stringify(sel) : 'null'})`
+      )
+      const parsed = JSON.parse(raw as string)
+      if (parsed.error) return encodeToolError(parsed.error)
+      const content = (parsed.content as string).slice(0, 80000)
+      return encodeStructuredToolResult({
+        url: useUIStore.getState().browserUrl,
+        title: parsed.title,
+        type: 'html',
+        content
+      })
+    }
+
     const raw = await wv.executeJavaScript(
       `${HTML_TO_MD_SCRIPT}(${sel ? JSON.stringify(sel) : 'null'})`
     )
@@ -214,6 +251,7 @@ const browserGetContentHandler: ToolHandler = {
     return encodeStructuredToolResult({
       url: useUIStore.getState().browserUrl,
       title: parsed.title,
+      type: 'markdown',
       content
     })
   }
@@ -226,7 +264,13 @@ const browserScreenshotHandler: ToolHandler = {
   definition: {
     name: 'BrowserScreenshot',
     description:
-      'Capture a screenshot of the current page in the built-in browser and return it as an image.',
+      'Capture a visual screenshot of the current browser viewport and return it as an image.\n\n' +
+      'Usage:\n' +
+      '- Returns a PNG image of the currently visible area of the page.\n' +
+      '- Use this to visually verify page state, check layout, or see content that is hard to represent as text (charts, images, visual designs).\n' +
+      '- For extracting text content, prefer BrowserGetContent (faster, structured). For discovering clickable elements, prefer BrowserSnapshot.\n' +
+      '- A page must already be loaded via BrowserNavigate before calling this tool.\n' +
+      '- If the page is still loading, the screenshot may be incomplete — wait or call BrowserNavigate with action "refresh" first.',
     inputSchema: {
       type: 'object',
       properties: {}
@@ -319,7 +363,14 @@ const browserSnapshotHandler: ToolHandler = {
   definition: {
     name: 'BrowserSnapshot',
     description:
-      'Get a structured snapshot of all interactive elements on the current page (links, buttons, inputs, selects). Returns CSS selectors you can use with BrowserClick and BrowserType.',
+      'Get a structured list of all interactive elements on the current page with their CSS selectors.\n\n' +
+      'Usage:\n' +
+      '- Returns every visible link, button, input, select, and textarea with a unique CSS selector and description.\n' +
+      '- ALWAYS call this before using BrowserClick or BrowserType — it gives you the exact selectors to target.\n' +
+      '- Each element entry shows: tag, type, name, placeholder, href, current value, and visible text.\n' +
+      '- Use the returned CSS selectors directly in BrowserClick or BrowserType.\n' +
+      '- After a click or navigation that changes the page, call BrowserSnapshot again to get updated selectors — the DOM may have changed.\n' +
+      '- A page must already be loaded via BrowserNavigate before calling this tool.',
     inputSchema: {
       type: 'object',
       properties: {}
@@ -375,14 +426,21 @@ const browserClickHandler: ToolHandler = {
   definition: {
     name: 'BrowserClick',
     description:
-      'Click an element on the current page. Use a CSS selector (from BrowserSnapshot) or text= prefix to match by visible text (e.g. "text=Submit").',
+      'Click an element on the current page.\n\n' +
+      'Usage:\n' +
+      '- Pass a CSS selector from BrowserSnapshot to click a specific element. This is the most reliable approach.\n' +
+      '- Alternatively, use the text= prefix to match by visible text (e.g. "text=Sign In", "text=Submit"). Matches the first clickable element containing that text.\n' +
+      '- The element is scrolled into view before clicking.\n' +
+      '- After clicking, the page may change (navigation, modal, dynamic content). Call BrowserSnapshot again to see the updated state.\n' +
+      '- Returns an error if the element is not found — verify the selector with BrowserSnapshot first.\n' +
+      '- A page must already be loaded via BrowserNavigate before calling this tool.',
     inputSchema: {
       type: 'object',
       properties: {
         selector: {
           type: 'string',
           description:
-            'CSS selector or text=<visible text> to identify the element to click.'
+            'CSS selector from BrowserSnapshot, or text=<visible text> to match by content. Examples: "#submit-btn", "text=Log In", "a:nth-of-type(3)".'
         }
       },
       required: ['selector']
@@ -443,17 +501,24 @@ const browserTypeHandler: ToolHandler = {
   definition: {
     name: 'BrowserType',
     description:
-      'Type text into an input field or textarea on the current page. Use a CSS selector from BrowserSnapshot to identify the element.',
+      'Type text into an input field, textarea, or contenteditable element on the current page.\n\n' +
+      'Usage:\n' +
+      '- Use a CSS selector from BrowserSnapshot to identify the target input element.\n' +
+      '- By default, existing content is cleared before typing (clear=true). Set clear=false to append.\n' +
+      '- Set submit=true to press Enter after typing — useful for search boxes and login forms.\n' +
+      '- Triggers standard input/change events so that frameworks (React, Vue, etc.) detect the value change.\n' +
+      '- Returns an error if the element is not found or is not an input-like element.\n' +
+      '- A page must already be loaded via BrowserNavigate before calling this tool.',
     inputSchema: {
       type: 'object',
       properties: {
         selector: {
           type: 'string',
-          description: 'CSS selector of the input element.'
+          description: 'CSS selector of the input element from BrowserSnapshot. Examples: "#search", "input[name=email]", "textarea:nth-of-type(1)".'
         },
         text: {
           type: 'string',
-          description: 'Text to type into the element.'
+          description: 'The text to type into the element.'
         },
         clear: {
           type: 'boolean',
@@ -461,7 +526,7 @@ const browserTypeHandler: ToolHandler = {
         },
         submit: {
           type: 'boolean',
-          description: 'Press Enter after typing to submit. Default: false.'
+          description: 'Press Enter after typing to submit the form. Default: false.'
         }
       },
       required: ['selector', 'text']
@@ -495,17 +560,23 @@ const browserScrollHandler: ToolHandler = {
   definition: {
     name: 'BrowserScroll',
     description:
-      'Scroll the current page up or down by a specified pixel amount (defaults to one viewport height).',
+      'Scroll the current page up or down.\n\n' +
+      'Usage:\n' +
+      '- Scrolls by the specified pixel amount, or by one viewport height if amount is omitted.\n' +
+      '- Use this to reveal content below the fold, load lazy-loaded content, or navigate long pages.\n' +
+      '- Returns the current scroll position, total page height, and viewport height — use these to determine if more scrolling is needed.\n' +
+      '- After scrolling, call BrowserSnapshot or BrowserScreenshot to observe the newly visible content.\n' +
+      '- A page must already be loaded via BrowserNavigate before calling this tool.',
     inputSchema: {
       type: 'object',
       properties: {
         direction: {
           type: 'string',
-          description: '"up" or "down" (default: "down").'
+          description: 'Scroll direction: "down" (default) or "up".'
         },
         amount: {
           type: 'number',
-          description: 'Pixels to scroll. Defaults to the viewport height.'
+          description: 'Pixels to scroll. Omit to scroll by one full viewport height.'
         }
       }
     }
