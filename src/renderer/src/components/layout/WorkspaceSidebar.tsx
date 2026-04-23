@@ -449,6 +449,7 @@ export function WorkspaceSidebar(): React.JSX.Element {
       const isRunning = projectSessions.some((session) => {
         return (
           runningSessions[session.id] === 'running' ||
+          runningSessions[session.id] === 'retrying' ||
           runningSubAgentSessionIds.has(session.id) ||
           runningBackgroundSessionIds.has(session.id) ||
           streamingSessionIds.has(session.id) ||
@@ -681,6 +682,7 @@ export function WorkspaceSidebar(): React.JSX.Element {
     } else {
       const hasRunning =
         runningSessions[deleteTarget.id] === 'running' ||
+        runningSessions[deleteTarget.id] === 'retrying' ||
         runningSubAgentSessionIds.has(deleteTarget.id) ||
         runningBackgroundSessionIds.has(deleteTarget.id) ||
         streamingSessionIds.has(deleteTarget.id) ||
@@ -787,8 +789,10 @@ export function WorkspaceSidebar(): React.JSX.Element {
     active: boolean
   ): React.JSX.Element => {
     void pendingQueueSignature
+    const sessionRunStatus = runningSessions[session.id]
     const isRunning =
-      runningSessions[session.id] === 'running' ||
+      sessionRunStatus === 'running' ||
+      sessionRunStatus === 'retrying' ||
       runningSubAgentSessionIds.has(session.id) ||
       runningBackgroundSessionIds.has(session.id) ||
       streamingSessionIds.has(session.id) ||
@@ -811,7 +815,11 @@ export function WorkspaceSidebar(): React.JSX.Element {
           >
             <span className="inline-flex size-3.5 shrink-0 items-center justify-center">
               {isRunning ? (
-                <Loader2 className="size-3.5 shrink-0 animate-spin text-primary" />
+                <Loader2
+                  className={`size-3.5 shrink-0 animate-spin ${
+                    sessionRunStatus === 'retrying' ? 'text-amber-500' : 'text-primary'
+                  }`}
+                />
               ) : session.pinned ? (
                 <Pin className="size-3.5 text-amber-500" />
               ) : (

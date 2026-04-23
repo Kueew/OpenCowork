@@ -58,6 +58,7 @@ import { createProvider } from '@renderer/lib/api/provider'
 import type {
   UnifiedMessage,
   ProviderConfig,
+  StreamEvent,
   TokenUsage,
   RequestDebugInfo,
   ContentBlock,
@@ -521,7 +522,8 @@ function shouldAutoContinueLongRunningRun(options: {
   if (loopEndReason === 'aborted' || loopEndReason === 'error') return false
   if (hasPendingSessionMessages(sessionId) || isPendingSessionDispatchPaused(sessionId))
     return false
-  if (useAgentStore.getState().runningSessions[sessionId] === 'running') return false
+  const activeStatus = useAgentStore.getState().runningSessions[sessionId]
+  if (activeStatus === 'running' || activeStatus === 'retrying') return false
 
   const session = useChatStore.getState().sessions.find((item) => item.id === sessionId)
   if (!session?.longRunningMode) return false
@@ -1503,6 +1505,27 @@ function buildDeletedMessages(
   return [...messages.slice(0, targetIndex), ...messages.slice(deleteEnd)]
 }
 
+function ensureRequestContainsExpectedUserMessage(
+  messages: UnifiedMessage[],
+  expectedUserMessage?: UnifiedMessage | null
+): UnifiedMessage[] {
+  if (!expectedUserMessage || expectedUserMessage.role !== 'user') {
+    return messages
+  }
+
+  if (messages.some((message) => message.id === expectedUserMessage.id)) {
+    return messages
+  }
+
+  console.warn('[ChatActions] Restoring missing user message in request payload', {
+    messageId: expectedUserMessage.id,
+    role: expectedUserMessage.role,
+    existingMessageIds: messages.map((message) => message.id)
+  })
+
+  return [...messages, expectedUserMessage]
+}
+
 function extractToolErrorMessage(output: UnifiedMessage['content'] | string): string | undefined {
   if (typeof output !== 'string' || !isStructuredToolErrorText(output)) return undefined
   const parsed = decodeStructuredToolResult(output)
@@ -1691,7 +1714,7 @@ function drainLeadMessages(): void {
   if (!activeSessionId) return
 
   const status = useAgentStore.getState().runningSessions[activeSessionId]
-  if (status === 'running') return // will be retried via scheduleDrain from finally block
+  if (status === 'running' || status === 'retrying') return
 
   // Batch all pending messages into one combined message
   const batch = pendingLeadMessages.splice(0, pendingLeadMessages.length)
@@ -1782,7 +1805,7 @@ function finishStoppingSession(sessionId: string): void {
   clearPendingQuestions()
 
   const hasOtherRunning = Object.values(useAgentStore.getState().runningSessions).some(
-    (status) => status === 'running'
+    (status) => status === 'running' || status === 'retrying'
   )
   if (!hasOtherRunning) {
     useAgentStore.getState().setRunning(false)
@@ -1919,6 +1942,23 @@ function shouldHandleAgentEventAfterAbort(event: AgentEvent): boolean {
     default:
       return false
   }
+}
+
+function applyRequestRetryState(
+  sessionId: string,
+  event: Extract<AgentEvent, { type: 'request_retry' }>
+): void {
+  useAgentStore.getState().setSessionRequestRetryState(sessionId, {
+    attempt: event.attempt,
+    maxAttempts: event.maxAttempts,
+    delayMs: event.delayMs,
+    ...(event.statusCode ? { statusCode: event.statusCode } : {}),
+    reason: event.reason
+  })
+}
+
+function clearRequestRetryState(sessionId: string): void {
+  useAgentStore.getState().setSessionRequestRetryState(sessionId, null)
 }
 
 // Stage 1: the sidecar ToolRegistry dynamically bridges any unknown tool to
@@ -2537,7 +2577,8 @@ export function useChatActions(): {
       }
 
       const hasActiveRun = hasActiveSessionRun(sessionId)
-      const statusIsRunning = useAgentStore.getState().runningSessions[sessionId] === 'running'
+      const sessionRunStatus = useAgentStore.getState().runningSessions[sessionId]
+      const statusIsRunning = sessionRunStatus === 'running' || sessionRunStatus === 'retrying'
       const hasPendingQueue = hasPendingSessionMessages(sessionId)
       const isQueueDispatchPaused = isPendingSessionDispatchPaused(sessionId)
 
@@ -2709,6 +2750,7 @@ export function useChatActions(): {
       // Add user message (multi-modal when images attached)
       const isQueuedInsertion = source === 'queued'
       const shouldAppendUserMessage = source !== 'continue'
+      let expectedUserRequestMessage: UnifiedMessage | null = null
       if (shouldAppendUserMessage) {
         let userContent: string | ContentBlock[]
         const textBlocks: Array<Extract<ContentBlock, { type: 'text' }>> = []
@@ -2769,6 +2811,7 @@ export function useChatActions(): {
           createdAt: Date.now(),
           ...(source && { source })
         }
+        expectedUserRequestMessage = userMsg
         chatStore.addMessage(sessionId, userMsg)
       }
 
@@ -2885,10 +2928,15 @@ export function useChatActions(): {
           providerBuiltinId: chatConfig.providerBuiltinId,
           model: chatConfig.model
         })
+        clearRequestRetryState(sessionId)
         agentStore.setSessionStatus(sessionId, 'running')
         try {
-          await runSimpleChat(sessionId, assistantMsgId, chatConfig, abortController.signal)
+          await runSimpleChat(sessionId, assistantMsgId, chatConfig, abortController.signal, {
+            includeTrailingAssistantPlaceholder: !!existingAssistantMessage,
+            expectedUserMessage: expectedUserRequestMessage
+          })
         } finally {
+          clearRequestRetryState(sessionId)
           agentStore.setSessionStatus(sessionId, 'completed')
           sessionAbortControllers.delete(sessionId)
           sessionSidecarRunIds.delete(sessionId)
@@ -3184,6 +3232,7 @@ export function useChatActions(): {
         let compressionConfig: CompressionConfig | null = null
 
         agentStore.setRunning(true)
+        clearRequestRetryState(sessionId)
         agentStore.setSessionStatus(sessionId, 'running')
         agentStore.resetLiveSessionExecution(sessionId)
 
@@ -3264,6 +3313,10 @@ export function useChatActions(): {
             .getSessionMessagesForRequest(sessionId, {
               includeTrailingAssistantPlaceholder: !!existingAssistantMessage
             })
+          messagesToSend = ensureRequestContainsExpectedUserMessage(
+            messagesToSend,
+            expectedUserRequestMessage
+          )
 
           if (compressionContextLength <= 0) {
             compressionContextLength = findPersistedContextLength(messagesToSend)
@@ -3410,7 +3463,7 @@ export function useChatActions(): {
             }
 
             setRequestTraceInfo(assistantMsgId, {
-              executionPath: 'sidecar'
+              executionPath: 'node'
             })
 
             const initialized = await agentBridge.initialize()
@@ -3574,7 +3627,15 @@ export function useChatActions(): {
               continue
             }
 
+            if (event.type !== 'request_retry' && event.type !== 'request_debug') {
+              clearRequestRetryState(sessionId!)
+            }
+
             switch (event.type) {
+              case 'request_retry':
+                applyRequestRetryState(sessionId!, event)
+                break
+
               case 'thinking_delta':
                 hasThinkingDelta = true
                 streamDeltaBuffer.pushThinking(event.thinking)
@@ -4248,13 +4309,14 @@ export function useChatActions(): {
           }
           unsubSubAgent()
           subAgentEventBuffer.dispose()
+          clearRequestRetryState(sessionId)
           agentStore.setSessionStatus(sessionId, 'completed')
           setStreamingMessageIdWithSync(sessionId, null)
           sessionAbortControllers.delete(sessionId)
           sessionSidecarRunIds.delete(sessionId)
           // Derive global isRunning from remaining running sessions
           const hasOtherRunning = Object.values(useAgentStore.getState().runningSessions).some(
-            (s) => s === 'running'
+            (s) => s === 'running' || s === 'retrying'
           )
           agentStore.setRunning(hasOtherRunning)
           dispatchNextQueuedMessage(sessionId)
@@ -4437,6 +4499,7 @@ export function useChatActions(): {
       if (pendingToolUses.length > 0) {
         const abortController = new AbortController()
         sessionAbortControllers.set(sessionId, abortController)
+        clearRequestRetryState(sessionId)
         agentStore.setSessionStatus(sessionId, 'running')
 
         try {
@@ -4549,6 +4612,7 @@ export function useChatActions(): {
           if (activeController === abortController) {
             sessionAbortControllers.delete(sessionId)
           }
+          clearRequestRetryState(sessionId)
           agentStore.setSessionStatus(sessionId, null)
         }
       }
@@ -4608,7 +4672,7 @@ export function useChatActions(): {
           setStreamingMessageIdWithSync(sessionId, null)
         }
         const hasOtherRunning = Object.values(useAgentStore.getState().runningSessions).some(
-          (status) => status === 'running'
+          (status) => status === 'running' || status === 'retrying'
         )
         if (!hasOtherRunning) {
           useAgentStore.getState().setRunning(false)
@@ -4742,7 +4806,7 @@ export function useChatActions(): {
 
     // Limitation 1: agent must not be running
     const sessionStatus = agentStore.runningSessions[sessionId]
-    if (sessionStatus === 'running') {
+    if (sessionStatus === 'running' || sessionStatus === 'retrying') {
       toast.error('无法压缩', { description: 'Agent 正在运行中，请等待完成后再手动压缩' })
       return
     }
@@ -5079,13 +5143,21 @@ async function runSimpleChat(
   sessionId: string,
   assistantMsgId: string,
   config: ProviderConfig,
-  signal: AbortSignal
+  signal: AbortSignal,
+  options?: {
+    includeTrailingAssistantPlaceholder?: boolean
+    expectedUserMessage?: UnifiedMessage | null
+  }
 ): Promise<void> {
   const chatStore = useChatStore.getState()
   const chatModelConfig = findProviderModel(config.providerId, config.model).modelConfig
-  const messages = chatStore.getSessionMessages(sessionId)
+  const requestMessages = ensureRequestContainsExpectedUserMessage(
+    await chatStore.getSessionMessagesForRequest(sessionId, {
+      includeTrailingAssistantPlaceholder: options?.includeTrailingAssistantPlaceholder ?? false
+    }),
+    options?.expectedUserMessage
+  )
   const streamDeltaBuffer = createStreamDeltaBuffer(sessionId, assistantMsgId)
-  const requestMessages = messages.slice(0, -1)
   const sidecarRequest = buildSidecarAgentRunRequest({
     messages: requestMessages,
     provider: config,
@@ -5115,7 +5187,10 @@ async function runSimpleChat(
   // provider types are flagged mode=bridged by mapSidecarProvider and the
   // sidecar's BridgedProvider handles streaming via the renderer bridge.
   const supportsAgentRun = sidecarRequest ? await canSidecarHandle('agent.run') : false
-  const useSidecar = !!sidecarRequest && supportsAgentRun
+  const supportsProvider = sidecarRequest
+    ? await canSidecarHandle(`provider.${config.type}`)
+    : false
+  const useSidecar = !!sidecarRequest && supportsAgentRun && supportsProvider
 
   console.log('[ChatActions] Simple chat sidecar decision', {
     sessionId,
@@ -5125,31 +5200,35 @@ async function runSimpleChat(
     providerMode: sidecarRequest?.provider.mode ?? 'native',
     hasSidecarRequest: !!sidecarRequest,
     supportsAgentRun,
+    supportsProvider,
     useSidecar
   })
 
   if (!sidecarRequest) {
     throw new Error('Sidecar chat request build failed')
   }
-  if (!supportsAgentRun) {
-    throw new Error('Sidecar does not support agent.run for chat path')
-  }
 
   setRequestTraceInfo(assistantMsgId, {
-    executionPath: 'sidecar'
+    executionPath: 'node'
   })
 
   try {
-    const initialized = await agentBridge.initialize()
-    if (!initialized) {
-      throw new Error('Sidecar unavailable')
+    let stream: AsyncIterable<AgentEvent | StreamEvent>
+    if (useSidecar) {
+      const initialized = await agentBridge.initialize()
+      if (!initialized) {
+        throw new Error('Sidecar unavailable')
+      }
+      stream = createSidecarEventStream({
+        sessionId,
+        sidecarRequest,
+        signal,
+        logLabel: 'chat'
+      })
+    } else {
+      const provider = createProvider(config)
+      stream = provider.sendMessage(requestMessages, [], config, signal)
     }
-    const stream = createSidecarEventStream({
-      sessionId,
-      sidecarRequest,
-      signal,
-      logLabel: 'chat'
-    })
 
     let thinkingDone = false
     let hasThinkingDelta = false
@@ -5159,7 +5238,14 @@ async function runSimpleChat(
     for await (const event of stream) {
       if (signal.aborted) break
 
+      if (event.type !== 'request_retry' && event.type !== 'request_debug') {
+        clearRequestRetryState(sessionId)
+      }
+
       switch (event.type) {
+        case 'request_retry':
+          applyRequestRetryState(sessionId, event)
+          break
         case 'thinking_delta':
           hasThinkingDelta = true
           streamDeltaBuffer.pushThinking(event.thinking!)

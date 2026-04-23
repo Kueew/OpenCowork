@@ -17,15 +17,15 @@ export interface RunAgentViaSidecarOptions {
 }
 
 /**
- * Runs an agent loop entirely inside the .NET sidecar and surfaces its events
- * as an AsyncIterable<AgentEvent>, matching the JS runAgentLoop contract so
- * existing consumers don't need to change their event handling.
+ * Runs an agent loop inside the main-process runtime behind the existing
+ * sidecar-style IPC contract and surfaces its events as an
+ * AsyncIterable<AgentEvent>, matching the JS runAgentLoop contract so existing
+ * consumers don't need to change their event handling.
  *
  * Tools, providers, plan/chat mode, plugin/SSH context — everything is passed
- * through the sidecar request. Unknown tools are auto-bridged back to the
- * renderer by the sidecar's ToolRegistry fallback; non-native providers are
- * flagged mode=bridged by the request builder and stream through
- * renderer-provider-bridge.
+ * through the runtime request. Unknown tools are auto-bridged back to the
+ * renderer; non-native providers are flagged mode=bridged by the request
+ * builder and stream through renderer-provider-bridge.
  */
 export function runAgentViaSidecar(
   request: SidecarAgentRunRequest,

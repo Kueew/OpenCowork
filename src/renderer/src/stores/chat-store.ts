@@ -327,6 +327,28 @@ function getSessionByIdFromState(
   return state.sessions.find((s) => s.id === sessionId)
 }
 
+const MESSAGE_LOAD_SNAPSHOT_TAIL_SIZE = 8
+
+function matchesMessageLoadSnapshot(
+  session: Pick<Session, 'messageCount' | 'messages'> | undefined,
+  expectedMessageCount: number,
+  expectedTailMessageIds: string[]
+): boolean {
+  if (!session) return false
+  const currentKnownCount = session.messageCount ?? session.messages.length
+  if (currentKnownCount !== expectedMessageCount) return false
+  if (expectedTailMessageIds.length === 0) return true
+
+  const currentTailMessageIds = session.messages
+    .slice(-expectedTailMessageIds.length)
+    .map((message) => message.id)
+
+  return (
+    currentTailMessageIds.length === expectedTailMessageIds.length &&
+    currentTailMessageIds.every((messageId, index) => messageId === expectedTailMessageIds[index])
+  )
+}
+
 /** Bump the monotonic revision counter used by React.memo equality checks. */
 function bumpMessageRevision(msg: UnifiedMessage): void {
   msg._revision = (msg._revision ?? 0) + 1
@@ -1377,6 +1399,9 @@ export const useChatStore = create<ChatStore>()(
       const session = get().sessions.find((s) => s.id === sessionId)
       if (!session) return
       const knownCount = session.messageCount ?? session.messages.length
+      const sessionTailMessageIds = session.messages
+        .slice(-MESSAGE_LOAD_SNAPSHOT_TAIL_SIZE)
+        .map((message) => message.id)
       const requestedLimit = Math.max(
         MIN_INITIAL_SESSION_MESSAGE_PAGE_SIZE,
         Math.min(
@@ -1432,9 +1457,16 @@ export const useChatStore = create<ChatStore>()(
           windowStart = prependOffset
         }
 
+        const latestSession = get().sessions.find((s) => s.id === sessionId)
+        if (!matchesMessageLoadSnapshot(latestSession, knownCount, sessionTailMessageIds)) {
+          return
+        }
+
         set((state) => {
           const target = state.sessions.find((s) => s.id === sessionId)
-          if (!target) return
+          if (!target || !matchesMessageLoadSnapshot(target, knownCount, sessionTailMessageIds)) {
+            return
+          }
           target.messages = messages
           target.messagesLoaded = true
           target.messageCount = knownCount
@@ -1509,6 +1541,9 @@ export const useChatStore = create<ChatStore>()(
       const session = get().sessions.find((s) => s.id === sessionId)
       if (!session) return
       const knownCount = session.messageCount ?? session.messages.length
+      const sessionTailMessageIds = session.messages
+        .slice(-MESSAGE_LOAD_SNAPSHOT_TAIL_SIZE)
+        .map((message) => message.id)
       const shouldSkip =
         !force &&
         session.messagesLoaded &&
@@ -1518,9 +1553,15 @@ export const useChatStore = create<ChatStore>()(
       try {
         const msgRows = (await ipcClient.invoke('db:messages:list', sessionId)) as MessageRow[]
         const messages = msgRows.map(rowToMessage)
+        const latestSession = get().sessions.find((s) => s.id === sessionId)
+        if (!matchesMessageLoadSnapshot(latestSession, knownCount, sessionTailMessageIds)) {
+          return
+        }
         set((state) => {
           const target = state.sessions.find((s) => s.id === sessionId)
-          if (!target) return
+          if (!target || !matchesMessageLoadSnapshot(target, knownCount, sessionTailMessageIds)) {
+            return
+          }
           target.messages = messages
           target.messagesLoaded = true
           target.messageCount = messages.length
@@ -1536,6 +1577,10 @@ export const useChatStore = create<ChatStore>()(
     loadWindowSessionMessages: async (sessionId, offset, limit) => {
       const session = get().sessions.find((s) => s.id === sessionId)
       if (!session) return
+      const knownCount = session.messageCount ?? session.messages.length
+      const sessionTailMessageIds = session.messages
+        .slice(-MESSAGE_LOAD_SNAPSHOT_TAIL_SIZE)
+        .map((message) => message.id)
       const safeOffset = Math.max(0, offset)
       const safeLimit = Math.max(MIN_INITIAL_SESSION_MESSAGE_PAGE_SIZE, limit)
       try {
@@ -1545,9 +1590,15 @@ export const useChatStore = create<ChatStore>()(
           offset: safeOffset
         })) as MessageRow[]
         const messages = msgRows.map(rowToMessage)
+        const latestSession = get().sessions.find((s) => s.id === sessionId)
+        if (!matchesMessageLoadSnapshot(latestSession, knownCount, sessionTailMessageIds)) {
+          return
+        }
         set((state) => {
           const target = state.sessions.find((s) => s.id === sessionId)
-          if (!target) return
+          if (!target || !matchesMessageLoadSnapshot(target, knownCount, sessionTailMessageIds)) {
+            return
+          }
           target.messages = messages
           target.messagesLoaded = true
           target.loadedRangeStart = safeOffset

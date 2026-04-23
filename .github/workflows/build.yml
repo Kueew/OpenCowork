@@ -135,22 +135,18 @@ jobs:
             platform: win
             build_arch: x64
             artifact_arch: amd64
-            dotnet_runtime: win-x64
           - os: windows-11-arm
             platform: win
             build_arch: arm64
             artifact_arch: arm64
-            dotnet_runtime: win-arm64
           - os: ubuntu-latest
             platform: linux
             build_arch: x64
             artifact_arch: amd64
-            dotnet_runtime: linux-x64
           - os: ubuntu-24.04-arm
             platform: linux
             build_arch: arm64
             artifact_arch: arm64
-            dotnet_runtime: linux-arm64
 
     runs-on: ${{ matrix.os }}
 
@@ -174,11 +170,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Setup .NET SDK
-        uses: actions/setup-dotnet@v5
-        with:
-          dotnet-version: 10.0.x
-
       # 将 Release 版本号同步写入 package.json
       - name: Sync version to package.json
         run: npm version ${{ needs.prepare.outputs.version }} --no-git-tag-version --allow-same-version
@@ -188,19 +179,6 @@ jobs:
         with:
           name: open-cowork-build-output
           path: out
-
-      - name: Build sidecar (${{ matrix.dotnet_runtime }})
-        shell: pwsh
-        run: ./scripts/build-sidecar.ps1 -Runtime ${{ matrix.dotnet_runtime }} -Configuration Release
-
-      - name: Verify sidecar binary
-        shell: bash
-        run: |
-          if [ "${{ matrix.platform }}" = "win" ]; then
-            test -f resources/sidecar/OpenCowork.Agent.exe
-          else
-            test -f resources/sidecar/OpenCowork.Agent
-          fi
 
       - name: Package (${{ matrix.platform }}-${{ matrix.artifact_arch }})
         run: npx electron-builder --${{ matrix.platform }} --${{ matrix.build_arch }} --publish never
@@ -373,12 +351,10 @@ jobs:
             platform: mac
             build_arch: arm64
             artifact_arch: arm64
-            dotnet_runtime: osx-arm64
           - os: macos-15-intel
             platform: mac
             build_arch: x64
             artifact_arch: amd64
-            dotnet_runtime: osx-x64
 
     runs-on: ${{ matrix.os }}
 
@@ -397,11 +373,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Setup .NET SDK
-        uses: actions/setup-dotnet@v5
-        with:
-          dotnet-version: 10.0.x
-
       # 将 Release 版本号同步写入 package.json
       - name: Sync version to package.json
         run: npm version ${{ needs.prepare.outputs.version }} --no-git-tag-version --allow-same-version
@@ -411,14 +382,6 @@ jobs:
         with:
           name: open-cowork-build-output
           path: out
-
-      - name: Build sidecar (${{ matrix.dotnet_runtime }})
-        shell: pwsh
-        run: ./scripts/build-sidecar.ps1 -Runtime ${{ matrix.dotnet_runtime }} -Configuration Release
-
-      - name: Verify sidecar binary
-        shell: bash
-        run: test -f resources/sidecar/OpenCowork.Agent
 
       - name: Resolve macOS code signing
         id: mac_signing

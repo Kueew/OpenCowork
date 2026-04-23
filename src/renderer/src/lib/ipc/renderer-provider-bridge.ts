@@ -6,10 +6,9 @@ import type {
   UnifiedMessage
 } from '@renderer/lib/api/types'
 
-// The sidecar's BridgedProvider delegates streaming requests here. The bridge
-// keeps the .NET agent loop in control while letting us reuse the renderer's
-// existing provider modules for any provider type the sidecar doesn't natively
-// implement.
+// The main-process runtime delegates bridged streaming requests here so it can
+// keep control of the agent loop while reusing the renderer's provider modules
+// for provider variants it does not handle directly.
 
 let rendererProviderBridgeAttached = false
 

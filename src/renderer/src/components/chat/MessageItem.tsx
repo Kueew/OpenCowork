@@ -7,7 +7,7 @@ import { UserMessage } from './UserMessage'
 import { AssistantMessage } from './AssistantMessage'
 import { ContextCompressionMessage } from './ContextCompressionMessage'
 import type { UnifiedMessage, ToolResultContent } from '@renderer/lib/api/types'
-import type { ToolCallState } from '@renderer/lib/agent/types'
+import type { RequestRetryState, ToolCallState } from '@renderer/lib/agent/types'
 import type { EditableUserMessageDraft } from '@renderer/lib/image-attachments'
 import type { OrchestrationRun } from '@renderer/lib/orchestration/types'
 import { isCompactSummaryLikeMessage } from '@renderer/lib/agent/context-compression'
@@ -31,6 +31,7 @@ interface MessageItemProps {
   renderMode?: MessageRenderMode
   orchestrationRun?: OrchestrationRun | null
   hiddenToolUseIds?: Set<string>
+  requestRetryState?: RequestRetryState | null
 }
 
 // NOTE: getContentSignal / getToolUseInputSignal used to be called by areEqual for
@@ -99,7 +100,8 @@ function MessageItemInner({
   liveToolCallMap,
   renderMode = 'default',
   orchestrationRun,
-  hiddenToolUseIds
+  hiddenToolUseIds,
+  requestRetryState
 }: MessageItemProps): React.JSX.Element | null {
   if (message.id !== messageId) return null
 
@@ -112,7 +114,11 @@ function MessageItemInner({
         if (message.source === 'team') {
           return (
             <TeamNotification
-              content={typeof message.content === 'string' ? message.content : JSON.stringify(message.content)}
+              content={
+                typeof message.content === 'string'
+                  ? message.content
+                  : JSON.stringify(message.content)
+              }
             />
           )
         }
@@ -144,6 +150,7 @@ function MessageItemInner({
             renderMode={renderMode}
             orchestrationRun={orchestrationRun}
             hiddenToolUseIds={hiddenToolUseIds}
+            requestRetryState={isLastAssistantMessage ? requestRetryState : null}
           />
         )
       case 'system':
@@ -206,6 +213,21 @@ function areStringSetsEqual(a?: Set<string>, b?: Set<string>): boolean {
   return true
 }
 
+function areRequestRetryStatesEqual(
+  a?: RequestRetryState | null,
+  b?: RequestRetryState | null
+): boolean {
+  if (a === b) return true
+  if (!a || !b) return !a && !b
+  return (
+    a.attempt === b.attempt &&
+    a.maxAttempts === b.maxAttempts &&
+    a.delayMs === b.delayMs &&
+    a.statusCode === b.statusCode &&
+    a.reason === b.reason
+  )
+}
+
 function areEqual(prev: MessageItemProps, next: MessageItemProps): boolean {
   // Fast path: same object reference => nothing to compare.
   if (prev.message === next.message) {
@@ -224,7 +246,8 @@ function areEqual(prev: MessageItemProps, next: MessageItemProps): boolean {
       prev.liveToolCallMap === next.liveToolCallMap &&
       prev.renderMode === next.renderMode &&
       prev.orchestrationRun === next.orchestrationRun &&
-      areStringSetsEqual(prev.hiddenToolUseIds, next.hiddenToolUseIds)
+      areStringSetsEqual(prev.hiddenToolUseIds, next.hiddenToolUseIds) &&
+      areRequestRetryStatesEqual(prev.requestRetryState, next.requestRetryState)
     )
   }
 
@@ -267,7 +290,8 @@ function areEqual(prev: MessageItemProps, next: MessageItemProps): boolean {
     prev.liveToolCallMap === next.liveToolCallMap &&
     prev.renderMode === next.renderMode &&
     prev.orchestrationRun === next.orchestrationRun &&
-    areStringSetsEqual(prev.hiddenToolUseIds, next.hiddenToolUseIds)
+    areStringSetsEqual(prev.hiddenToolUseIds, next.hiddenToolUseIds) &&
+    areRequestRetryStatesEqual(prev.requestRetryState, next.requestRetryState)
   )
 }
 

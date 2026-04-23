@@ -29,7 +29,6 @@ export function ProjectHomePage(): React.JSX.Element {
       if (!activeProjectId) return
       const chatStore = useChatStore.getState()
       const sessionId = chatStore.createSession(mode, activeProjectId, options)
-      chatStore.setActiveSession(sessionId)
       useUIStore.getState().navigateToSession(sessionId)
       void sendMessage(text, images, undefined, sessionId, undefined, undefined, {
         ...options,

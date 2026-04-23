@@ -12,7 +12,7 @@ export type AgentRuntimeSyncEvent =
   | {
       kind: 'set_session_status'
       sessionId: string
-      status: 'running' | 'completed' | null
+      status: 'running' | 'retrying' | 'completed' | null
     }
   | { kind: 'add_tool_call'; toolCall: ToolCallState; sessionId?: string | null }
   | {

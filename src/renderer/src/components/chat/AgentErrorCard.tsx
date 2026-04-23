@@ -29,6 +29,7 @@ type Category =
   | 'auth'
   | 'rateLimit'
   | 'quota'
+  | 'temporaryPause'
   | 'network'
   | 'timeout'
   | 'aborted'
@@ -67,6 +68,11 @@ const CATEGORY_VIEW: Record<Category, CategoryView> = {
     icon: WalletCards,
     titleKey: 'assistantMessage.agentError.titleQuota',
     descKey: 'assistantMessage.agentError.descQuota'
+  },
+  temporaryPause: {
+    icon: Timer,
+    titleKey: 'assistantMessage.agentError.titleTemporaryPause',
+    descKey: 'assistantMessage.agentError.descTemporaryPause'
   },
   network: {
     icon: WifiOff,
@@ -109,9 +115,15 @@ function classify(code: AgentErrorCode, message: string, errorType?: string): Ca
   if (/timeout|timed out|etimedout/.test(haystack)) return 'timeout'
   if (/rate ?limit|too many requests|429/.test(haystack)) return 'rateLimit'
   if (/quota|insufficient[_ ]?(balance|quota|credit)|billing|payment/.test(haystack)) return 'quota'
-  if (/unauthorized|forbidden|invalid[_ ]?api[_ ]?key|authentication|permission denied|401|403/.test(haystack))
+  if (
+    /unauthorized|forbidden|invalid[_ ]?api[_ ]?key|authentication|permission denied|401|403/.test(
+      haystack
+    )
+  )
     return 'auth'
-  if (/econnrefused|enotfound|network|fetch failed|socket|dns|tls|ssl/.test(haystack)) return 'network'
+  if (errorType === 'transport_circuit_open') return 'temporaryPause'
+  if (/econnrefused|enotfound|network|fetch failed|socket|dns|tls|ssl/.test(haystack))
+    return 'network'
   if (status && status >= 500) return 'server'
   if (status === 400 || /bad request|invalid request/.test(haystack)) return 'badRequest'
 
@@ -133,6 +145,19 @@ export function AgentErrorCard({
   const category = useMemo(() => classify(code, message, errorType), [code, message, errorType])
   const view = CATEGORY_VIEW[category]
   const Icon = view.icon
+  const displayMessage = useMemo(() => {
+    if (errorType !== 'transport_circuit_open') return message
+
+    const seconds = message.match(/\b(\d+)s\b/i)?.[1]
+    const lastError = message.match(/last error:\s*(.+)$/i)?.[1]?.trim()
+    const base = seconds
+      ? t('assistantMessage.agentError.circuitOpenWithSeconds', { seconds })
+      : t('assistantMessage.agentError.circuitOpenWithoutSeconds')
+
+    return lastError
+      ? `${base} ${t('assistantMessage.agentError.lastErrorLabel')}: ${lastError}`
+      : base
+  }, [errorType, message, t])
 
   const hasDetails = Boolean(errorType || details || stackTrace)
 
@@ -155,10 +180,7 @@ export function AgentErrorCard({
   }
 
   return (
-    <div
-      role="alert"
-      className="rounded-xl border border-destructive/30 bg-destructive/5 p-4"
-    >
+    <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive/5 p-4">
       <div className="flex gap-3">
         <div className="mt-0.5 shrink-0 rounded-md bg-destructive/15 p-1.5">
           <Icon className="size-4 text-destructive" />
@@ -179,9 +201,9 @@ export function AgentErrorCard({
             </button>
           </div>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{t(view.descKey)}</p>
-          {message ? (
+          {displayMessage ? (
             <p className="mt-2 break-words rounded-md bg-background/60 px-2 py-1.5 font-mono text-[11px] leading-relaxed text-foreground/80">
-              {message}
+              {displayMessage}
             </p>
           ) : null}
           {hasDetails ? (

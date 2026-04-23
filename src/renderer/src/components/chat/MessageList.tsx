@@ -17,6 +17,7 @@ import {
 } from './transcript-utils'
 import { buildOrchestrationRuns } from '@renderer/lib/orchestration/build-runs'
 import { type EditableUserMessageDraft } from '@renderer/lib/image-attachments'
+import type { RequestRetryState } from '@renderer/lib/agent/types'
 
 const modeHints = {
   chat: {
@@ -77,6 +78,7 @@ interface MessageRowProps {
   orchestrationRun?: import('@renderer/lib/orchestration/types').OrchestrationRun | null
   hiddenToolUseIds?: Set<string>
   anchorMessageId?: string | null
+  requestRetryState?: RequestRetryState | null
   onRetry?: () => void
   onContinue?: () => void
   onEditUserMessage?: (messageId: string, draft: EditableUserMessageDraft) => void
@@ -168,6 +170,7 @@ function areMessageRowPropsEqual(prev: MessageRowProps, next: MessageRowProps): 
       getOrchestrationRunSignature(next.orchestrationRun) &&
     areStringSetsEqual(prev.hiddenToolUseIds, next.hiddenToolUseIds) &&
     prev.anchorMessageId === next.anchorMessageId &&
+    JSON.stringify(prev.requestRetryState) === JSON.stringify(next.requestRetryState) &&
     prev.onRetry === next.onRetry &&
     prev.onContinue === next.onContinue &&
     prev.onEditUserMessage === next.onEditUserMessage &&
@@ -219,6 +222,7 @@ const MessageRow = React.memo(function MessageRow({
   orchestrationRun,
   hiddenToolUseIds,
   anchorMessageId,
+  requestRetryState,
   onRetry,
   onContinue,
   onEditUserMessage,
@@ -246,6 +250,7 @@ const MessageRow = React.memo(function MessageRow({
         toolResults={toolResults}
         orchestrationRun={orchestrationRun}
         hiddenToolUseIds={hiddenToolUseIds}
+        requestRetryState={requestRetryState}
       />
     </div>
   )
@@ -296,14 +301,16 @@ export function MessageList(props: MessageListProps): React.JSX.Element {
     completedSubAgents,
     subAgentHistory,
     pendingToolCalls,
-    executedToolCalls
+    executedToolCalls,
+    sessionRequestRetryState
   } = useAgentStore(
     useShallow((s) => ({
       activeSubAgents: s.activeSubAgents,
       completedSubAgents: s.completedSubAgents,
       subAgentHistory: s.subAgentHistory,
       pendingToolCalls: s.pendingToolCalls,
-      executedToolCalls: s.executedToolCalls
+      executedToolCalls: s.executedToolCalls,
+      sessionRequestRetryState: targetSessionId ? s.sessionRequestRetryState[targetSessionId] : null
     }))
   )
   const { activeTeam, teamHistory } = useTeamStore(
@@ -652,11 +659,7 @@ export function MessageList(props: MessageListProps): React.JSX.Element {
     const wasOutputting = wasSessionOutputtingRef.current
     if (!wasOutputting && isSessionOutputting && isAtBottom) {
       autoScrollModeRef.current = 'stream'
-    } else if (
-      wasOutputting &&
-      !isSessionOutputting &&
-      autoScrollModeRef.current === 'stream'
-    ) {
+    } else if (wasOutputting && !isSessionOutputting && autoScrollModeRef.current === 'stream') {
       autoScrollModeRef.current = 'off'
     }
     wasSessionOutputtingRef.current = isSessionOutputting
@@ -805,6 +808,9 @@ export function MessageList(props: MessageListProps): React.JSX.Element {
                   orchestrationState.byMessageId.get(row.messageId)?.hiddenToolUseIds
                 }
                 anchorMessageId={null}
+                requestRetryState={
+                  row.isLastAssistantMessage ? (sessionRequestRetryState ?? null) : null
+                }
                 onRetry={onRetry}
                 onContinue={onContinue}
                 onEditUserMessage={onEditUserMessage}
@@ -866,6 +872,7 @@ export function MessageList(props: MessageListProps): React.JSX.Element {
               orchestrationRun={orchestrationState.byMessageId.get(messageId)?.primaryRun ?? null}
               hiddenToolUseIds={orchestrationState.byMessageId.get(messageId)?.hiddenToolUseIds}
               anchorMessageId={preserveScrollOnPrependRef.current?.anchorMessageId ?? null}
+              requestRetryState={isLastAssistantMessage ? (sessionRequestRetryState ?? null) : null}
               onRetry={onRetry}
               onContinue={onContinue}
               onEditUserMessage={onEditUserMessage}

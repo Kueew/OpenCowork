@@ -76,10 +76,7 @@ import {
   subscribePendingSessionMessages
 } from '@renderer/hooks/use-chat-actions'
 import { sessionToMarkdown } from '@renderer/lib/utils/export-chat'
-import {
-  openDetachedSessionWindow,
-  openSessionOrFocusDetached
-} from '@renderer/lib/session-window'
+import { openDetachedSessionWindow, openSessionOrFocusDetached } from '@renderer/lib/session-window'
 import { cn } from '@renderer/lib/utils'
 import { WorkingFolderSelectorDialog } from '@renderer/components/chat/WorkingFolderSelectorDialog'
 import { createProvider } from '@renderer/lib/api/provider'
@@ -416,7 +413,7 @@ export function SessionListPanel(): React.JSX.Element {
     void pendingQueueSignature
     if (!deleteTarget) return null
     const id = deleteTarget.id
-    const isAgentRunning = runningSessions[id] === 'running'
+    const isAgentRunning = runningSessions[id] === 'running' || runningSessions[id] === 'retrying'
     const hasActiveSubAgents = runningSubAgentSessionIds.has(id)
     const hasActiveBackgroundProcess = runningBackgroundSessionIds.has(id)
     const hasStreaming = streamingSessionIds.has(id)
@@ -459,6 +456,7 @@ export function SessionListPanel(): React.JSX.Element {
     }
     const hasRunning =
       runningSessions[session.id] === 'running' ||
+      runningSessions[session.id] === 'retrying' ||
       runningSubAgentSessionIds.has(session.id) ||
       runningBackgroundSessionIds.has(session.id) ||
       streamingSessionIds.has(session.id) ||
@@ -1064,11 +1062,16 @@ export function SessionListPanel(): React.JSX.Element {
           {editingId !== session.id && (
             <span className="ml-auto flex shrink-0 items-center gap-1">
               {(runningSessions[session.id] === 'running' ||
+                runningSessions[session.id] === 'retrying' ||
                 runningSubAgentSessionIds.has(session.id) ||
                 runningBackgroundSessionIds.has(session.id) ||
                 streamingSessionIds.has(session.id) ||
                 activeTeamSessionId === session.id) && (
-                <Loader2 className="size-3.5 animate-spin text-blue-500" />
+                <Loader2
+                  className={`size-3.5 animate-spin ${
+                    runningSessions[session.id] === 'retrying' ? 'text-amber-500' : 'text-blue-500'
+                  }`}
+                />
               )}
               {runningSessions[session.id] === 'completed' && (
                 <CheckCircle2 className="size-3.5 text-emerald-500" />
@@ -1226,6 +1229,7 @@ export function SessionListPanel(): React.JSX.Element {
           onClick={() => {
             const hasRunning =
               runningSessions[session.id] === 'running' ||
+              runningSessions[session.id] === 'retrying' ||
               runningSubAgentSessionIds.has(session.id) ||
               runningBackgroundSessionIds.has(session.id) ||
               streamingSessionIds.has(session.id) ||

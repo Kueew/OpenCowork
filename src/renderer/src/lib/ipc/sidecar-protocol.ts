@@ -236,10 +236,10 @@ function createSidecarError(rawEvent: unknown): Error {
   return error
 }
 
-// Provider types the sidecar implements natively. Anything else (or any
-// native-typed provider using a feature the sidecar doesn't support, such as
-// Gemini image models) is routed through the bridged provider so the .NET
-// agent loop can still drive it via the renderer's JS provider modules.
+// Provider types the main-process runtime handles directly. Anything else
+// (or any native-typed provider using a feature the runtime doesn't support,
+// such as Gemini image models) is routed through the bridged provider so the
+// JS agent loop can still drive it via the renderer's provider modules.
 const SIDECAR_NATIVE_PROVIDER_TYPES = new Set<string>([
   'anthropic',
   'openai-chat',
@@ -1089,6 +1089,15 @@ export function normalizeSidecarAgentEvent(rawEvent: unknown): AgentEvent | null
         }
       }
     }
+    case 'request_retry':
+      return {
+        type: 'request_retry',
+        attempt: Math.max(1, Number(event.attempt ?? 1)),
+        maxAttempts: Math.max(1, Number(event.maxAttempts ?? 1)),
+        delayMs: Math.max(0, Number(event.delayMs ?? 0)),
+        ...(typeof event.statusCode === 'number' ? { statusCode: event.statusCode } : {}),
+        reason: String(event.reason ?? '')
+      }
     case 'iteration_end':
       if (Array.isArray(event.toolResults)) {
         const rawWriteResults = event.toolResults
@@ -1196,7 +1205,7 @@ export function normalizeSidecarAgentEvent(rawEvent: unknown): AgentEvent | null
             : {}),
           ...(debugInfo.executionPath === 'node' || debugInfo.executionPath === 'sidecar'
             ? { executionPath: debugInfo.executionPath }
-            : { executionPath: 'sidecar' })
+            : { executionPath: 'node' })
         } satisfies RequestDebugInfo
       }
     }

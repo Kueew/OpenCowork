@@ -75,7 +75,7 @@ import {
   getLiveOutputDotClass,
   getLiveOutputSurfaceClass
 } from '@renderer/lib/live-output-animation'
-import type { ToolCallState, ToolCallStatus } from '@renderer/lib/agent/types'
+import type { RequestRetryState, ToolCallState, ToolCallStatus } from '@renderer/lib/agent/types'
 import {
   DESKTOP_CLICK_TOOL_NAME,
   DESKTOP_SCREENSHOT_TOOL_NAME,
@@ -123,6 +123,7 @@ interface AssistantMessageProps {
   renderMode?: AssistantRenderMode
   orchestrationRun?: OrchestrationRun | null
   hiddenToolUseIds?: Set<string>
+  requestRetryState?: RequestRetryState | null
 }
 
 const MARKDOWN_WRAPPER_CLASS = 'text-sm leading-relaxed text-foreground break-words'
@@ -150,6 +151,12 @@ const WORKSPACE_PERSISTENT_TOOLS = new Set([
   ...TEAM_TOOL_NAMES
 ])
 const EMPTY_LIVE_TOOL_CALLS: ToolCallState[] = []
+
+function formatRetryDelay(delayMs: number): string {
+  if (delayMs < 1000) return `${delayMs}ms`
+  if (delayMs < 10_000) return `${(delayMs / 1000).toFixed(1)}s`
+  return `${Math.round(delayMs / 1000)}s`
+}
 
 function resolveToolCallStatus(
   isStreaming: boolean | undefined,
@@ -1003,7 +1010,8 @@ export function AssistantMessage({
   onContinue,
   onDelete,
   orchestrationRun,
-  hiddenToolUseIds
+  hiddenToolUseIds,
+  requestRetryState
 }: AssistantMessageProps): React.JSX.Element {
   const { t } = useTranslation('chat')
   const devMode = useSettingsStore((s) => s.devMode)
@@ -1801,6 +1809,31 @@ export function AssistantMessage({
   return (
     <div className="group/msg flex flex-col">
       <div className="min-w-0 overflow-hidden pl-1.5 sm:pl-2">
+        {requestRetryState && (
+          <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-500/25 bg-amber-500/8 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+            <RotateCcw className="mt-0.5 size-3.5 shrink-0 animate-spin" />
+            <div className="min-w-0">
+              <div className="font-medium">
+                {t('assistantMessage.retryingRequest', {
+                  defaultValue: '请求重试中'
+                })}
+              </div>
+              <div className="mt-0.5 break-words text-[11px] text-amber-700/80 dark:text-amber-200/80">
+                {t('assistantMessage.retryingRequestDetail', {
+                  defaultValue:
+                    '第 {{attempt}} / {{maxAttempts}} 次重试，{{delay}} 后再次发送{{statusSuffix}}',
+                  attempt: requestRetryState.attempt,
+                  maxAttempts: requestRetryState.maxAttempts,
+                  delay: formatRetryDelay(requestRetryState.delayMs),
+                  statusSuffix: requestRetryState.statusCode
+                    ? `，状态码 ${requestRetryState.statusCode}`
+                    : ''
+                })}
+                {requestRetryState.reason ? ` · ${requestRetryState.reason}` : ''}
+              </div>
+            </div>
+          </div>
+        )}
         {collapsed ? (
           <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
             <div className="max-h-10 overflow-hidden whitespace-pre-wrap break-words">
