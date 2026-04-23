@@ -340,6 +340,7 @@
       "failed": "图片生成失败",
       "prompt": "提示词",
       "generating": "正在生成图片...",
+      "elapsed": "已耗时 {{duration}}",
       "retryRequired": "接口限流，等待你点击重试",
       "retryHint": "当前已生成 {{completed}} / {{total}} 张。主会话会暂停，直到你点击重试后继续。",
       "retryCaveat": "注意：如果这次是接口直接失败而不是限流，继续重试可能没有效果。",

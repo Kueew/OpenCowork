@@ -39,6 +39,7 @@ namespace OpenCowork.Agent;
 [JsonSerializable(typeof(AgentLoopConfig))]
 [JsonSerializable(typeof(ProviderConfig))]
 [JsonSerializable(typeof(ResponsesImageGenerationConfig))]
+[JsonSerializable(typeof(ResponsesImageGenerationInputMask))]
 [JsonSerializable(typeof(ThinkingConfig))]
 [JsonSerializable(typeof(RequestOverrides))]
 [JsonSerializable(typeof(RequestDebugInfo))]

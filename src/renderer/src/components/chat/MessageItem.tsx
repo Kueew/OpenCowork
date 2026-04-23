@@ -17,6 +17,7 @@ type MessageRenderMode = 'default' | 'transcript'
 interface MessageItemProps {
   message: UnifiedMessage
   messageId: string
+  sessionId?: string | null
   isStreaming?: boolean
   isLastUserMessage?: boolean
   isLastAssistantMessage?: boolean
@@ -86,6 +87,7 @@ function TeamNotification({ content }: { content: string }): React.JSX.Element {
 function MessageItemInner({
   message,
   messageId,
+  sessionId,
   isStreaming,
   isLastUserMessage,
   isLastAssistantMessage,
@@ -134,6 +136,7 @@ function MessageItemInner({
             usage={message.usage}
             toolResults={toolResults}
             msgId={message.id}
+            sessionId={sessionId}
             showRetry
             showContinue={showContinue && isLastAssistantMessage}
             isLastAssistantMessage={isLastAssistantMessage}
@@ -211,6 +214,7 @@ function areEqual(prev: MessageItemProps, next: MessageItemProps): boolean {
   if (prev.message === next.message) {
     return (
       prev.messageId === next.messageId &&
+      prev.sessionId === next.sessionId &&
       prev.isStreaming === next.isStreaming &&
       prev.isLastUserMessage === next.isLastUserMessage &&
       prev.isLastAssistantMessage === next.isLastAssistantMessage &&
@@ -249,6 +253,7 @@ function areEqual(prev: MessageItemProps, next: MessageItemProps): boolean {
 
   return (
     prev.messageId === next.messageId &&
+    prev.sessionId === next.sessionId &&
     prev.isStreaming === next.isStreaming &&
     prev.isLastUserMessage === next.isLastUserMessage &&
     prev.isLastAssistantMessage === next.isLastAssistantMessage &&

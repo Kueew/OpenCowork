@@ -1,7 +1,8 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { formatDurationMs } from '@renderer/lib/format-duration'
 import {
   buildImageDimensionCacheKey,
   cacheImageDimensions,
@@ -13,6 +14,7 @@ import {
 interface ImageGeneratingLoaderProps {
   previewSrc?: string
   previewFilePath?: string
+  startedAt?: number
 }
 
 interface PlaceholderBarProps {
@@ -52,7 +54,8 @@ function PlaceholderBar({ widthClass, delay = 0 }: PlaceholderBarProps): React.J
 
 export function ImageGeneratingLoader({
   previewSrc,
-  previewFilePath
+  previewFilePath,
+  startedAt
 }: ImageGeneratingLoaderProps): React.JSX.Element {
   const { t } = useTranslation('chat')
   const previewDisplaySrc = useImageDisplaySrc(previewSrc, previewFilePath)
@@ -74,6 +77,21 @@ export function ImageGeneratingLoader({
     previewDimensionState.key === previewDimensionKey
       ? (previewDimensionState.dimensions ?? cachedPreviewDimensions)
       : cachedPreviewDimensions
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    if (!startedAt) return
+
+    const interval = window.setInterval(() => setNow(Date.now()), 1000)
+
+    return () => window.clearInterval(interval)
+  }, [startedAt])
+  const liveElapsedMs = startedAt ? Math.max(0, now - startedAt) : 0
+
+  const elapsedLabel =
+    startedAt && liveElapsedMs > 0
+      ? t('toolCall.imagePlugin.elapsed', { duration: formatDurationMs(liveElapsedMs) })
+      : null
 
   const handlePreviewLoad = useCallback(
     (event: React.SyntheticEvent<HTMLImageElement>) => {
@@ -134,6 +152,12 @@ export function ImageGeneratingLoader({
                 transition={{ duration: 1.5, repeat: Infinity, ease: 'easeInOut' }}
               />
               <span>{t('thinking.pending')}</span>
+              {elapsedLabel && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="tabular-nums text-white/60">{elapsedLabel}</span>
+                </>
+              )}
             </div>
           </div>
 

@@ -24,7 +24,9 @@ import {
   RotateCcw,
   Play,
   Ellipsis,
+  Eraser,
   Languages,
+  Pencil,
   Volume2,
   Share2
 } from 'lucide-react'
@@ -67,6 +69,7 @@ import {
   getBillableInputTokens,
   getBillableTotalTokens
 } from '@renderer/lib/format-tokens'
+import { formatDurationMs } from '@renderer/lib/format-duration'
 import { useMemoizedTokens } from '@renderer/hooks/use-estimated-tokens'
 import { getLastDebugInfo, getRequestTraceInfo } from '@renderer/lib/debug-store'
 import { MONO_FONT } from '@renderer/lib/constants'
@@ -104,6 +107,8 @@ import {
   resolveLocalFilePath,
   openLocalFilePath
 } from '@renderer/lib/preview/viewers/markdown-components'
+import { imageBlockToAttachment } from '@renderer/lib/image-attachments'
+import { useImageEditStore } from '@renderer/stores/image-edit-store'
 
 type AssistantRenderMode = 'default' | 'transcript'
 
@@ -114,6 +119,7 @@ interface AssistantMessageProps {
   toolResults?: Map<string, { content: ToolResultContent; isError?: boolean }>
   liveToolCallMap?: Map<string, ToolCallState> | null
   msgId?: string
+  sessionId?: string | null
   showRetry?: boolean
   showContinue?: boolean
   isLastAssistantMessage?: boolean
@@ -324,15 +330,6 @@ function toFiniteNumber(value: unknown): number | null {
     return Number.isFinite(parsed) ? parsed : null
   }
   return null
-}
-
-function formatMs(ms: number): string {
-  if (ms >= 1000) {
-    const seconds = ms / 1000
-    const digits = seconds >= 10 ? 0 : 1
-    return `${seconds.toFixed(digits)}s`
-  }
-  return `${Math.round(ms)}ms`
 }
 
 function DebugToggleButton({ debugInfo }: { debugInfo: RequestDebugInfo }): React.JSX.Element {
@@ -996,12 +993,14 @@ export function AssistantMessage({
   toolResults,
   liveToolCallMap,
   msgId,
+  sessionId,
   showRetry,
   showContinue,
   isLastAssistantMessage,
   onRetry,
   onContinue,
   onDelete,
+  renderMode = 'default',
   orchestrationRun,
   hiddenToolUseIds
 }: AssistantMessageProps): React.JSX.Element {
@@ -1011,7 +1010,40 @@ export function AssistantMessage({
   const debugInfo = devMode && msgId ? getLastDebugInfo(msgId) : undefined
   const openTranslatePage = useUIStore((s) => s.openTranslatePage)
   const setTranslateSourceText = useTranslateStore((s) => s.setSourceText)
+  const openImageEditor = useImageEditStore((s) => s.openEditor)
   const [collapsed, setCollapsed] = useState(false)
+  const sessionModelBinding = useChatStore(
+    useShallow((state) => {
+      const sessionIndex = sessionId ? state.sessionsById[sessionId] : undefined
+      const session = sessionIndex !== undefined ? state.sessions[sessionIndex] : undefined
+      return {
+        providerId: session?.providerId ?? null,
+        modelId: session?.modelId ?? null
+      }
+    })
+  )
+  const canEditGeneratedImages = useProviderStore((state) => {
+    if (renderMode !== 'default') return false
+
+    const providerId = sessionModelBinding.providerId ?? state.activeProviderId
+    if (!providerId) return false
+
+    const provider = state.providers.find((item) => item.id === providerId)
+    if (!provider) return false
+
+    const fallbackModelId =
+      provider.defaultModel ??
+      provider.models.find((item) => item.enabled)?.id ??
+      provider.models[0]?.id ??
+      ''
+    const resolvedModelId =
+      sessionModelBinding.modelId ??
+      (provider.id === state.activeProviderId ? state.activeModelId : fallbackModelId)
+    const model = provider.models.find((item) => item.id === resolvedModelId)
+    const requestType = model?.type ?? provider.type
+
+    return requestType === 'openai-responses'
+  })
 
   // Memoize the plain text extraction for token estimation (used only when no API usage)
   const plainTextForTokens = useMemo(() => {
@@ -1027,6 +1059,9 @@ export function AssistantMessage({
 
   const isGeneratingImage = useChatStore((s) =>
     msgId ? !!s.generatingImageMessages[msgId] : false
+  )
+  const imageGenerationTiming = useChatStore((s) =>
+    msgId ? s.imageGenerationTimings[msgId] : undefined
   )
   const generatingImagePreview = useChatStore((s) =>
     msgId ? s.generatingImagePreviews[msgId] : undefined
@@ -1190,6 +1225,7 @@ export function AssistantMessage({
         <ImageGeneratingLoader
           previewSrc={generatingImagePreviewSrc || undefined}
           previewFilePath={generatingImagePreview?.source.filePath}
+          startedAt={imageGenerationTiming?.startedAt}
         />
       )
     }
@@ -1583,12 +1619,45 @@ export function AssistantMessage({
                     ? `data:${imgBlock.source.mediaType || 'image/png'};base64,${imgBlock.source.data}`
                     : (imgBlock.source.url ?? '')
                 if (!imgSrc) return null
+                const editableImage = imageBlockToAttachment(imgBlock)
+                const actions =
+                  canEditGeneratedImages && sessionId && editableImage
+                    ? [
+                        {
+                          key: 'edit',
+                          label: t('assistantMessage.editImage', {
+                            defaultValue: 'Edit image'
+                          }),
+                          icon: <Pencil className="size-4" />,
+                          onClick: () =>
+                            openImageEditor({
+                              sessionId,
+                              image: editableImage,
+                              mode: 'edit'
+                            })
+                        },
+                        {
+                          key: 'mask',
+                          label: t('assistantMessage.maskEditImage', {
+                            defaultValue: 'Mask edit'
+                          }),
+                          icon: <Eraser className="size-4" />,
+                          onClick: () =>
+                            openImageEditor({
+                              sessionId,
+                              image: editableImage,
+                              mode: 'mask'
+                            })
+                        }
+                      ]
+                    : undefined
                 return (
                   <ScaleIn key={item.index} className="w-full origin-left">
                     <ImagePreview
                       src={imgSrc}
                       alt="Generated image"
                       filePath={imgBlock.source.filePath}
+                      actions={actions}
                     />
                   </ScaleIn>
                 )
@@ -1698,6 +1767,7 @@ export function AssistantMessage({
             <ImageGeneratingLoader
               previewSrc={generatingImagePreviewSrc || undefined}
               previewFilePath={generatingImagePreview?.source.filePath}
+              startedAt={imageGenerationTiming?.startedAt}
             />
           </div>
         )}
@@ -1763,9 +1833,14 @@ export function AssistantMessage({
   }, [msgId, onRetry, showRetry])
 
   const timingSummary = useMemo(() => {
-    if (!usage) return null
-    const totalDuration = usage.totalDurationMs ? formatMs(usage.totalDurationMs) : null
-    const perRequest = usage.requestTimings ?? []
+    const imageGenerationDuration =
+      imageGenerationTiming?.startedAt && imageGenerationTiming.completedAt
+        ? formatDurationMs(imageGenerationTiming.completedAt - imageGenerationTiming.startedAt)
+        : null
+    const totalDuration =
+      imageGenerationDuration ??
+      (usage?.totalDurationMs ? formatDurationMs(usage.totalDurationMs) : null)
+    const perRequest = usage?.requestTimings ?? []
     const lastTiming = perRequest.length > 0 ? perRequest[perRequest.length - 1] : null
     if (!totalDuration && !lastTiming) return null
 
@@ -1778,11 +1853,11 @@ export function AssistantMessage({
 
       if (totalMs !== null) {
         parts.push(
-          `${t('assistantMessage.req', { count: perRequest.length })} ${formatMs(totalMs)}`
+          `${t('assistantMessage.req', { count: perRequest.length })} ${formatDurationMs(totalMs)}`
         )
       }
       if (ttftMs !== null) {
-        parts.push(`${t('assistantMessage.ttft')} ${formatMs(ttftMs)}`)
+        parts.push(`${t('assistantMessage.ttft')} ${formatDurationMs(ttftMs)}`)
       }
       if (tps !== null) {
         parts.push(`${t('assistantMessage.tps')} ${tps.toFixed(1)}`)
@@ -1794,7 +1869,7 @@ export function AssistantMessage({
       totalDuration,
       lastDetail
     }
-  }, [t, usage])
+  }, [imageGenerationTiming, t, usage])
 
   const requestTrace = msgId ? getRequestTraceInfo(msgId) : undefined
 

@@ -455,12 +455,19 @@ public sealed class ResponsesImageGenerationConfig
     public string? Action { get; set; }
     public string? Background { get; set; }
     public string? InputFidelity { get; set; }
+    public ResponsesImageGenerationInputMask? InputImageMask { get; set; }
     public string? Moderation { get; set; }
     public int? OutputCompression { get; set; }
     public string? OutputFormat { get; set; }
     public int? PartialImages { get; set; }
     public string? Quality { get; set; }
     public string? Size { get; set; }
+}
+
+public sealed class ResponsesImageGenerationInputMask
+{
+    public string? FileId { get; set; }
+    public string? ImageUrl { get; set; }
 }
 
 // --- Agent Events ---

@@ -29,7 +29,18 @@ export interface TailToolExecutionState {
 }
 
 const messageLookupCache = new WeakMap<UnifiedMessage[], Map<string, UnifiedMessage>>()
+const transcriptStaticAnalysisCache = new WeakMap<UnifiedMessage[], TranscriptStaticAnalysis>()
 const HIDDEN_MESSAGE_LIST_TOOL_NAMES = new Set(['TaskCreate', 'TaskUpdate'])
+
+export interface TranscriptStaticAnalysis {
+  messageLookup: Map<string, UnifiedMessage>
+  toolResultsLookup: Map<string, Map<string, { content: ToolResultContent; isError?: boolean }>>
+  renderableMessageIds: string[]
+  lastRealUserMessageId: string | null
+  lastAssistantMessageId: string | null
+  tailToolExecutionState: TailToolExecutionState | null
+  orchestrationBindingSignature: string
+}
 
 export function isToolResultOnlyUserMessage(message: UnifiedMessage): boolean {
   return (
@@ -71,6 +82,148 @@ function collectToolResults(
       target.set(block.toolUseId, { content: block.content, isError: block.isError })
     }
   }
+}
+
+function buildOrchestrationMessageBindingEntry(message: UnifiedMessage): string {
+  if (message.role !== 'assistant') {
+    return `${message.id}:${message.role}`
+  }
+
+  if (!Array.isArray(message.content)) {
+    return `${message.id}:${message.role}:string`
+  }
+
+  const toolUseSignature = message.content
+    .filter(
+      (block): block is Extract<ContentBlock, { type: 'tool_use' }> => block.type === 'tool_use'
+    )
+    .map((block) => {
+      const teamName = typeof block.input.team_name === 'string' ? block.input.team_name.trim() : ''
+      const runsInBackground = block.input.run_in_background === true ? 'bg' : 'fg'
+      return `${block.id}:${block.name}:${teamName}:${runsInBackground}`
+    })
+    .join(',')
+
+  return `${message.id}:${message.role}:blocks:${message.content.length}:${toolUseSignature}`
+}
+
+function buildTailToolExecutionState(messages: UnifiedMessage[]): TailToolExecutionState | null {
+  if (messages.length === 0) return null
+
+  const toolResultMap = new Map<string, { content: ToolResultContent; isError?: boolean }>()
+  let trailingToolResultMessageCount = 0
+  let assistantIndex = messages.length - 1
+
+  while (assistantIndex >= 0) {
+    const message = messages[assistantIndex]
+    if (!isToolResultOnlyUserMessage(message)) break
+    collectToolResults(message.content as ContentBlock[], toolResultMap)
+    trailingToolResultMessageCount += 1
+    assistantIndex -= 1
+  }
+
+  if (assistantIndex < 0) return null
+
+  const assistantMessage = messages[assistantIndex]
+  if (assistantMessage.role !== 'assistant' || !Array.isArray(assistantMessage.content)) {
+    return null
+  }
+
+  const toolUseBlocks = assistantMessage.content.filter(
+    (block): block is ToolUseBlock => block.type === 'tool_use'
+  )
+  if (toolUseBlocks.length === 0) return null
+
+  return {
+    assistantIndex,
+    assistantMessageId: assistantMessage.id,
+    toolUseBlocks,
+    toolResultMap,
+    trailingToolResultMessageCount
+  }
+}
+
+export function buildTranscriptStaticAnalysis(
+  messages: UnifiedMessage[]
+): TranscriptStaticAnalysis {
+  const cached = transcriptStaticAnalysisCache.get(messages)
+  if (cached) return cached
+
+  const messageLookup = new Map<string, UnifiedMessage>()
+  const toolResultsLookup = new Map<
+    string,
+    Map<string, { content: ToolResultContent; isError?: boolean }>
+  >()
+  const renderableMessageIds: string[] = []
+  const orchestrationBindingEntries: string[] = []
+  let currentAssistantMessageId: string | null = null
+  let lastRealUserMessageId: string | null = null
+  let lastAssistantMessageId: string | null = null
+
+  for (const message of messages) {
+    messageLookup.set(message.id, message)
+    orchestrationBindingEntries.push(buildOrchestrationMessageBindingEntry(message))
+
+    if (message.role === 'assistant') {
+      currentAssistantMessageId = message.id
+    } else if (isToolResultOnlyUserMessage(message) && currentAssistantMessageId) {
+      let results = toolResultsLookup.get(currentAssistantMessageId)
+      if (!results) {
+        results = new Map()
+        toolResultsLookup.set(currentAssistantMessageId, results)
+      }
+      collectToolResults(message.content as ContentBlock[], results)
+    } else {
+      currentAssistantMessageId = null
+    }
+
+    if (!shouldRenderInMessageList(message)) continue
+
+    renderableMessageIds.push(message.id)
+    if (isRealUserMessage(message)) {
+      lastRealUserMessageId = message.id
+    }
+    if (message.role === 'assistant') {
+      lastAssistantMessageId = message.id
+    }
+  }
+
+  const nextAnalysis: TranscriptStaticAnalysis = {
+    messageLookup,
+    toolResultsLookup,
+    renderableMessageIds,
+    lastRealUserMessageId,
+    lastAssistantMessageId,
+    tailToolExecutionState: buildTailToolExecutionState(messages),
+    orchestrationBindingSignature: orchestrationBindingEntries.join('|')
+  }
+
+  transcriptStaticAnalysisCache.set(messages, nextAnalysis)
+  return nextAnalysis
+}
+
+export function buildRenderableMessageMetaFromAnalysis(
+  analysis: TranscriptStaticAnalysis,
+  streamingMessageId: string | null
+): RenderableMessageMeta[] {
+  const lastRealUserMessageId = streamingMessageId ? null : analysis.lastRealUserMessageId
+
+  return analysis.renderableMessageIds.map((messageId) => ({
+    messageId,
+    isLastUserMessage: messageId === lastRealUserMessageId,
+    isLastAssistantMessage: messageId === analysis.lastAssistantMessageId
+  }))
+}
+
+export function buildChatRenderableMessageMetaFromAnalysis(
+  analysis: TranscriptStaticAnalysis,
+  streamingMessageId: string | null,
+  continueAssistantMessageId: string | null
+): ChatRenderableMessageMeta[] {
+  return buildRenderableMessageMetaFromAnalysis(analysis, streamingMessageId).map((message) => ({
+    ...message,
+    showContinue: message.messageId === continueAssistantMessageId
+  }))
 }
 
 export function getToolResultsLookup(
@@ -117,86 +270,17 @@ export function getMessageLookup(messages: UnifiedMessage[]): Map<string, Unifie
 export function getTailToolExecutionState(
   messages: UnifiedMessage[]
 ): TailToolExecutionState | null {
-  if (messages.length === 0) return null
-
-  const toolResultMap = new Map<string, { content: ToolResultContent; isError?: boolean }>()
-  let trailingToolResultMessageCount = 0
-  let assistantIndex = messages.length - 1
-
-  while (assistantIndex >= 0) {
-    const message = messages[assistantIndex]
-    if (!isToolResultOnlyUserMessage(message)) break
-    collectToolResults(message.content as ContentBlock[], toolResultMap)
-    trailingToolResultMessageCount += 1
-    assistantIndex -= 1
-  }
-
-  if (assistantIndex < 0) return null
-
-  const assistantMessage = messages[assistantIndex]
-  if (assistantMessage.role !== 'assistant' || !Array.isArray(assistantMessage.content)) {
-    return null
-  }
-
-  const toolUseBlocks = assistantMessage.content.filter(
-    (block): block is ToolUseBlock => block.type === 'tool_use'
-  )
-  if (toolUseBlocks.length === 0) return null
-
-  return {
-    assistantIndex,
-    assistantMessageId: assistantMessage.id,
-    toolUseBlocks,
-    toolResultMap,
-    trailingToolResultMessageCount
-  }
-}
-
-function resolveLastRealUserIndex(
-  messages: UnifiedMessage[],
-  streamingMessageId: string | null
-): number {
-  if (streamingMessageId) return -1
-
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (isRealUserMessage(messages[index])) {
-      return index
-    }
-  }
-
-  return -1
-}
-
-function resolveLastAssistantIndex(messages: UnifiedMessage[]): number {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index]
-    if (!shouldRenderInMessageList(message)) continue
-    return message.role === 'assistant' ? index : -1
-  }
-
-  return -1
+  return buildTailToolExecutionState(messages)
 }
 
 export function buildRenderableMessageMeta(
   messages: UnifiedMessage[],
   streamingMessageId: string | null
 ): RenderableMessageMeta[] {
-  const lastRealUserIndex = resolveLastRealUserIndex(messages, streamingMessageId)
-  const lastAssistantIndex = resolveLastAssistantIndex(messages)
-  const result: RenderableMessageMeta[] = []
-
-  for (let index = 0; index < messages.length; index += 1) {
-    const message = messages[index]
-    if (!shouldRenderInMessageList(message)) continue
-
-    result.push({
-      messageId: message.id,
-      isLastUserMessage: index === lastRealUserIndex,
-      isLastAssistantMessage: index === lastAssistantIndex
-    })
-  }
-
-  return result
+  return buildRenderableMessageMetaFromAnalysis(
+    buildTranscriptStaticAnalysis(messages),
+    streamingMessageId
+  )
 }
 
 export function buildChatRenderableMessageMeta(
@@ -204,8 +288,9 @@ export function buildChatRenderableMessageMeta(
   streamingMessageId: string | null,
   continueAssistantMessageId: string | null
 ): ChatRenderableMessageMeta[] {
-  return buildRenderableMessageMeta(messages, streamingMessageId).map((message) => ({
-    ...message,
-    showContinue: message.messageId === continueAssistantMessageId
-  }))
+  return buildChatRenderableMessageMetaFromAnalysis(
+    buildTranscriptStaticAnalysis(messages),
+    streamingMessageId,
+    continueAssistantMessageId
+  )
 }

@@ -89,6 +89,11 @@ export interface Session {
   longRunningMode?: boolean
 }
 
+export interface ImageGenerationTiming {
+  startedAt: number
+  completedAt?: number
+}
+
 export interface CreateSessionOptions {
   longRunningMode?: boolean
   preserveProjectless?: boolean
@@ -456,8 +461,9 @@ interface ChatStore {
   setStreamingMessageId: (sessionId: string, id: string | null) => void
   /** Image generation state (per-message) - using Record instead of Set for Immer compatibility */
   generatingImageMessages: Record<string, boolean>
+  imageGenerationTimings: Record<string, ImageGenerationTiming>
   generatingImagePreviews: Record<string, ImageBlock>
-  setGeneratingImage: (msgId: string, generating: boolean) => void
+  setGeneratingImage: (msgId: string, generating: boolean, occurredAt?: number) => void
   setGeneratingImagePreview: (msgId: string, preview: ImageBlock | null) => void
 
   // Helpers
@@ -730,7 +736,11 @@ function getResidentSessionIds(
 function releaseDormantSessionMemory(
   state: Pick<
     ChatStore,
-    'sessions' | 'activeSessionId' | 'streamingMessages' | 'generatingImageMessages'
+    | 'sessions'
+    | 'activeSessionId'
+    | 'streamingMessages'
+    | 'generatingImageMessages'
+    | 'imageGenerationTimings'
   >
 ): void {
   const residentSessionIds = getResidentSessionIds(state)
@@ -764,6 +774,11 @@ function releaseDormantSessionMemory(
   for (const messageId of Object.keys(state.generatingImageMessages)) {
     if (releasedMessageIds.has(messageId)) {
       delete state.generatingImageMessages[messageId]
+    }
+  }
+  for (const messageId of Object.keys(state.imageGenerationTimings)) {
+    if (releasedMessageIds.has(messageId)) {
+      delete state.imageGenerationTimings[messageId]
     }
   }
 }
@@ -1066,6 +1081,7 @@ export const useChatStore = create<ChatStore>()(
     streamingMessageId: null,
     streamingMessages: {},
     generatingImageMessages: {},
+    imageGenerationTimings: {},
     generatingImagePreviews: {},
     _loaded: false,
 
@@ -2892,12 +2908,19 @@ export const useChatStore = create<ChatStore>()(
         }
       }),
 
-    setGeneratingImage: (msgId, generating) =>
+    setGeneratingImage: (msgId, generating, occurredAt = Date.now()) =>
       set((state) => {
+        const timing = state.imageGenerationTimings[msgId]
         if (generating) {
           state.generatingImageMessages[msgId] = true
+          if (!timing || timing.completedAt) {
+            state.imageGenerationTimings[msgId] = { startedAt: occurredAt }
+          }
         } else {
           delete state.generatingImageMessages[msgId]
+          if (timing?.startedAt && !timing.completedAt) {
+            timing.completedAt = occurredAt
+          }
         }
       }),
 

@@ -3,6 +3,7 @@ import type {
   ResponsesImageGenerationAction,
   ResponsesImageGenerationBackground,
   ResponsesImageGenerationConfig,
+  ResponsesImageGenerationInputMask,
   ResponsesImageGenerationInputFidelity,
   ResponsesImageGenerationModeration,
   ResponsesImageGenerationOutputFormat,
@@ -11,6 +12,7 @@ import type {
 } from './types'
 
 export const RESPONSES_IMAGE_GENERATION_DEFAULT_OPTION = 'default'
+export const RESPONSES_IMAGE_GENERATION_DEFAULT_PARTIAL_IMAGES = 3
 
 export const RESPONSES_IMAGE_GENERATION_ACTIONS: ResponsesImageGenerationAction[] = [
   'auto',
@@ -64,7 +66,13 @@ export function normalizeResponsesImageGenerationConfig(
 ): ResponsesImageGenerationConfig {
   return {
     ...(config ?? {}),
-    enabled: config?.enabled ?? true
+    enabled: config?.enabled ?? true,
+    ...(normalizeResponsesImageGenerationInputMask(config?.inputImageMask)
+      ? { inputImageMask: normalizeResponsesImageGenerationInputMask(config?.inputImageMask) }
+      : {}),
+    partialImages:
+      normalizeResponsesImageGenerationPartialImages(config?.partialImages) ??
+      RESPONSES_IMAGE_GENERATION_DEFAULT_PARTIAL_IMAGES
   }
 }
 
@@ -86,6 +94,22 @@ export function normalizeResponsesImageGenerationPartialImages(value: unknown): 
   return clampInteger(value, 0)
 }
 
+export function normalizeResponsesImageGenerationInputMask(
+  value: ResponsesImageGenerationInputMask | null | undefined
+): ResponsesImageGenerationInputMask | undefined {
+  if (!value) return undefined
+
+  const fileId = typeof value.fileId === 'string' ? value.fileId.trim() : ''
+  const imageUrl = typeof value.imageUrl === 'string' ? value.imageUrl.trim() : ''
+
+  if (!fileId && !imageUrl) return undefined
+
+  return {
+    ...(fileId ? { fileId } : {}),
+    ...(imageUrl ? { imageUrl } : {})
+  }
+}
+
 export function buildResponsesImageGenerationTool(
   config?: ResponsesImageGenerationConfig | null
 ): Record<string, unknown> | null {
@@ -97,6 +121,14 @@ export function buildResponsesImageGenerationTool(
   if (normalized.action) tool.action = normalized.action
   if (normalized.background) tool.background = normalized.background
   if (normalized.inputFidelity) tool.input_fidelity = normalized.inputFidelity
+  if (normalized.inputImageMask) {
+    tool.input_image_mask = {
+      ...(normalized.inputImageMask.fileId ? { file_id: normalized.inputImageMask.fileId } : {}),
+      ...(normalized.inputImageMask.imageUrl
+        ? { image_url: normalized.inputImageMask.imageUrl }
+        : {})
+    }
+  }
   if (normalized.moderation) tool.moderation = normalized.moderation
   if (normalized.outputFormat) tool.output_format = normalized.outputFormat
   if (normalized.quality) tool.quality = normalized.quality

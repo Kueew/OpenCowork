@@ -154,7 +154,6 @@ export function ChatHomePage(): React.JSX.Element {
               onSelectFolder={mode !== 'chat' ? () => setFolderDialogOpen(true) : undefined}
               workingFolder={workingFolder}
               hideWorkingFolderIndicator
-              hideWorkingFolderPicker
               isStreaming={false}
             />
 

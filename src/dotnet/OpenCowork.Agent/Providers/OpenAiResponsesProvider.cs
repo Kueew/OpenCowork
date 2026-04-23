@@ -1352,6 +1352,8 @@ public sealed class OpenAiResponsesProvider : ILlmProvider
 
     private static JsonObject? BuildImageGenerationTool(ResponsesImageGenerationConfig? config)
     {
+        const int DefaultPartialImages = 3;
+
         if (config?.Enabled == false)
             return null;
 
@@ -1366,6 +1368,16 @@ public sealed class OpenAiResponsesProvider : ILlmProvider
             tool["background"] = config.Background;
         if (!string.IsNullOrWhiteSpace(config?.InputFidelity))
             tool["input_fidelity"] = config.InputFidelity;
+        if (config?.InputImageMask is not null)
+        {
+            var inputImageMask = new JsonObject();
+            if (!string.IsNullOrWhiteSpace(config.InputImageMask.FileId))
+                inputImageMask["file_id"] = config.InputImageMask.FileId;
+            if (!string.IsNullOrWhiteSpace(config.InputImageMask.ImageUrl))
+                inputImageMask["image_url"] = config.InputImageMask.ImageUrl;
+            if (inputImageMask.Count > 0)
+                tool["input_image_mask"] = inputImageMask;
+        }
         if (!string.IsNullOrWhiteSpace(config?.Moderation))
             tool["moderation"] = config.Moderation;
         if (!string.IsNullOrWhiteSpace(config?.OutputFormat))
@@ -1376,8 +1388,7 @@ public sealed class OpenAiResponsesProvider : ILlmProvider
             tool["size"] = config.Size;
         if (config?.OutputCompression is int outputCompression)
             tool["output_compression"] = Math.Clamp(outputCompression, 0, 100);
-        if (config?.PartialImages is int partialImages)
-            tool["partial_images"] = Math.Max(0, partialImages);
+        tool["partial_images"] = Math.Max(0, config?.PartialImages ?? DefaultPartialImages);
 
         return tool;
     }

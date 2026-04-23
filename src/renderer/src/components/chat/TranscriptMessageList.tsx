@@ -2,7 +2,10 @@ import * as React from 'react'
 import type { ToolResultContent, UnifiedMessage } from '@renderer/lib/api/types'
 import { cn } from '@renderer/lib/utils'
 import { MessageItem } from './MessageItem'
-import { buildRenderableMessageMeta, getMessageLookup, getToolResultsLookup } from './transcript-utils'
+import {
+  buildRenderableMessageMetaFromAnalysis,
+  buildTranscriptStaticAnalysis
+} from './transcript-utils'
 
 interface TranscriptMessageListProps {
   messages: UnifiedMessage[]
@@ -13,7 +16,6 @@ interface TranscriptMessageListProps {
 type ToolResultsLookup = Map<string, { content: ToolResultContent; isError?: boolean }>
 
 interface TranscriptMessageRowProps {
-  rowIndex: number
   message: UnifiedMessage
   isStreaming: boolean
   isLastUserMessage: boolean
@@ -22,7 +24,6 @@ interface TranscriptMessageRowProps {
 }
 
 const TranscriptMessageRow = React.memo(function TranscriptMessageRow({
-  rowIndex,
   message,
   isStreaming,
   isLastUserMessage,
@@ -30,10 +31,11 @@ const TranscriptMessageRow = React.memo(function TranscriptMessageRow({
   toolResults
 }: TranscriptMessageRowProps): React.JSX.Element {
   return (
-    <div data-index={rowIndex} className="mx-auto max-w-3xl px-4 pb-6">
+    <div className="mx-auto max-w-3xl px-4 pb-6">
       <MessageItem
         message={message}
         messageId={message.id}
+        sessionId={null}
         isStreaming={isStreaming}
         isLastUserMessage={isLastUserMessage}
         isLastAssistantMessage={isLastAssistantMessage}
@@ -45,17 +47,20 @@ const TranscriptMessageRow = React.memo(function TranscriptMessageRow({
   )
 })
 
-export function TranscriptMessageList({
+function TranscriptMessageListInner({
   messages,
   streamingMessageId = null,
   className
 }: TranscriptMessageListProps): React.JSX.Element {
-  const toolResultsLookup = React.useMemo(() => getToolResultsLookup(messages), [messages])
-  const renderableMeta = React.useMemo(
-    () => buildRenderableMessageMeta(messages, streamingMessageId),
-    [messages, streamingMessageId]
+  const transcriptAnalysis = React.useMemo(
+    () => buildTranscriptStaticAnalysis(messages),
+    [messages]
   )
-  const messageLookup = React.useMemo(() => getMessageLookup(messages), [messages])
+  const { messageLookup, toolResultsLookup } = transcriptAnalysis
+  const renderableMeta = React.useMemo(
+    () => buildRenderableMessageMetaFromAnalysis(transcriptAnalysis, streamingMessageId),
+    [streamingMessageId, transcriptAnalysis]
+  )
 
   if (renderableMeta.length === 0) {
     return <div className="text-sm text-muted-foreground/70">暂无回放</div>
@@ -63,7 +68,7 @@ export function TranscriptMessageList({
 
   return (
     <div className={cn('not-prose h-[min(60vh,40rem)] min-h-[20rem] overflow-y-auto', className)}>
-      {renderableMeta.map((meta, rowIndex) => {
+      {renderableMeta.map((meta) => {
         const message = messageLookup.get(meta.messageId)
 
         if (!message) {
@@ -73,7 +78,6 @@ export function TranscriptMessageList({
         return (
           <TranscriptMessageRow
             key={meta.messageId}
-            rowIndex={rowIndex}
             message={message}
             isStreaming={streamingMessageId === message.id}
             isLastUserMessage={meta.isLastUserMessage}
@@ -85,3 +89,19 @@ export function TranscriptMessageList({
     </div>
   )
 }
+
+function areTranscriptMessageListPropsEqual(
+  prev: TranscriptMessageListProps,
+  next: TranscriptMessageListProps
+): boolean {
+  return (
+    prev.messages === next.messages &&
+    prev.streamingMessageId === next.streamingMessageId &&
+    prev.className === next.className
+  )
+}
+
+export const TranscriptMessageList = React.memo(
+  TranscriptMessageListInner,
+  areTranscriptMessageListPropsEqual
+)

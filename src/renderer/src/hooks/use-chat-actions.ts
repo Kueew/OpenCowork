@@ -189,8 +189,9 @@ function setStreamingMessageIdWithSync(sessionId: string, messageId: string | nu
 }
 
 function setGeneratingImageWithSync(messageId: string, generating: boolean): void {
-  useChatStore.getState().setGeneratingImage(messageId, generating)
-  emitSessionRuntimeSync({ kind: 'set_generating_image', messageId, generating })
+  const occurredAt = Date.now()
+  useChatStore.getState().setGeneratingImage(messageId, generating, occurredAt)
+  emitSessionRuntimeSync({ kind: 'set_generating_image', messageId, generating, occurredAt })
 }
 
 function setGeneratingImagePreviewWithSync(messageId: string, preview: ContentBlock | null): void {
@@ -274,6 +275,9 @@ export interface SendMessageOptions {
   longRunningMode?: boolean
   clearCompletedTasksOnTurnStart?: boolean
   skipPendingPlanRevision?: boolean
+  imageEdit?: {
+    maskDataUrl?: string
+  }
 }
 
 interface QueuedSessionMessage {
@@ -1466,15 +1470,16 @@ async function resolveSessionMessageTarget<T>(
   sessionId: string,
   resolver: (messages: UnifiedMessage[]) => T | null
 ): Promise<{ messages: UnifiedMessage[]; target: T | null }> {
-  let messages = chatStore.getSessionMessages(sessionId)
-  let target = resolver(messages)
-  if (target || !shouldReloadSessionMessagesForMutation(chatStore, sessionId)) {
-    return { messages, target }
+  // Edit / retry / delete rely on absolute message positions. If the session is
+  // currently showing only a paged window, a resident-array index is not the
+  // same as the DB sort order and follow-up truncation will target the wrong
+  // rows. Reload the full transcript before resolving the mutation target.
+  if (shouldReloadSessionMessagesForMutation(chatStore, sessionId)) {
+    await chatStore.loadSessionMessages(sessionId, true)
   }
 
-  await chatStore.loadSessionMessages(sessionId, true)
-  messages = chatStore.getSessionMessages(sessionId)
-  target = resolver(messages)
+  const messages = chatStore.getSessionMessages(sessionId)
+  const target = resolver(messages)
   return { messages, target }
 }
 
@@ -2693,6 +2698,40 @@ export function useChatActions(): {
             action: { label: 'Open Settings', onClick: () => uiStore.openSettingsPage('provider') }
           })
           return
+        }
+      }
+
+      if (options?.imageEdit) {
+        if (baseProviderConfig.type !== 'openai-responses') {
+          toast.error('Image editing unavailable', {
+            description: 'Responses image editing is only available for OpenAI Responses sessions.'
+          })
+          return
+        }
+
+        if (!images || images.length === 0) {
+          toast.error('Image editing unavailable', {
+            description: 'A source image is required for image editing.'
+          })
+          return
+        }
+
+        const responsesImageGeneration = {
+          ...(baseProviderConfig.responsesImageGeneration ?? {})
+        }
+        delete responsesImageGeneration.inputImageMask
+
+        baseProviderConfig.responsesImageGeneration = {
+          ...responsesImageGeneration,
+          enabled: true,
+          action: 'edit',
+          ...(options.imageEdit.maskDataUrl?.trim()
+            ? {
+                inputImageMask: {
+                  imageUrl: options.imageEdit.maskDataUrl.trim()
+                }
+              }
+            : {})
         }
       }
 

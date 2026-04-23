@@ -320,11 +320,18 @@ export type ResponsesImageGenerationOutputFormat = 'png' | 'webp' | 'jpeg'
 export type ResponsesImageGenerationQuality = 'auto' | 'low' | 'medium' | 'high'
 export type ResponsesImageGenerationSize = 'auto' | '1024x1024' | '1024x1536' | '1536x1024'
 
+export interface ResponsesImageGenerationInputMask {
+  fileId?: string
+  imageUrl?: string
+}
+
 export interface ResponsesImageGenerationConfig {
   enabled?: boolean
   action?: ResponsesImageGenerationAction
   background?: ResponsesImageGenerationBackground
   inputFidelity?: ResponsesImageGenerationInputFidelity
+  /** Request-scoped mask used for inpainting. */
+  inputImageMask?: ResponsesImageGenerationInputMask
   moderation?: ResponsesImageGenerationModeration
   outputCompression?: number
   outputFormat?: ResponsesImageGenerationOutputFormat

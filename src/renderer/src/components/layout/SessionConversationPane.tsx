@@ -30,6 +30,7 @@ import {
 import { Input } from '@renderer/components/ui/input'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { MessageList } from '@renderer/components/chat/MessageList'
+import { ImageEditDialog } from '@renderer/components/chat/ImageEditDialog'
 import { InputArea } from '@renderer/components/chat/InputArea'
 import { ProjectTerminalDock } from '@renderer/components/terminal/ProjectTerminalDock'
 import { WorkingFolderSelectorDialog } from '@renderer/components/chat/WorkingFolderSelectorDialog'
@@ -567,6 +568,7 @@ export function SessionConversationPane({
           }
         />
       ) : null}
+      <ImageEditDialog sessionId={resolvedSessionId} />
     </div>
   )
 }

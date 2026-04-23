@@ -90,6 +90,7 @@ export function TitleBar({
             : null
 
       return {
+        sessionProjectId: activeSession?.projectId ?? null,
         sessionWorkingFolder:
           activeSession?.workingFolder ?? activeSessionProject?.workingFolder ?? null,
         terminalProjectId: currentProject?.id ?? null,
@@ -121,7 +122,8 @@ export function TitleBar({
     !translatePageOpen &&
     !tasksPageOpen
   const showInspectorToggle = chatSurfaceActive && chatView === 'session'
-  const showFileManagerToggle = chatSurfaceActive && chatView === 'session'
+  const showFileManagerToggle =
+    chatSurfaceActive && chatView === 'session' && Boolean(sessionContext.sessionProjectId)
   const canOpenFileManager = Boolean(sessionContext.sessionWorkingFolder)
   const showProjectTerminalToggle =
     chatSurfaceActive &&

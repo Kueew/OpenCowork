@@ -301,7 +301,6 @@ interface FileSearchItem {
 const EMPTY_QUEUED_MESSAGES: PendingSessionMessageItem[] = []
 const INTERNAL_FILE_DRAG_MIME = 'application/x-opencowork-file-paths'
 const MIN_INPUT_HEIGHT = 120
-const HOME_INPUT_MIN_HEIGHT = 176
 const DEFAULT_SESSION_INPUT_HEIGHT = 160
 const MAX_INPUT_HEIGHT = 500
 const MIN_MESSAGE_LIST_HEIGHT = 120
@@ -398,24 +397,9 @@ export function InputArea({
   const { t } = useTranslation('chat')
   const chatView = useUIStore((s) => s.chatView)
   const setMode = useUIStore((s) => s.setMode)
-  const sessionHasMessages = useChatStore((s) => {
-    const targetSessionId = sessionId ?? s.activeSessionId
-    const idx = targetSessionId ? s.sessionsById[targetSessionId] : undefined
-    const targetSession = idx !== undefined ? s.sessions[idx] : undefined
-    return (targetSession?.messageCount ?? 0) > 0
-  })
-  const isProjectSessionComposer = useChatStore((s) => {
-    const targetSessionId = sessionId ?? s.activeSessionId
-    const idx = targetSessionId ? s.sessionsById[targetSessionId] : undefined
-    const targetSession = idx !== undefined ? s.sessions[idx] : undefined
-    return chatView === 'session' && Boolean(targetSession?.projectId)
-  })
   const isSessionComposer = chatView === 'session' || Boolean(sessionId)
-  const isEmptySessionComposer = chatView === 'session' && !sessionHasMessages
-  const isHomeComposer = chatView === 'home' || chatView === 'project' || isEmptySessionComposer
-  const usesProjectComposerChrome = isHomeComposer || isProjectSessionComposer
-  const usesExpandedComposerHeight = usesProjectComposerChrome
-  const minComposerHeight = usesExpandedComposerHeight ? HOME_INPUT_MIN_HEIGHT : MIN_INPUT_HEIGHT
+  const isHomeComposer = chatView === 'home' || chatView === 'project'
+  const minComposerHeight = MIN_INPUT_HEIGHT
   const defaultSessionInputHeight = Math.max(DEFAULT_SESSION_INPUT_HEIGHT, minComposerHeight)
   const [documentNodes, setDocumentNodes] = React.useState<EditorDocumentNode[]>([])
   const [selectedFiles, setSelectedFiles] = React.useState<SelectedFileItem[]>([])
@@ -1976,15 +1960,9 @@ export function InputArea({
     setShowOptimizationDialog(false)
   }, [])
 
-  const composerVariant = usesProjectComposerChrome ? 'project' : 'session'
-  const composerIconControlClass = cn(
-    'composer-control rounded-xl',
-    usesProjectComposerChrome && 'rounded-full'
-  )
-  const composerTextControlClass = cn(
-    'composer-control rounded-xl text-[11px] shadow-none',
-    usesProjectComposerChrome && 'rounded-full'
-  )
+  const composerVariant = 'session'
+  const composerIconControlClass = 'composer-control rounded-xl'
+  const composerTextControlClass = 'composer-control rounded-xl text-[11px] shadow-none'
 
   const modeSwitchControl = (
     <DropdownMenu>
@@ -2145,11 +2123,8 @@ export function InputArea({
     <Tooltip>
       <TooltipTrigger asChild>
         <Button
-          size={usesProjectComposerChrome ? 'icon' : 'default'}
-          className={cn(
-            'composer-send transition-[filter,box-shadow] duration-200',
-            usesProjectComposerChrome ? 'rounded-full' : 'rounded-xl px-3.5'
-          )}
+          size="default"
+          className="composer-send rounded-xl px-3.5 transition-[filter,box-shadow] duration-200"
           data-composer-variant={composerVariant}
           onMouseDown={(event) => {
             event.preventDefault()
@@ -2162,14 +2137,10 @@ export function InputArea({
             isOptimizing
           }
         >
-          {usesProjectComposerChrome ? (
-            <Send className="size-4" />
-          ) : (
-            <>
-              <span>{t('action.start', { ns: 'common' })}</span>
-              <Send className="ml-1.5 size-3.5" />
-            </>
-          )}
+          <>
+            <span>{t('action.start', { ns: 'common' })}</span>
+            <Send className="ml-1.5 size-3.5" />
+          </>
         </Button>
       </TooltipTrigger>
       <TooltipContent>
@@ -2184,7 +2155,7 @@ export function InputArea({
     <div
       ref={rootRef}
       data-tour="composer"
-      className={usesProjectComposerChrome ? 'px-0 py-0' : 'px-4 py-3 pb-4'}
+      className="px-4 py-3 pb-4"
     >
       {/* API key warning */}
       {!hasApiKey && (
@@ -2240,13 +2211,7 @@ export function InputArea({
         </div>
       )}
 
-      <div
-        className={
-          usesProjectComposerChrome
-            ? 'mx-auto w-full max-w-[840px]'
-            : 'mx-auto w-full max-w-[820px]'
-        }
-      >
+      <div className="mx-auto w-full max-w-[820px]">
         {projectScoped && draftSessionId && <InlineStepsPanel sessionId={draftSessionId} />}
         <div
           ref={containerRef}
@@ -2655,13 +2620,7 @@ export function InputArea({
           <div
             className={cn(
               'composer-editor-region relative flex min-h-0 flex-1 flex-col px-3',
-              usesProjectComposerChrome
-                ? selectedSkill || attachedImages.length > 0
-                  ? 'pt-1.5'
-                  : 'pt-4'
-                : selectedSkill || attachedImages.length > 0
-                  ? 'pt-1.5'
-                  : 'pt-3'
+              selectedSkill || attachedImages.length > 0 ? 'pt-1.5' : 'pt-3'
             )}
             onDrop={handleDropWrapped}
             onDragOver={handleDragOver}
@@ -2875,48 +2834,21 @@ export function InputArea({
           {/* Bottom toolbar */}
           <div
             ref={bottomToolbarRef}
-            className={cn(
-              'composer-toolbar relative z-20 mt-1 shrink-0 flex items-center justify-between gap-2 px-2 pb-2',
-              usesProjectComposerChrome && 'px-4 pb-3.5 pt-2.5'
-            )}
+            className="composer-toolbar relative z-20 mt-1 shrink-0 flex items-center justify-between gap-2 px-2 pb-2"
           >
-            {usesProjectComposerChrome ? (
-              <div className="flex w-full items-center justify-between gap-2">
-                <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto pr-1 [scrollbar-width:none]">
-                  {skillsMenuControl}
-                  {showModeSwitchControl ? modeSwitchControl : null}
+            <div className="flex w-full items-center justify-between gap-2">
+              <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto pr-1 [scrollbar-width:none]">
+                {showModeSwitchControl ? modeSwitchControl : null}
+                {showModeSwitchControl ? <div className="h-4 w-px shrink-0 bg-border/50" /> : null}
+                <div className="shrink-0">
+                  <ModelSwitcher />
                 </div>
-
-                <div className="flex shrink-0 items-center gap-1.5">
-                  <ContextRing />
-                  <div className="shrink-0">
-                    <ModelSwitcher />
-                  </div>
-                  {webSearchToggleControl}
-                  {activeMcpBadge}
-                  {mode !== 'chat' && longRunningControl}
-                  {folderControl}
-                  {optimizeControl}
-                  {stopControl}
-                  {sendControl}
-                </div>
+                {webSearchToggleControl}
+                {skillsMenuControl}
+                {activeMcpBadge}
+                {mode !== 'chat' && longRunningControl}
+                {folderControl}
               </div>
-            ) : (
-              <div className="flex w-full items-center justify-between gap-2">
-                <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto pr-1 [scrollbar-width:none]">
-                  {showModeSwitchControl ? modeSwitchControl : null}
-                  {showModeSwitchControl ? (
-                    <div className="h-4 w-px shrink-0 bg-border/50" />
-                  ) : null}
-                  <div className="shrink-0">
-                    <ModelSwitcher />
-                  </div>
-                  {webSearchToggleControl}
-                  {skillsMenuControl}
-                  {activeMcpBadge}
-                  {mode !== 'chat' && longRunningControl}
-                  {folderControl}
-                </div>
 
                 <div className="flex shrink-0 items-center gap-1.5">
                   <ContextRing />
@@ -2979,7 +2911,6 @@ export function InputArea({
                   {sendControl}
                 </div>
               </div>
-            )}
           </div>
         </div>
       </div>

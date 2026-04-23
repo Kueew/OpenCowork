@@ -94,6 +94,7 @@ import {
   RESPONSES_IMAGE_GENERATION_ACTIONS,
   RESPONSES_IMAGE_GENERATION_BACKGROUNDS,
   RESPONSES_IMAGE_GENERATION_DEFAULT_OPTION,
+  RESPONSES_IMAGE_GENERATION_DEFAULT_PARTIAL_IMAGES,
   RESPONSES_IMAGE_GENERATION_INPUT_FIDELITIES,
   RESPONSES_IMAGE_GENERATION_MODERATIONS,
   RESPONSES_IMAGE_GENERATION_OUTPUT_FORMATS,
@@ -1118,7 +1119,7 @@ function ModelFormDialog({
                           <Input
                             type="number"
                             min={0}
-                            placeholder="0"
+                            placeholder={RESPONSES_IMAGE_GENERATION_DEFAULT_PARTIAL_IMAGES.toString()}
                             value={responsesImageGenerationPartialImages}
                             onChange={(e) =>
                               setResponsesImageGenerationPartialImages(e.target.value)

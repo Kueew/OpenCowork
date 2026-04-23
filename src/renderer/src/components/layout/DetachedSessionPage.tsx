@@ -34,6 +34,7 @@ export function DetachedSessionPage({ sessionId }: DetachedSessionPageProps): Re
         : undefined
 
       return {
+        projectId: session?.projectId ?? null,
         title: session?.title ?? null,
         workingFolder: session?.workingFolder ?? project?.workingFolder ?? null
       }
@@ -69,39 +70,41 @@ export function DetachedSessionPage({ sessionId }: DetachedSessionPageProps): Re
           </div>
 
           <div className="flex items-center gap-1">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-pressed={workingFolderSheetOpen}
-                  aria-disabled={!sessionView.workingFolder}
-                  className={cn(
-                    'titlebar-no-drag size-7 rounded-md transition-colors',
-                    workingFolderSheetOpen
-                      ? 'bg-accent text-accent-foreground'
-                      : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-                    !sessionView.workingFolder &&
-                      'cursor-not-allowed opacity-40 hover:bg-transparent'
-                  )}
-                  onClick={() => {
-                    if (!sessionView.workingFolder) return
-                    toggleWorkingFolderSheet()
-                  }}
-                >
-                  <FolderOpen className="size-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                {sessionView.workingFolder
-                  ? workingFolderSheetOpen
-                    ? t('topbar.closeFileManager', { defaultValue: 'Close file manager' })
-                    : t('topbar.openFileManager', { defaultValue: 'Open file manager' })
-                  : t('topbar.fileManagerUnavailable', {
-                      defaultValue: 'Select a working folder to open the file manager'
-                    })}
-              </TooltipContent>
-            </Tooltip>
+            {sessionView.projectId ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-pressed={workingFolderSheetOpen}
+                    aria-disabled={!sessionView.workingFolder}
+                    className={cn(
+                      'titlebar-no-drag size-7 rounded-md transition-colors',
+                      workingFolderSheetOpen
+                        ? 'bg-accent text-accent-foreground'
+                        : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                      !sessionView.workingFolder &&
+                        'cursor-not-allowed opacity-40 hover:bg-transparent'
+                    )}
+                    onClick={() => {
+                      if (!sessionView.workingFolder) return
+                      toggleWorkingFolderSheet()
+                    }}
+                  >
+                    <FolderOpen className="size-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {sessionView.workingFolder
+                    ? workingFolderSheetOpen
+                      ? t('topbar.closeFileManager', { defaultValue: 'Close file manager' })
+                      : t('topbar.openFileManager', { defaultValue: 'Open file manager' })
+                    : t('topbar.fileManagerUnavailable', {
+                        defaultValue: 'Select a working folder to open the file manager'
+                      })}
+                </TooltipContent>
+              </Tooltip>
+            ) : null}
           </div>
 
           {!isMac ? (

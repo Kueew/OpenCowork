@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useState, type ReactNode } from 'react'
 import { X, Download, Copy, Check } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { toast } from 'sonner'
@@ -17,6 +17,14 @@ interface ImagePreviewProps {
   src: string
   alt?: string
   filePath?: string
+  actions?: ImagePreviewAction[]
+}
+
+export interface ImagePreviewAction {
+  key: string
+  label: string
+  icon: ReactNode
+  onClick: () => void
 }
 
 function getDownloadExtension(imageSrc: string): string {
@@ -80,7 +88,8 @@ async function downloadPersistedImage(
 export function ImagePreview({
   src,
   alt = 'Generated image',
-  filePath
+  filePath,
+  actions = []
 }: ImagePreviewProps): React.JSX.Element {
   const [isOpen, setIsOpen] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -226,6 +235,25 @@ export function ImagePreview({
           if (effectiveSrc) setIsOpen(true)
         }}
       >
+        {actions.length > 0 && (
+          <div className="absolute right-2 top-2 z-10 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+            {actions.map((action) => (
+              <button
+                key={action.key}
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  action.onClick()
+                }}
+                className="flex size-8 items-center justify-center rounded-md bg-black/55 text-white transition-colors hover:bg-black/70"
+                title={action.label}
+                aria-label={action.label}
+              >
+                {action.icon}
+              </button>
+            ))}
+          </div>
+        )}
         {effectiveSrc ? (
           <img
             src={effectiveSrc}
@@ -261,7 +289,23 @@ export function ImagePreview({
           >
             {/* Toolbar */}
             <div className="absolute top-4 right-4 flex items-center gap-2">
+              {actions.map((action) => (
+                <button
+                  key={action.key}
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    action.onClick()
+                  }}
+                  className="p-2 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors"
+                  title={action.label}
+                  aria-label={action.label}
+                >
+                  {action.icon}
+                </button>
+              ))}
               <button
+                type="button"
                 onClick={(e) => {
                   e.stopPropagation()
                   handleCopy()
@@ -272,6 +316,7 @@ export function ImagePreview({
                 {copied ? <Check className="size-5" /> : <Copy className="size-5" />}
               </button>
               <button
+                type="button"
                 onClick={(e) => {
                   e.stopPropagation()
                   handleDownload()
@@ -282,6 +327,7 @@ export function ImagePreview({
                 <Download className="size-5" />
               </button>
               <button
+                type="button"
                 onClick={(e) => {
                   e.stopPropagation()
                   setIsOpen(false)
