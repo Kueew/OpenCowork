@@ -2651,6 +2651,16 @@ export const useChatStore = create<ChatStore>()(
           session.updatedAt = now
         }
       })
+      // Clear deferred writes for this session — the full replacement covers everything.
+      for (let i = _deferredMessageAdds.length - 1; i >= 0; i--) {
+        if (_deferredMessageAdds[i].sessionId === sessionId) {
+          _deferredMessageAdds.splice(i, 1)
+        }
+      }
+      const streamingMsgId = get().streamingMessages[sessionId]
+      if (streamingMsgId) {
+        _streamingDirtyMessageIds.delete(streamingMsgId)
+      }
       ipcClient
         .invoke('db:messages:replace', {
           sessionId,
@@ -2796,6 +2806,9 @@ export const useChatStore = create<ChatStore>()(
 
         releaseDormantSessionMemory(state)
       })
+      if (streamingMessageId !== null) {
+        _activeStreamingMessageIds.add(streamingMessageId)
+      }
       const now = Date.now()
       const batch: Array<{ msg: UnifiedMessage; sortOrder: number }> = []
       if (shouldPersistUser && userMsg) batch.push({ msg: userMsg, sortOrder: userSortOrder })
