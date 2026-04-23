@@ -82,6 +82,7 @@ interface MessageRowProps {
   hiddenToolUseIds?: Set<string>
   anchorMessageId?: string | null
   requestRetryState?: RequestRetryState | null
+  renderMode?: 'default' | 'transcript' | 'static'
   onRetry?: () => void
   onContinue?: () => void
   onEditUserMessage?: (messageId: string, draft: EditableUserMessageDraft) => void
@@ -102,6 +103,7 @@ const STREAMING_AUTO_SCROLL_BOTTOM_THRESHOLD = 80
 const STREAMING_AUTO_SCROLL_STOP_THRESHOLD = 240
 const LOAD_MORE_ROW_KEY = '__load_more__'
 const TAIL_STATIC_MESSAGE_COUNT = 4
+const TAIL_LIVE_MESSAGE_COUNT = 6
 const INITIAL_SCROLL_SETTLE_FRAMES = 2
 const FOLLOW_BOTTOM_SETTLE_FRAMES = 3
 const BOTTOM_SCROLL_CORRECTION_EPSILON = 2
@@ -351,11 +353,27 @@ function selectSessionScopedAgentState(
     signatureParts.push(`h:${buildSubAgentRenderSignature(subAgent)}`)
   }
 
-  const hasActiveToolCallOutput = [...state.pendingToolCalls, ...state.executedToolCalls].some(
-    (toolCall) =>
+  let hasActiveToolCallOutput = false
+  for (const toolCall of state.pendingToolCalls) {
+    if (
       (!toolCall.sessionId || toolCall.sessionId === sessionId) &&
       (toolCall.status === 'running' || toolCall.status === 'streaming')
-  )
+    ) {
+      hasActiveToolCallOutput = true
+      break
+    }
+  }
+  if (!hasActiveToolCallOutput) {
+    for (const toolCall of state.executedToolCalls) {
+      if (
+        (!toolCall.sessionId || toolCall.sessionId === sessionId) &&
+        (toolCall.status === 'running' || toolCall.status === 'streaming')
+      ) {
+        hasActiveToolCallOutput = true
+        break
+      }
+    }
+  }
 
   const hasRunningBackgroundProcess = Object.values(state.backgroundProcesses).some(
     (process) => process.sessionId === sessionId && process.status === 'running'
@@ -469,6 +487,7 @@ function areMessageRowPropsEqual(prev: MessageRowProps, next: MessageRowProps): 
     prev.orchestrationRun === next.orchestrationRun &&
     prev.hiddenToolUseIds === next.hiddenToolUseIds &&
     prev.anchorMessageId === next.anchorMessageId &&
+    prev.renderMode === next.renderMode &&
     areRequestRetryStatesEqual(prev.requestRetryState, next.requestRetryState) &&
     prev.onRetry === next.onRetry &&
     prev.onContinue === next.onContinue &&
@@ -494,6 +513,7 @@ const MessageRow = React.memo(function MessageRow({
   hiddenToolUseIds,
   anchorMessageId,
   requestRetryState,
+  renderMode,
   onRetry,
   onContinue,
   onEditUserMessage,
@@ -516,6 +536,7 @@ const MessageRow = React.memo(function MessageRow({
         isLastAssistantMessage={isLastAssistantMessage}
         showContinue={showContinue}
         disableAnimation={disableAnimation}
+        renderMode={renderMode}
         onRetryAssistantMessage={onRetry}
         onContinueAssistantMessage={onContinue}
         onEditUserMessage={onEditUserMessage}
@@ -1085,6 +1106,7 @@ function MessageListInner(props: MessageListProps): React.JSX.Element {
       >
         {(() => {
           const anchorMessageId = preserveScrollOnPrependRef.current?.anchorMessageId ?? null
+          const liveCutoffIndex = Math.max(0, lastMessageRowIndex - TAIL_LIVE_MESSAGE_COUNT)
 
           return rows.map((row, rowIndex) => {
             if (row.type === 'load-more') {
@@ -1136,12 +1158,15 @@ function MessageListInner(props: MessageListProps): React.JSX.Element {
             const message = messageLookup.get(messageId)
             if (!message) return null
 
+            const isStreaming = streamingMessageId === messageId
+            const rowRenderMode = !isStreaming && rowIndex < liveCutoffIndex ? 'static' : undefined
+
             return (
               <MessageRow
                 key={row.key}
                 message={message}
                 sessionId={targetSessionId}
-                isStreaming={streamingMessageId === messageId}
+                isStreaming={isStreaming}
                 isLastUserMessage={isLastUserMessage}
                 isLastAssistantMessage={isLastAssistantMessage}
                 showContinue={showContinue}
@@ -1150,6 +1175,7 @@ function MessageListInner(props: MessageListProps): React.JSX.Element {
                 orchestrationRun={orchestrationState.byMessageId.get(messageId)?.primaryRun ?? null}
                 hiddenToolUseIds={orchestrationState.byMessageId.get(messageId)?.hiddenToolUseIds}
                 anchorMessageId={anchorMessageId}
+                renderMode={rowRenderMode}
                 requestRetryState={
                   isLastAssistantMessage ? (sessionRequestRetryState ?? null) : null
                 }

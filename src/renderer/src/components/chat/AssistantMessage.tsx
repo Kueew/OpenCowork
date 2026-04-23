@@ -110,7 +110,7 @@ import {
 import { imageBlockToAttachment } from '@renderer/lib/image-attachments'
 import { useImageEditStore } from '@renderer/stores/image-edit-store'
 
-type AssistantRenderMode = 'default' | 'transcript'
+type AssistantRenderMode = 'default' | 'transcript' | 'static'
 
 interface AssistantMessageProps {
   content: string | ContentBlock[]
@@ -1100,16 +1100,20 @@ export function AssistantMessage({
   }, [content, usage, isStreaming])
   const fallbackTokens = useMemoizedTokens(plainTextForTokens)
 
+  const isLiveMode = renderMode === 'default'
+
   const isGeneratingImage = useChatStore((s) =>
-    msgId ? !!s.generatingImageMessages[msgId] : false
+    isLiveMode && msgId ? !!s.generatingImageMessages[msgId] : false
   )
   const imageGenerationTiming = useChatStore((s) =>
-    msgId ? s.imageGenerationTimings[msgId] : undefined
+    isLiveMode && msgId ? s.imageGenerationTimings[msgId] : undefined
   )
   const generatingImagePreview = useChatStore((s) =>
-    msgId ? s.generatingImagePreviews[msgId] : undefined
+    isLiveMode && msgId ? s.generatingImagePreviews[msgId] : undefined
   )
-  const runChangeSet = useAgentStore((s) => (msgId ? s.runChangesByRunId[msgId] : undefined))
+  const runChangeSet = useAgentStore((s) =>
+    isLiveMode && msgId ? s.runChangesByRunId[msgId] : undefined
+  )
   const visibleRunChanges = useMemo(
     () => (runChangeSet ? aggregateDisplayableRunFileChanges(runChangeSet.changes) : []),
     [runChangeSet]
@@ -1135,7 +1139,7 @@ export function AssistantMessage({
   }, [isStreaming, normalizedContent])
   const liveToolCalls = useAgentStore(
     useShallow((s) => {
-      if (liveToolCallMap || !isStreaming || liveToolCallIds.length === 0) {
+      if (!isLiveMode || liveToolCallMap || !isStreaming || liveToolCallIds.length === 0) {
         return EMPTY_LIVE_TOOL_CALLS
       }
       const idSet = new Set(liveToolCallIds)
@@ -1219,9 +1223,9 @@ export function AssistantMessage({
     )
   }, [isStreaming, normalizedContent])
   useEffect(() => {
-    if (!msgId || isStreaming) return
+    if (!isLiveMode || !msgId || isStreaming) return
     void refreshRunChanges(msgId)
-  }, [isStreaming, msgId, refreshRunChanges])
+  }, [isLiveMode, isStreaming, msgId, refreshRunChanges])
 
   const renderItems = useMemo(() => {
     if (!normalizedContent) return []

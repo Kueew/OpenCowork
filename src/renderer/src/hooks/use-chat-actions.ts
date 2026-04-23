@@ -1847,7 +1847,7 @@ export function abortSession(sessionId: string): void {
 
 // 60fps flush causes expensive markdown + layout work during panel resizing.
 // 33ms keeps streaming smooth while lowering render/reflow pressure.
-const STREAM_DELTA_FLUSH_MS = 33
+const STREAM_DELTA_FLUSH_MS = 60
 const BACKGROUND_STREAM_DELTA_FLUSH_MS = 200
 const TOOL_INPUT_FLUSH_MS = 300
 const BACKGROUND_TOOL_INPUT_FLUSH_MS = 600

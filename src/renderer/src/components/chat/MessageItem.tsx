@@ -12,7 +12,7 @@ import type { EditableUserMessageDraft } from '@renderer/lib/image-attachments'
 import type { OrchestrationRun } from '@renderer/lib/orchestration/types'
 import { isCompactSummaryLikeMessage } from '@renderer/lib/agent/context-compression'
 
-type MessageRenderMode = 'default' | 'transcript'
+type MessageRenderMode = 'default' | 'transcript' | 'static'
 
 interface MessageItemProps {
   message: UnifiedMessage

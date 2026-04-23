@@ -10,6 +10,65 @@ import { runInteractiveAgentLoop } from '../cron/cron-agent-background'
 type EventHandler = (method: string, params: unknown) => void
 type RequestHandler = (id: number | string, method: string, params: unknown) => Promise<unknown>
 
+type EventBatch = { runId: string; events: Array<Record<string, unknown>> }
+type FlushHandler = (batches: EventBatch[]) => void
+
+class IpcEventChannel {
+  private buffer: Array<{ runId: string; event: Record<string, unknown> }> = []
+  private timer: ReturnType<typeof setInterval> | null = null
+  private flushHandler: FlushHandler | null = null
+
+  constructor(private intervalMs = 50) {}
+
+  setFlushHandler(handler: FlushHandler): void {
+    this.flushHandler = handler
+  }
+
+  push(runId: string, event: Record<string, unknown>): void {
+    this.buffer.push({ runId, event })
+    if (this.timer === null) {
+      this.timer = setInterval(() => this.flush(), this.intervalMs)
+    }
+  }
+
+  flush(): void {
+    if (this.buffer.length === 0) {
+      if (this.timer !== null) {
+        clearInterval(this.timer)
+        this.timer = null
+      }
+      return
+    }
+
+    const items = this.buffer
+    this.buffer = []
+
+    const byRunId = new Map<string, Array<Record<string, unknown>>>()
+    for (const { runId, event } of items) {
+      let arr = byRunId.get(runId)
+      if (!arr) {
+        arr = []
+        byRunId.set(runId, arr)
+      }
+      arr.push(event)
+    }
+
+    const batches: EventBatch[] = []
+    for (const [runId, events] of byRunId) {
+      batches.push({ runId, events })
+    }
+    this.flushHandler?.(batches)
+  }
+
+  stop(): void {
+    if (this.timer !== null) {
+      clearInterval(this.timer)
+      this.timer = null
+    }
+    this.flush()
+  }
+}
+
 interface JsAgentRunRequest {
   runId?: string
   messages?: unknown[]
@@ -110,12 +169,16 @@ function normalizeRendererToolResult(value: unknown): RendererToolResult {
 
 export class JsAgentRuntimeManager {
   private running = false
-  private onEvent: EventHandler | null = null
   private onRequestFromSidecar: RequestHandler | null = null
   private activeRuns = new Map<string, ActiveRun>()
+  private eventChannel = new IpcEventChannel(50)
 
   setEventHandler(handler: EventHandler): void {
-    this.onEvent = handler
+    this.eventChannel.setFlushHandler((batches) => {
+      for (const { runId, events } of batches) {
+        handler('agent/event-batch', { runId, events })
+      }
+    })
   }
 
   setRequestHandler(handler: RequestHandler): void {
@@ -140,6 +203,7 @@ export class JsAgentRuntimeManager {
 
   async stop(): Promise<void> {
     this.running = false
+    this.eventChannel.stop()
     const runs = Array.from(this.activeRuns.values())
     for (const run of runs) {
       run.controller.abort()
@@ -197,7 +261,7 @@ export class JsAgentRuntimeManager {
   }
 
   private emitAgentEvent(runId: string, event: unknown): void {
-    this.onEvent?.('agent/event', { runId, event })
+    this.eventChannel.push(runId, event as Record<string, unknown>)
   }
 
   private async startRun(params: JsAgentRunRequest): Promise<{ started: true; runId: string }> {
