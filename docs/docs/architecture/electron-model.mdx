@@ -98,22 +98,22 @@ contextBridge.exposeInMainWorld('api', api)
 
 这里的 `api` 不是任意 Node.js 暴露面，而是明确列举的受控 IPC 封装。
 
-## Sidecar 进程 / Sidecar Process
+## 主进程 Agent Runtime / Main Agent Runtime
 
-**入口**：`src/dotnet/OpenCowork.Agent/Program.cs`
+**入口**：`src/main/ipc/js-agent-runtime.ts`
 
-新增的 sidecar 不是 Electron 官方进程层的一部分，但它已经是实际架构中的第四个运行时：
+当前的 Agent Runtime 已统一收敛到主进程 JS 服务，它仍然复用既有的自定义协议，但不再依赖独立的外部 sidecar 二进制：
 
-- 由主进程通过 `SidecarManager` 启停与保活
-- 使用 JSON-RPC 风格协议双向通信
+- 由主进程通过 `getSidecarManager()` 暴露统一 runtime 接口
+- 使用现有 JSON-RPC 风格协议与渲染进程双向通信
 - 可向渲染进程请求审批或工具执行结果
-- 在开发态支持自动 `dotnet publish`
-- 用于承载更强隔离、更稳定或跨平台一致的 Agent 能力
+- HTTP / WebSocket 请求、重试与 circuit 状态统一驻留在主进程
+- 用于承载更稳定、跨入口一致的 Agent 能力
 
 ## 安全与边界 / Security Boundaries
 
 - 渲染进程不直接访问 Node.js 系统接口
 - 主进程集中处理文件、数据库、Shell、截图、输入控制、SSH 等敏感能力
 - 预加载脚本只暴露白名单 API
-- sidecar 通过主进程中转，不直接接管 Electron UI
+- Agent Runtime 通过主进程中转，不直接接管 Electron UI
 - IPC / bridge 的通道按领域拆分，便于审计与渐进扩展
