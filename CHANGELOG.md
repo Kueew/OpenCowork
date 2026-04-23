@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.72] - 2026-04-22
+
+### Added
+
+- Added stronger image-generation response handling so cron and related runtime flows can surface generated image results more consistently.
+
+### Changed
+
+- Improved team runtime synchronization and in-session question flows for smoother multi-agent collaboration.
+- Streamlined renderer tooling, workspace surfaces, browser panel interactions, and tool preview presentation.
+- Refactored agent runtime event bridging and shared loop protocol types to keep streaming and tool state updates more consistent.
+- Reduced chat persistence and rendering overhead through batching and related performance optimizations.
+- Refreshed project architecture and documentation content to reflect the latest runtime and UI changes.
+
+### Fixed
+
+- Fixed streaming tool preview and persistence edge cases so live tool input and state stay aligned during message updates.
+- Fixed settings disk-write behavior with debounced persistence and safer quit-time flushing.
+
 ## [0.9.71] - 2026-04-22
 
 ### Changed
