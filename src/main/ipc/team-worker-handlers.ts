@@ -70,7 +70,9 @@ export async function spawnIsolatedTeamWorker(
   return completion
 }
 
-export async function stopIsolatedTeamWorker(args: StopIsolatedTeamWorkerArgs): Promise<{ success: true }> {
+export async function stopIsolatedTeamWorker(
+  args: StopIsolatedTeamWorkerArgs
+): Promise<{ success: true }> {
   const record = workerWindows.get(args.workerId)
   if (record && !record.window.isDestroyed()) {
     record.window.close()
@@ -79,7 +81,9 @@ export async function stopIsolatedTeamWorker(args: StopIsolatedTeamWorkerArgs): 
   return { success: true }
 }
 
-export async function stopIsolatedTeamWorkers(args: StopIsolatedTeamWorkersArgs): Promise<{ success: true }> {
+export async function stopIsolatedTeamWorkers(
+  args: StopIsolatedTeamWorkersArgs
+): Promise<{ success: true }> {
   for (const [workerId, record] of workerWindows.entries()) {
     if (record.teamName !== args.teamName) continue
     if (!record.window.isDestroyed()) {

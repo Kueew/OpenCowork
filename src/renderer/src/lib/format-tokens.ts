@@ -53,12 +53,12 @@ export function resolveCacheCreationCost(
 ): { price: number | null; cost: number | null } {
   const totalCacheCreationTokens =
     usage.cacheCreationTokens ??
-    (usage.cacheCreation5mTokens ?? 0) +
-      (usage.cacheCreation1hTokens ?? 0)
+    (usage.cacheCreation5mTokens ?? 0) + (usage.cacheCreation1hTokens ?? 0)
 
   if (totalCacheCreationTokens <= 0) {
     return {
-      price: model?.cacheCreationPrice ?? (model?.inputPrice != null ? model.inputPrice * 1.25 : null),
+      price:
+        model?.cacheCreationPrice ?? (model?.inputPrice != null ? model.inputPrice * 1.25 : null),
       cost: 0
     }
   }
@@ -104,8 +104,7 @@ export function calculateCost(
   const cacheRead = usage.cacheReadTokens ?? 0
   const cacheCreationTokens =
     usage.cacheCreationTokens ??
-    (usage.cacheCreation5mTokens ?? 0) +
-      (usage.cacheCreation1hTokens ?? 0)
+    (usage.cacheCreation5mTokens ?? 0) + (usage.cacheCreation1hTokens ?? 0)
   const billableInput = getBillableInputTokens(usage, model.type)
   const cacheReadPrice = model.cacheHitPrice ?? model.inputPrice * 0.1
   const { cost: cacheCreationCost } = resolveCacheCreationCost(usage, model)

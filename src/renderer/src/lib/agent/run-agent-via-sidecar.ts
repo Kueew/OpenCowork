@@ -1,32 +1,17 @@
 import type { AgentEvent } from '@renderer/lib/agent/types'
+import type { AgentStreamEvent } from '../../../../shared/agent-stream-protocol'
 import { agentBridge } from '@renderer/lib/ipc/agent-bridge'
-import {
-  normalizeSidecarAgentEvent,
-  normalizeSidecarRecord,
-  normalizeSidecarSubAgentEvent,
-  type SidecarAgentRunRequest
-} from '@renderer/lib/ipc/sidecar-protocol'
+import { agentStream } from '@renderer/lib/ipc/agent-stream-receiver'
+import { toAgentEvent, toSubAgentEvent } from './stream-event-adapter'
 import { subAgentEvents } from '@renderer/lib/agent/sub-agents/events'
+import type { SidecarAgentRunRequest } from '@renderer/lib/ipc/sidecar-protocol'
 
 export interface RunAgentViaSidecarOptions {
   signal?: AbortSignal
   onRunIdAssigned?: (runId: string) => void
-  /** When false, sub_agent_* events are pushed into the main queue instead of
-   *  being routed to subAgentEvents.emit. Defaults to true (route to bus). */
   routeSubAgentEventsToBus?: boolean
 }
 
-/**
- * Runs an agent loop inside the main-process runtime behind the existing
- * sidecar-style IPC contract and surfaces its events as an
- * AsyncIterable<AgentEvent>, matching the JS runAgentLoop contract so existing
- * consumers don't need to change their event handling.
- *
- * Tools, providers, plan/chat mode, plugin/SSH context — everything is passed
- * through the runtime request. Unknown tools are auto-bridged back to the
- * renderer; non-native providers are flagged mode=bridged by the request
- * builder and stream through renderer-provider-bridge.
- */
 export function runAgentViaSidecar(
   request: SidecarAgentRunRequest,
   options: RunAgentViaSidecarOptions = {}
@@ -40,7 +25,7 @@ export function runAgentViaSidecar(
       }
 
       const queue: AgentEvent[] = []
-      const pendingEvents: Array<{ runId: string; rawEvent: unknown }> = []
+      const pendingEvents: Array<{ runId: string; event: AgentStreamEvent }> = []
       let finished = false
       let notify: (() => void) | null = null
       let runId = ''
@@ -62,37 +47,29 @@ export function runAgentViaSidecar(
         wake()
       }
 
-      const dispatchSidecarEvent = (rawEvent: unknown): void => {
-        const subAgentEvent = normalizeSidecarSubAgentEvent(rawEvent)
-        if (subAgentEvent) {
+      const dispatchStreamEvent = (event: AgentStreamEvent): void => {
+        const subEvent = toSubAgentEvent(event)
+        if (subEvent) {
           if (routeSubAgentEventsToBus) {
-            subAgentEvents.emit(subAgentEvent)
+            subAgentEvents.emit(subEvent)
             return
           }
         }
 
-        const normalized = normalizeSidecarAgentEvent(rawEvent)
-        if (normalized) {
-          pushEvent(normalized)
+        const agentEvent = toAgentEvent(event)
+        if (agentEvent) {
+          pushEvent(agentEvent)
         }
       }
 
-      const unsub = agentBridge.on('agent/event', (payload) => {
-        const record = normalizeSidecarRecord(payload)
-        const eventRunId = String(record.runId ?? '')
-
-        // Events without a runId can still be meaningful (e.g. sub-agent broadcast events
-        // the sidecar fires before the run is formally registered). Queue them while we
-        // don't yet have our own runId, and dispatch unconditionally once we do — if the
-        // event turns out to be for a different run, the downstream dispatcher will ignore
-        // it, but we no longer silently drop it at this layer.
+      const unsub = agentStream.subscribeAll((eventRunId, _sessionId, event) => {
         if (!runId) {
-          pendingEvents.push({ runId: eventRunId, rawEvent: record.event })
+          pendingEvents.push({ runId: eventRunId, event })
           return
         }
 
         if (eventRunId && eventRunId !== runId) return
-        dispatchSidecarEvent(record.event)
+        dispatchStreamEvent(event)
       })
 
       try {
@@ -112,14 +89,10 @@ export function runAgentViaSidecar(
           }
         }
 
-        // Drain the pending queue in full — do NOT break on `finished`. The original
-        // implementation stopped dispatching as soon as loop_end arrived, discarding
-        // any tail events (including error/loop_end itself in some orderings). finished
-        // only controls when the async iterator terminates, not when we stop dispatching.
         const pendingSnapshot = pendingEvents.splice(0, pendingEvents.length)
         for (const pending of pendingSnapshot) {
           if (pending.runId && pending.runId !== runId) continue
-          dispatchSidecarEvent(pending.rawEvent)
+          dispatchStreamEvent(pending.event)
         }
 
         while (!finished || queue.length > 0) {

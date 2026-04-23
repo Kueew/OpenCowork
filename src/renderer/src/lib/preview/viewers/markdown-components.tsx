@@ -148,12 +148,18 @@ export function createMarkdownComponents(filePath?: string): Components {
 
   return {
     h1: ({ children, ...props }) => (
-      <h1 className="mt-6 mb-3 first:mt-0 text-2xl font-bold text-foreground border-b border-border/40 pb-2" {...props}>
+      <h1
+        className="mt-6 mb-3 first:mt-0 text-2xl font-bold text-foreground border-b border-border/40 pb-2"
+        {...props}
+      >
         {children}
       </h1>
     ),
     h2: ({ children, ...props }) => (
-      <h2 className="mt-5 mb-2 first:mt-0 text-xl font-semibold text-foreground border-b border-border/30 pb-1" {...props}>
+      <h2
+        className="mt-5 mb-2 first:mt-0 text-xl font-semibold text-foreground border-b border-border/30 pb-1"
+        {...props}
+      >
         {children}
       </h2>
     ),
@@ -168,17 +174,26 @@ export function createMarkdownComponents(filePath?: string): Components {
       </h4>
     ),
     h5: ({ children, ...props }) => (
-      <h5 className="mt-2 mb-1 first:mt-0 text-sm font-medium text-foreground/80 uppercase tracking-wide" {...props}>
+      <h5
+        className="mt-2 mb-1 first:mt-0 text-sm font-medium text-foreground/80 uppercase tracking-wide"
+        {...props}
+      >
         {children}
       </h5>
     ),
     h6: ({ children, ...props }) => (
-      <h6 className="mt-2 mb-1 first:mt-0 text-sm font-medium text-muted-foreground uppercase tracking-wide" {...props}>
+      <h6
+        className="mt-2 mb-1 first:mt-0 text-sm font-medium text-muted-foreground uppercase tracking-wide"
+        {...props}
+      >
         {children}
       </h6>
     ),
     blockquote: ({ children, ...props }) => (
-      <blockquote className="my-3 border-l-2 border-primary/40 pl-4 text-muted-foreground italic" {...props}>
+      <blockquote
+        className="my-3 border-l-2 border-primary/40 pl-4 text-muted-foreground italic"
+        {...props}
+      >
         {children}
       </blockquote>
     ),

@@ -42,7 +42,12 @@ export function SshConnectionPicker({
     const keyword = query.trim().toLowerCase()
     if (!keyword) return connections
     return connections.filter((connection) => {
-      const searchText = [connection.name, connection.host, connection.username, String(connection.port)]
+      const searchText = [
+        connection.name,
+        connection.host,
+        connection.username,
+        String(connection.port)
+      ]
         .join(' ')
         .toLowerCase()
       return searchText.includes(keyword)
@@ -54,7 +59,9 @@ export function SshConnectionPicker({
       <DialogContent className="max-w-xl p-0" showCloseButton={false}>
         <DialogHeader className="border-b px-4 py-3">
           <DialogTitle className="text-base">新建 SSH 终端</DialogTitle>
-          <DialogDescription>选择一个已保存的 SSH 连接，立即在终端面板中打开新会话。</DialogDescription>
+          <DialogDescription>
+            选择一个已保存的 SSH 连接，立即在终端面板中打开新会话。
+          </DialogDescription>
         </DialogHeader>
 
         {loading ? (
@@ -67,7 +74,9 @@ export function SshConnectionPicker({
             <Monitor className="size-10 text-muted-foreground/40" />
             <div className="space-y-1">
               <div className="text-sm font-medium">暂无 SSH 连接</div>
-              <div className="text-xs text-muted-foreground">先去 SSH 管理页新增一个连接，再回来新建 SSH 终端。</div>
+              <div className="text-xs text-muted-foreground">
+                先去 SSH 管理页新增一个连接，再回来新建 SSH 终端。
+              </div>
             </div>
             <Button
               size="sm"
@@ -107,7 +116,10 @@ export function SshConnectionPicker({
                     <div className="min-w-0 flex-1 space-y-1">
                       <div className="flex items-center gap-2">
                         <span className="truncate text-sm font-medium">{connection.name}</span>
-                        <Badge variant="outline" className="h-5 px-1.5 text-[10px] uppercase tracking-wide">
+                        <Badge
+                          variant="outline"
+                          className="h-5 px-1.5 text-[10px] uppercase tracking-wide"
+                        >
                           SSH
                         </Badge>
                       </div>

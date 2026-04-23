@@ -1,11 +1,7 @@
 import { Bot, ScrollText } from 'lucide-react'
 import type { OrchestrationMember } from '@renderer/lib/orchestration/types'
 import { cn } from '@renderer/lib/utils'
-import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger
-} from '@renderer/components/ui/hover-card'
+import { HoverCard, HoverCardContent, HoverCardTrigger } from '@renderer/components/ui/hover-card'
 
 function DotMatrix({ member }: { member: OrchestrationMember }): React.JSX.Element {
   const total = 24

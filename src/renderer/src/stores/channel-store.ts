@@ -225,7 +225,9 @@ export const useChannelStore = create<ChannelStore>((set, get) => ({
 
     if ('projectId' in normalizedPatch) {
       const boundProject = normalizedPatch.projectId
-        ? useChatStore.getState().projects.find((project) => project.id === normalizedPatch.projectId)
+        ? useChatStore
+            .getState()
+            .projects.find((project) => project.id === normalizedPatch.projectId)
         : undefined
       useChatStore.setState((state) => {
         for (const session of state.sessions) {

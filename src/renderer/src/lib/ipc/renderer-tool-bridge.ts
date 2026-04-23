@@ -16,7 +16,8 @@ function normalizeRecord(value: unknown): Record<string, unknown> {
 }
 
 function toToolContext(record: Record<string, unknown>): ToolContext {
-  const pluginChatTypeRaw = typeof record.pluginChatType === 'string' ? record.pluginChatType : undefined
+  const pluginChatTypeRaw =
+    typeof record.pluginChatType === 'string' ? record.pluginChatType : undefined
   const pluginChatType =
     pluginChatTypeRaw === 'p2p' || pluginChatTypeRaw === 'group' ? pluginChatTypeRaw : undefined
   return {

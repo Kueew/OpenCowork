@@ -278,7 +278,10 @@ function applyHostField(target: OpenSshHostConfig, key: string, value: string): 
   }
 }
 
-function parseOpenSshConfigFile(filePath: string, visited = new Set<string>()): Map<string, OpenSshHostConfig> {
+function parseOpenSshConfigFile(
+  filePath: string,
+  visited = new Set<string>()
+): Map<string, OpenSshHostConfig> {
   const resolvedPath = expandHome(filePath)
   const hosts = new Map<string, OpenSshHostConfig>()
   if (!fs.existsSync(resolvedPath) || visited.has(resolvedPath)) return hosts
@@ -340,7 +343,10 @@ function parseOpenSshConfigFile(filePath: string, visited = new Set<string>()): 
   return hosts
 }
 
-export function getOpenSshHostConfig(alias: string, configPath = path.join(os.homedir(), '.ssh', 'config')): OpenSshHostConfig | null {
+export function getOpenSshHostConfig(
+  alias: string,
+  configPath = path.join(os.homedir(), '.ssh', 'config')
+): OpenSshHostConfig | null {
   const normalizedAlias = alias.trim()
   if (!normalizedAlias) return null
   const hosts = parseOpenSshConfigFile(configPath)

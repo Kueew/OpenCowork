@@ -11,11 +11,9 @@ import type {
   AutoModelTaskType
 } from '@renderer/stores/ui-store'
 import { agentBridge, canSidecarHandle, runSidecarCleanup } from '@renderer/lib/ipc/agent-bridge'
-import {
-  buildSidecarAgentRunRequest,
-  normalizeSidecarAgentEvent,
-  normalizeSidecarRecord
-} from '@renderer/lib/ipc/sidecar-protocol'
+import { buildSidecarAgentRunRequest } from '@renderer/lib/ipc/sidecar-protocol'
+import { agentStream } from '@renderer/lib/ipc/agent-stream-receiver'
+import { toAgentEvent } from '@renderer/lib/agent/stream-event-adapter'
 import {
   RESPONSES_SESSION_SCOPE_AUTO_MODEL_ROUTING,
   withAuxiliaryResponsesRequestPolicy
@@ -468,10 +466,9 @@ export async function selectAutoModel(options: {
           { once: true }
         )
 
-        unsubscribe = agentBridge.on('agent/event', (payload) => {
-          const record = normalizeSidecarRecord(payload)
-          if (String(record.runId ?? '') !== result.runId) return
-          const event = normalizeSidecarAgentEvent(record.event)
+        unsubscribe = agentStream.subscribeAll((eventRunId, _sessionId, streamEvent) => {
+          if (eventRunId !== result.runId) return
+          const event = toAgentEvent(streamEvent)
           if (!event) return
 
           if (event.type === 'text_delta' && event.text) {

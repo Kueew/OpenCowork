@@ -257,18 +257,19 @@ export function RightPanel({ compact = false }: { compact?: boolean }): React.JS
                   </FadeIn>
                 )}
 
-                {resolvedTab === 'browser' && (
-                  <FadeIn key="browser" className="h-full">
-                    <BrowserPanel />
-                  </FadeIn>
-                )}
-
                 {resolvedTab === 'context' && (
                   <FadeIn key="context" className="h-full">
                     <ContextPanel />
                   </FadeIn>
                 )}
               </AnimatePresence>
+
+              {/* Browser stays mounted to preserve webview state */}
+              {builtinBrowserEnabled && (
+                <div className={cn('h-full', resolvedTab !== 'browser' && 'hidden')}>
+                  <BrowserPanel />
+                </div>
+              )}
             </div>
           </div>
         ) : null}

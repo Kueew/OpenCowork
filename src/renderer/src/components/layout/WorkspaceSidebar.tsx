@@ -979,7 +979,6 @@ export function WorkspaceSidebar(): React.JSX.Element {
     [t]
   )
 
-
   return (
     <>
       <aside
@@ -992,9 +991,7 @@ export function WorkspaceSidebar(): React.JSX.Element {
             isMac ? 'pl-[78px]' : ''
           )}
         >
-          <div
-            className="min-w-0 flex-1 truncate text-sm font-semibold text-sidebar-foreground/90"
-          >
+          <div className="min-w-0 flex-1 truncate text-sm font-semibold text-sidebar-foreground/90">
             OpenCowork
           </div>
           <Button
@@ -1410,7 +1407,10 @@ export function WorkspaceSidebar(): React.JSX.Element {
                       </ContextMenu>
 
                       {!isCollapsed ? (
-                        <div className="space-y-0.5 pl-7" title={project.workingFolder ?? project.name}>
+                        <div
+                          className="space-y-0.5 pl-7"
+                          title={project.workingFolder ?? project.name}
+                        >
                           {displayedSessions.length > 0 ? (
                             <>
                               {displayedSessions.map((session) =>

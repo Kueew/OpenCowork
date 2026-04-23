@@ -261,7 +261,10 @@ function resolveGridSegments(
 }
 
 function collectBackgroundSwatches(bitmap: Buffer, width: number, height: number): ColorSwatch[] {
-  const border = Math.max(1, Math.min(BACKGROUND_SAMPLE_BORDER, Math.floor(Math.min(width, height) / 8)))
+  const border = Math.max(
+    1,
+    Math.min(BACKGROUND_SAMPLE_BORDER, Math.floor(Math.min(width, height) / 8))
+  )
   const buckets = new Map<
     string,
     { count: number; redTotal: number; greenTotal: number; blueTotal: number }

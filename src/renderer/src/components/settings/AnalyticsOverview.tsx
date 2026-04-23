@@ -233,7 +233,13 @@ function MetricCard({ label, value }: MetricCardProps): React.JSX.Element {
   )
 }
 
-function ChartCard({ title, badge, summaryLabel, summaryValue, children }: ChartCardProps): React.JSX.Element {
+function ChartCard({
+  title,
+  badge,
+  summaryLabel,
+  summaryValue,
+  children
+}: ChartCardProps): React.JSX.Element {
   return (
     <section className="flex h-full min-h-0 flex-col rounded-2xl border border-border/50 bg-background/50 p-4 shadow-[0_0_0_1px_rgba(255,255,255,0.02)]">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -519,7 +525,10 @@ export function AnalyticsOverview({
                       width={48}
                     />
                     <Tooltip
-                      cursor={{ stroke: 'hsl(var(--muted-foreground) / 0.25)', strokeDasharray: '4 4' }}
+                      cursor={{
+                        stroke: 'hsl(var(--muted-foreground) / 0.25)',
+                        strokeDasharray: '4 4'
+                      }}
                       content={<AnalyticsTooltip locale={tokenLocale} />}
                     />
                     <Legend wrapperStyle={{ paddingTop: 8, fontSize: 12, color: AXIS_COLOR }} />

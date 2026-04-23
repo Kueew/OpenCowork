@@ -124,8 +124,7 @@ function computeCosts(
   const cacheHitPrice = toNullableNumber(modelConfig?.cacheHitPrice)
   const cacheCreationTokens =
     usage.cacheCreationTokens ??
-    (usage.cacheCreation5mTokens ?? 0) +
-      (usage.cacheCreation1hTokens ?? 0)
+    (usage.cacheCreation5mTokens ?? 0) + (usage.cacheCreation1hTokens ?? 0)
   const { price: resolvedCacheCreationPrice, cost: resolvedCacheCreationCostUsd } =
     resolveCacheCreationCost(usage, modelConfig)
   const cacheCreationPrice = toNullableNumber(resolvedCacheCreationPrice ?? undefined)
@@ -134,11 +133,7 @@ function computeCosts(
   const outputCostUsd =
     outputPrice == null ? null : ((usage.outputTokens ?? 0) * outputPrice) / 1_000_000
   const cacheCreationCostUsd =
-    cacheCreationTokens > 0
-      ? resolvedCacheCreationCostUsd
-      : cacheCreationPrice == null
-        ? null
-        : 0
+    cacheCreationTokens > 0 ? resolvedCacheCreationCostUsd : cacheCreationPrice == null ? null : 0
   const cacheHitCostUsd =
     cacheHitPrice == null ? null : ((usage.cacheReadTokens ?? 0) * cacheHitPrice) / 1_000_000
 

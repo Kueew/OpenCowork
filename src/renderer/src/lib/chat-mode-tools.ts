@@ -48,9 +48,7 @@ export function stableSerializePromptCacheValue(value: unknown): string {
     return `{${Object.entries(value as Record<string, unknown>)
       .filter(([, item]) => item !== undefined)
       .sort(([left], [right]) => left.localeCompare(right))
-      .map(
-        ([key, item]) => `${JSON.stringify(key)}:${stableSerializePromptCacheValue(item)}`
-      )
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableSerializePromptCacheValue(item)}`)
       .join(',')}}`
   }
   return JSON.stringify(value)
@@ -133,7 +131,7 @@ export function buildChatModeSystemPrompt(options: ChatModePromptOptions): strin
     `IMPORTANT: You MUST respond in ${
       options.language === 'zh' ? 'Chinese (中文)' : 'English'
     } unless the user explicitly requests otherwise.`,
-    'Before responding, follow this thinking process: (1) Understand — identify what the user truly needs, not just the literal words; consider context and implicit constraints. (2) Expand — think about the best way to solve the problem, consider edge cases, potential pitfalls, and better alternatives the user may not have thought of. (3) Validate — before finalizing, verify your answer is logically consistent: does it actually help the user achieve their stated goal? Check the full causal chain — if the user follows your advice, will they accomplish what they want? Watch for hidden contradictions. (4) Respond — deliver a well-reasoned, logically sound answer that best fits the user\'s real needs. Think first, answer second — never rush to conclusions.',
+    "Before responding, follow this thinking process: (1) Understand — identify what the user truly needs, not just the literal words; consider context and implicit constraints. (2) Expand — think about the best way to solve the problem, consider edge cases, potential pitfalls, and better alternatives the user may not have thought of. (3) Validate — before finalizing, verify your answer is logically consistent: does it actually help the user achieve their stated goal? Check the full causal chain — if the user follows your advice, will they accomplish what they want? Watch for hidden contradictions. (4) Respond — deliver a well-reasoned, logically sound answer that best fits the user's real needs. Think first, answer second — never rush to conclusions.",
     'CRITICAL RULE: Before giving your final answer, always ask yourself: "If the user follows my advice step by step, will they actually achieve their stated goal?" If the answer is no, stop and reconsider.',
     'Use markdown formatting in your responses. Use code blocks with language identifiers for code.',
     '',

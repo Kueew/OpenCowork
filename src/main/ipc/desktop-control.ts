@@ -154,7 +154,9 @@ export async function captureDesktopScreenshot(): Promise<DesktopScreenshotResul
   }
 }
 
-export function desktopInputClick(args: ClickArgs):
+export function desktopInputClick(
+  args: ClickArgs
+):
   | { success: true; x: number; y: number; button: string; action: string }
   | { success: false; error: string } {
   try {
@@ -199,7 +201,9 @@ export function desktopInputClick(args: ClickArgs):
   }
 }
 
-export function desktopInputType(args: TypeArgs):
+export function desktopInputType(
+  args: TypeArgs
+):
   | { success: true; mode: 'text'; textLength: number }
   | { success: true; mode: 'key'; key: string }
   | { success: true; mode: 'hotkey'; hotkey: string[] | null }
@@ -248,7 +252,9 @@ export function desktopInputType(args: TypeArgs):
   }
 }
 
-export function desktopInputScroll(args: ScrollArgs):
+export function desktopInputScroll(
+  args: ScrollArgs
+):
   | { success: true; x?: number; y?: number; scrollX: number; scrollY: number }
   | { success: false; error: string } {
   try {

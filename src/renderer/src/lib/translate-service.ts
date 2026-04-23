@@ -1,6 +1,11 @@
 import { nanoid } from 'nanoid'
 import { createProvider } from '@renderer/lib/api/provider'
-import type { ProviderConfig, RequestTiming, TokenUsage, UnifiedMessage } from '@renderer/lib/api/types'
+import type {
+  ProviderConfig,
+  RequestTiming,
+  TokenUsage,
+  UnifiedMessage
+} from '@renderer/lib/api/types'
 
 export interface StreamAiTranslationOptions {
   text: string

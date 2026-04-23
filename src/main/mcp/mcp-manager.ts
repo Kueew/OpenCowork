@@ -87,9 +87,7 @@ export class McpManager {
   }
 
   /** Get prompts for a server */
-  getPrompts(
-    id: string
-  ): {
+  getPrompts(id: string): {
     name: string
     description?: string
     arguments?: Array<{ name: string; description?: string; required?: boolean }>

@@ -59,9 +59,10 @@ export const routinAiPreset: BuiltinProviderPreset = {
       supportsVision: false,
       supportsFunctionCall: true,
       inputPrice: 0.72,
-      outputPrice: 2.30,
-      cacheHitPrice: 0.15,
-    }, {
+      outputPrice: 2.3,
+      cacheHitPrice: 0.15
+    },
+    {
       id: 'glm-5.1',
       name: 'GLM 5.1',
       icon: 'chatglm',
@@ -71,8 +72,8 @@ export const routinAiPreset: BuiltinProviderPreset = {
       supportsVision: false,
       supportsFunctionCall: true,
       inputPrice: 1.395,
-      outputPrice: 4.40,
-      cacheHitPrice: 0.3,
+      outputPrice: 4.4,
+      cacheHitPrice: 0.3
     },
     {
       id: 'glm-4.5',
@@ -756,6 +757,37 @@ export const routinAiPreset: BuiltinProviderPreset = {
       category: 'speech'
     },
 
+    // ── OpenAI — Image generation ──
+    {
+      id: 'gpt-image-1',
+      name: 'GPT Image 1',
+      icon: 'openai',
+      enabled: true,
+      category: 'image',
+      type: 'openai-images',
+      supportsVision: true,
+      supportsFunctionCall: false
+    },
+    {
+      id: 'gpt-image-1.5',
+      name: 'GPT Image 1.5',
+      icon: 'openai',
+      enabled: true,
+      category: 'image',
+      type: 'openai-images',
+      supportsVision: true,
+      supportsFunctionCall: false
+    },
+    {
+      id: 'gpt-image-2',
+      name: 'GPT Image 2',
+      icon: 'openai',
+      enabled: true,
+      category: 'image',
+      type: 'openai-images',
+      supportsVision: true,
+      supportsFunctionCall: false
+    },
     // ── MiniMax ──
     {
       id: 'MiniMax-M2.1',

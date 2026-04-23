@@ -6,11 +6,7 @@ import {
   unregisterWebSearchTool,
   isWebSearchToolRegistered
 } from './web-search-tool'
-import {
-  registerBrowserTool,
-  unregisterBrowserTool,
-  isBrowserToolRegistered
-} from './browser-tool'
+import { registerBrowserTool, unregisterBrowserTool, isBrowserToolRegistered } from './browser-tool'
 import { registerBashTools } from './bash-tool'
 import { registerSubAgents } from '../agent/sub-agents/builtin'
 import { registerTeamTools } from '../agent/teams/register'

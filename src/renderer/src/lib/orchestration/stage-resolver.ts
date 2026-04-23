@@ -70,6 +70,8 @@ export function computeMemberProgress(member: {
   return Math.max(0.08, Math.min(progress, 0.82))
 }
 
-export function getUsageTokens(usage: Parameters<typeof getBillableTotalTokens>[0] | undefined): number {
+export function getUsageTokens(
+  usage: Parameters<typeof getBillableTotalTokens>[0] | undefined
+): number {
   return usage ? getBillableTotalTokens(usage) : 0
 }

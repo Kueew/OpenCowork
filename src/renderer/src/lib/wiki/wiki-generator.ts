@@ -555,59 +555,59 @@ async function generateStructure(options: {
   let collectedText = ''
 
   try {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    collectedText = ''
-    const sidecarRequest = buildSidecarAgentRunRequest({
-      messages: attemptMessages,
-      provider: { ...options.providerConfig, systemPrompt },
-      tools: toolDefs,
-      sessionId: wikiSessionId,
-      workingFolder: options.workingFolder,
-      maxIterations: 20,
-      forceApproval: false
-    })
-    if (!sidecarRequest) {
-      throw new Error('Failed to build sidecar request for wiki structure planning')
-    }
-    const loop = runAgentViaSidecar(sidecarRequest, { signal: options.signal })
-
-    for await (const event of loop) {
-      if (event.type === 'text_delta') {
-        collectedText += event.text
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      collectedText = ''
+      const sidecarRequest = buildSidecarAgentRunRequest({
+        messages: attemptMessages,
+        provider: { ...options.providerConfig, systemPrompt },
+        tools: toolDefs,
+        sessionId: wikiSessionId,
+        workingFolder: options.workingFolder,
+        maxIterations: 20,
+        forceApproval: false
+      })
+      if (!sidecarRequest) {
+        throw new Error('Failed to build sidecar request for wiki structure planning')
       }
-      if (event.type === 'loop_end') break
+      const loop = runAgentViaSidecar(sidecarRequest, { signal: options.signal })
+
+      for await (const event of loop) {
+        if (event.type === 'text_delta') {
+          collectedText += event.text
+        }
+        if (event.type === 'loop_end') break
+      }
+
+      if (state.nodes) {
+        return state.nodes
+      }
+
+      const parsedFromText = tryParseTreePayload(collectedText)
+      if (parsedFromText) {
+        state.nodes = parsedFromText
+        return parsedFromText
+      }
+
+      attemptMessages.push({
+        id: nanoid(),
+        role: 'user',
+        content: [
+          '你刚才没有调用 SetWikiStructure。',
+          '现在必须立即调用一次 SetWikiStructure 提交完整结构。',
+          '不要继续解释，不要输出自然语言，直接提交 tool 调用。',
+          '如果你已经整理好了结果，也可以先输出合法 JSON，再立刻调用 SetWikiStructure。'
+        ].join('\n'),
+        createdAt: Date.now()
+      })
     }
 
-    if (state.nodes) {
-      return state.nodes
+    const jsonFallback = await generateStructureJsonFallback(options)
+    if (jsonFallback) {
+      state.nodes = jsonFallback
+      return jsonFallback
     }
 
-    const parsedFromText = tryParseTreePayload(collectedText)
-    if (parsedFromText) {
-      state.nodes = parsedFromText
-      return parsedFromText
-    }
-
-    attemptMessages.push({
-      id: nanoid(),
-      role: 'user',
-      content: [
-        '你刚才没有调用 SetWikiStructure。',
-        '现在必须立即调用一次 SetWikiStructure 提交完整结构。',
-        '不要继续解释，不要输出自然语言，直接提交 tool 调用。',
-        '如果你已经整理好了结果，也可以先输出合法 JSON，再立刻调用 SetWikiStructure。'
-      ].join('\n'),
-      createdAt: Date.now()
-    })
-  }
-
-  const jsonFallback = await generateStructureJsonFallback(options)
-  if (jsonFallback) {
-    state.nodes = jsonFallback
-    return jsonFallback
-  }
-
-  throw new Error('AI 未提交 Wiki 树结构')
+    throw new Error('AI 未提交 Wiki 树结构')
   } finally {
     unregisterInline()
   }

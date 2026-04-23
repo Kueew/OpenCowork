@@ -105,9 +105,7 @@ export function AccountListEditor({ provider }: Props): ReactElement {
       })
       if (result.skipped.length > 0) {
         toast.warning(msg, {
-          description: result.skipped
-            .map((s) => `#${s.index + 1}: ${s.reason}`)
-            .join(', ')
+          description: result.skipped.map((s) => `#${s.index + 1}: ${s.reason}`).join(', ')
         })
       } else {
         toast.success(msg)
@@ -137,9 +135,11 @@ export function AccountListEditor({ provider }: Props): ReactElement {
         filters: [{ name: 'JSON', extensions: ['json'] }]
       })) as { path?: string; canceled?: boolean }
       if (!result || result.canceled || !result.path) return
-      const readFile = (window as unknown as {
-        api?: { fs?: { readFile?: (args: { path: string }) => Promise<{ content: string }> } }
-      }).api?.fs?.readFile
+      const readFile = (
+        window as unknown as {
+          api?: { fs?: { readFile?: (args: { path: string }) => Promise<{ content: string }> } }
+        }
+      ).api?.fs?.readFile
       if (!readFile) {
         toast.error(t('provider.accounts.toasts.fileApiMissing'))
         return
@@ -420,9 +420,7 @@ export function AccountListEditor({ provider }: Props): ReactElement {
         <DialogContent className="max-w-xl">
           <DialogHeader>
             <DialogTitle>{t('provider.accounts.import.title')}</DialogTitle>
-            <DialogDescription>
-              {t('provider.accounts.import.description')}
-            </DialogDescription>
+            <DialogDescription>{t('provider.accounts.import.description')}</DialogDescription>
           </DialogHeader>
           <textarea
             value={importText}

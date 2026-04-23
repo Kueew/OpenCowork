@@ -28,10 +28,7 @@ function sharedPrefixLength(a: string, b: string): number {
 function sharedSuffixLength(a: string, b: string, prefixLength: number): number {
   const max = Math.min(a.length, b.length) - prefixLength
   let index = 0
-  while (
-    index < max &&
-    a[a.length - 1 - index] === b[b.length - 1 - index]
-  ) {
+  while (index < max && a[a.length - 1 - index] === b[b.length - 1 - index]) {
     index += 1
   }
   return index
@@ -295,7 +292,11 @@ export function sanitizeMessagesForToolReplay<T extends { role: string; content:
     if (!Array.isArray(message.content)) return message
 
     const nextContent = message.content.map((block) => {
-      if (!block || typeof block !== 'object' || (block as { type?: unknown }).type !== 'tool_use') {
+      if (
+        !block ||
+        typeof block !== 'object' ||
+        (block as { type?: unknown }).type !== 'tool_use'
+      ) {
         return block
       }
       const toolUseBlock = block as {
@@ -305,7 +306,9 @@ export function sanitizeMessagesForToolReplay<T extends { role: string; content:
       }
       const toolName = typeof toolUseBlock.name === 'string' ? toolUseBlock.name : ''
       const toolInput =
-        toolUseBlock.input && typeof toolUseBlock.input === 'object' && !Array.isArray(toolUseBlock.input)
+        toolUseBlock.input &&
+        typeof toolUseBlock.input === 'object' &&
+        !Array.isArray(toolUseBlock.input)
           ? (toolUseBlock.input as Record<string, unknown>)
           : {}
       const nextInput = summarizeToolInputForHistory(toolName, toolInput)

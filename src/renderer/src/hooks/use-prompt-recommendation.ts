@@ -208,15 +208,7 @@ export function usePromptRecommendation({
       cacheRef.current.set(contextKey, null)
       setFullSuggestion('')
     },
-    [
-      applyResolvedSuggestion,
-      fallbackSuggestion,
-      images,
-      language,
-      mode,
-      selectedSkill,
-      sessionId
-    ]
+    [applyResolvedSuggestion, fallbackSuggestion, images, language, mode, selectedSkill, sessionId]
   )
 
   React.useEffect(() => {

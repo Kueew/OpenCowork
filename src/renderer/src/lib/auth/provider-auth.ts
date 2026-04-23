@@ -397,10 +397,7 @@ export function removeOauthAccount(providerId: string, accountId: string): void 
   }
   const nextActiveId =
     provider.activeAccountId === accountId ? nextAccounts[0].id : provider.activeAccountId!
-  setProviderAuth(
-    providerId,
-    buildAccountProjectionPatch(provider, nextAccounts, nextActiveId)
-  )
+  setProviderAuth(providerId, buildAccountProjectionPatch(provider, nextAccounts, nextActiveId))
 }
 
 /** Disconnect ALL OAuth accounts for this provider (legacy "disconnect OAuth" button). */
@@ -504,9 +501,7 @@ export function trySwitchProviderAccount(providerId: string): {
   const accounts = getAccountsArray(provider)
   if (accounts.length < 2) return null
   const previousAccountId = provider.activeAccountId
-  const others = accounts.filter(
-    (a) => a.id !== previousAccountId && !isAccountRateLimited(a)
-  )
+  const others = accounts.filter((a) => a.id !== previousAccountId && !isAccountRateLimited(a))
   if (others.length === 0) return null
   const next = others[0]
   setProviderAuth(providerId, buildAccountProjectionPatch(provider, accounts, next.id))
@@ -576,8 +571,7 @@ export async function applyManualProviderOAuth(
   }
   const finalToken = await finalizeOAuthToken(provider, token)
   if (!resolvedEmail) {
-    resolvedEmail =
-      extractEmailFromToken(finalToken) || finalToken.accountId || 'unknown@local'
+    resolvedEmail = extractEmailFromToken(finalToken) || finalToken.accountId || 'unknown@local'
   }
 
   const account: ProviderOAuthAccount = {
@@ -722,11 +716,7 @@ export async function refreshProviderOAuth(
     const accounts = upsertAccountInList(getAccountsArray(provider), updated)
     setProviderAuth(
       providerId,
-      buildAccountProjectionPatch(
-        provider,
-        accounts,
-        provider.activeAccountId ?? updated.id
-      )
+      buildAccountProjectionPatch(provider, accounts, provider.activeAccountId ?? updated.id)
     )
     return true
   }
@@ -767,10 +757,7 @@ export async function ensureProviderAuthReady(providerId: string): Promise<boole
 
       let working = provider
       if (changed || provider.activeAccountId !== account.id) {
-        setProviderAuth(
-          providerId,
-          buildAccountProjectionPatch(provider, nextAccounts, account.id)
-        )
+        setProviderAuth(providerId, buildAccountProjectionPatch(provider, nextAccounts, account.id))
         working = getProviderById(providerId) ?? provider
       }
 
@@ -799,10 +786,7 @@ export async function ensureProviderAuthReady(providerId: string): Promise<boole
           try {
             const next = await exchangeCopilotToken(working, token)
             const updatedAccount: ProviderOAuthAccount = { ...targetAccount, oauth: next }
-            const updatedAccounts = upsertAccountInList(
-              getAccountsArray(working),
-              updatedAccount
-            )
+            const updatedAccounts = upsertAccountInList(getAccountsArray(working), updatedAccount)
             setProviderAuth(
               providerId,
               buildAccountProjectionPatch(working, updatedAccounts, updatedAccount.id)

@@ -48,7 +48,9 @@ export function SelectedFileBar({
             </div>
             <div className="min-w-0">
               <div className="truncate text-xs font-medium text-foreground">已选文件</div>
-              <div className="text-[10px] text-muted-foreground">拖入输入框后会以内联文件组件展示</div>
+              <div className="text-[10px] text-muted-foreground">
+                拖入输入框后会以内联文件组件展示
+              </div>
             </div>
             <span className="rounded-full border border-border/60 bg-background/90 px-1.5 py-0.5 text-[10px] text-muted-foreground">
               {files.length}

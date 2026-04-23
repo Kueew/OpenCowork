@@ -65,10 +65,14 @@ function readAnthropicThinkingBudget(config: ProviderConfig): number | undefined
 function resolveAnthropicMaxTokens(config: ProviderConfig): number {
   const configuredMaxTokens = Math.max(1, Math.floor(config.maxTokens ?? 32000))
   const thinkingBudget = readAnthropicThinkingBudget(config)
-  return thinkingBudget != null ? Math.max(configuredMaxTokens, thinkingBudget + 1) : configuredMaxTokens
+  return thinkingBudget != null
+    ? Math.max(configuredMaxTokens, thinkingBudget + 1)
+    : configuredMaxTokens
 }
 
-function buildAnthropicThinkingBodyParams(config: ProviderConfig): Record<string, unknown> | undefined {
+function buildAnthropicThinkingBodyParams(
+  config: ProviderConfig
+): Record<string, unknown> | undefined {
   const bodyParams = config.thinkingConfig?.bodyParams
   if (!config.thinkingEnabled || !bodyParams) return undefined
 
@@ -82,7 +86,9 @@ function buildAnthropicThinkingBodyParams(config: ProviderConfig): Record<string
   return nextBodyParams
 }
 
-function extractAnthropicCacheCreationUsage(usage: Record<string, unknown> | undefined): Partial<TokenUsage> {
+function extractAnthropicCacheCreationUsage(
+  usage: Record<string, unknown> | undefined
+): Partial<TokenUsage> {
   if (!usage) return {}
 
   const cacheCreation =
@@ -487,7 +493,8 @@ class AnthropicProvider implements APIProvider {
       const replayableToolUseIds = new Set(
         blocks
           .filter(
-            (block): block is Extract<ContentBlock, { type: 'tool_use' }> => block.type === 'tool_use'
+            (block): block is Extract<ContentBlock, { type: 'tool_use' }> =>
+              block.type === 'tool_use'
           )
           .map((block) => block.id)
       )

@@ -501,7 +501,15 @@ export async function flushBackgroundSessionToForeground(sessionId: string): Pro
   if (!snapshot) return
 
   try {
-    await useChatStore.getState().loadRecentSessionMessages(sessionId, true)
+    const chatState = useChatStore.getState()
+    const session = chatState.sessions.find((s) => s.id === sessionId)
+    const isStreaming = Boolean(chatState.streamingMessages[sessionId])
+    const hasResidentMessages = session?.messagesLoaded && (session.messages?.length ?? 0) > 0
+
+    if (!isStreaming || !hasResidentMessages) {
+      await chatState.loadRecentSessionMessages(sessionId, true)
+    }
+
     useChatStore.getState().applyBackgroundSnapshot(sessionId, {
       patchedMessagesById: snapshot.patchedMessagesById,
       addedMessagesById: snapshot.addedMessagesById,

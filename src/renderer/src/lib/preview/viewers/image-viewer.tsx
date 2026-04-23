@@ -57,7 +57,12 @@ export function ImageViewer({ filePath, sshConnectionId }: ViewerProps): React.J
   const [isCopying, setIsCopying] = React.useState(false)
   const [copied, setCopied] = React.useState(false)
   const imageRef = React.useRef<HTMLImageElement | null>(null)
-  const panStartRef = React.useRef<{ x: number; y: number; offsetX: number; offsetY: number } | null>(null)
+  const panStartRef = React.useRef<{
+    x: number
+    y: number
+    offsetX: number
+    offsetY: number
+  } | null>(null)
   const copiedTimerRef = React.useRef<number | null>(null)
 
   React.useEffect(() => {

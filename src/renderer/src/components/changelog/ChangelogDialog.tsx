@@ -5,12 +5,7 @@ import { Languages, Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import changelogMd from '../../../../../CHANGELOG.md?raw'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle
-} from '../ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog'
 import { Button } from '../ui/button'
 import { createMarkdownComponents } from '../../lib/preview/viewers/markdown-components'
 import { streamAiTranslation } from '../../lib/translate-service'
@@ -115,9 +110,7 @@ export function ChangelogDialog({ open, onOpenChange }: ChangelogDialogProps): R
                   ) : (
                     <Languages className="mr-1.5 size-3.5" />
                   )}
-                  {translating
-                    ? t('app.changelog.translating')
-                    : t('app.changelog.translate')}
+                  {translating ? t('app.changelog.translating') : t('app.changelog.translate')}
                 </Button>
               </div>
             )}

@@ -197,8 +197,7 @@ function buildToolCallRenderState(
   const result = options.toolResults?.get(block.id)
   const liveToolCall = options.liveToolCallMap?.get(block.id)
   const liveInput = liveToolCall?.input
-  const effectiveInput =
-    liveInput && Object.keys(liveInput).length > 0 ? liveInput : block.input
+  const effectiveInput = liveInput && Object.keys(liveInput).length > 0 ? liveInput : block.input
   return {
     id: block.id,
     toolUseId: block.id,

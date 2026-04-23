@@ -1,6 +1,8 @@
 import type { OrchestrationRun, OrchestrationSnapshot } from './types'
 
-export function buildHistorySnapshot(run: Pick<OrchestrationRun, 'summary' | 'latestAction' | 'members'>): OrchestrationSnapshot {
+export function buildHistorySnapshot(
+  run: Pick<OrchestrationRun, 'summary' | 'latestAction' | 'members'>
+): OrchestrationSnapshot {
   return {
     summary: run.summary,
     latestAction: run.latestAction,

@@ -248,12 +248,6 @@ export function buildTranscriptStaticAnalysis(
     }
 
     const bindingSig = bindingHash.toString(36)
-    if (
-      bindingSig === prev.orchestrationBindingSignature &&
-      messageLookup.size === prev.messageLookup.size
-    ) {
-      return prev
-    }
 
     const fastResult: TranscriptStaticAnalysis = {
       messageLookup,

@@ -198,7 +198,9 @@ export const useInputDraftStore = create<InputDraftStore>()(
       clearAllSessionDrafts: () => {
         set((state) => ({
           draftsByKey: Object.fromEntries(
-            Object.entries(state.draftsByKey).filter(([key]) => !key.startsWith(SESSION_DRAFT_PREFIX))
+            Object.entries(state.draftsByKey).filter(
+              ([key]) => !key.startsWith(SESSION_DRAFT_PREFIX)
+            )
           )
         }))
       }
