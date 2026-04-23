@@ -35,6 +35,7 @@ interface TitleBarProps {
   onOpenUpdateDialog: () => void
   title: string
   subtitle?: string | null
+  tooltip?: string | null
   showSidebarToggle?: boolean
   insetForMacTrafficLights?: boolean
 }
@@ -44,6 +45,7 @@ export function TitleBar({
   onOpenUpdateDialog,
   title,
   subtitle = null,
+  tooltip = null,
   showSidebarToggle = true,
   insetForMacTrafficLights = false
 }: TitleBarProps): React.JSX.Element {
@@ -198,15 +200,20 @@ export function TitleBar({
         ) : null}
 
         <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-2">
-            <div className="truncate text-sm font-semibold text-foreground/92">{title}</div>
-            {subtitle ? (
-              <>
-                <span className="shrink-0 text-muted-foreground/35">/</span>
-                <div className="truncate text-xs text-muted-foreground/72">{subtitle}</div>
-              </>
-            ) : null}
-          </div>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="flex min-w-0 items-center gap-2">
+                <div className="truncate text-sm font-semibold text-foreground/92">{title}</div>
+                {subtitle ? (
+                  <>
+                    <span className="shrink-0 text-muted-foreground/35">/</span>
+                    <div className="truncate text-xs text-muted-foreground/72">{subtitle}</div>
+                  </>
+                ) : null}
+              </div>
+            </TooltipTrigger>
+            {tooltip ? <TooltipContent>{tooltip}</TooltipContent> : null}
+          </Tooltip>
         </div>
       </div>
 

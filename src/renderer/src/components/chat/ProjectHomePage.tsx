@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { BookOpen, FolderOpen, GitBranch, MessageSquare } from 'lucide-react'
+import { BookOpen, GitBranch, MessageSquare } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@renderer/components/ui/button'
 import { InputArea } from '@renderer/components/chat/InputArea'
@@ -29,7 +29,6 @@ export function ProjectHomePage(): React.JSX.Element {
       if (!activeProjectId) return
       const chatStore = useChatStore.getState()
       const sessionId = chatStore.createSession(mode, activeProjectId, options)
-      chatStore.setActiveSession(sessionId)
       useUIStore.getState().navigateToSession(sessionId)
       void sendMessage(text, images, undefined, sessionId, undefined, undefined, {
         ...options,
@@ -74,26 +73,17 @@ export function ProjectHomePage(): React.JSX.Element {
         <div className="flex flex-1 items-start justify-center pt-8 lg:items-center lg:pt-0">
           <div className="w-full max-w-[760px]">
             <div className="mb-6 flex flex-col items-center gap-3 text-center sm:mb-7">
-              <p className="max-w-[760px] text-[30px] font-semibold tracking-tight text-foreground/92 sm:text-[42px]">
-                {`What should we build in ${activeProject.name}?`}
-              </p>
               <p className="max-w-[560px] text-sm leading-6 text-muted-foreground/72">
                 {workingFolder ? t('projectHome.heroDesc') : t('projectHome.noWorkingFolder')}
               </p>
 
-              <div className="flex flex-wrap justify-center gap-2">
-                <span className="inline-flex max-w-full items-center gap-2 rounded-md border border-border/60 bg-background/70 px-3 py-1.5 text-[11px] text-muted-foreground">
-                  <FolderOpen className="size-3.5 shrink-0" />
-                  <span className="truncate">
-                    {workingFolder ?? t('projectHome.noWorkingFolder')}
-                  </span>
-                </span>
-                {sshConnectionId ? (
+              {sshConnectionId ? (
+                <div className="flex flex-wrap justify-center gap-2">
                   <span className="inline-flex items-center rounded-md border border-border/60 bg-background/70 px-3 py-1.5 text-[11px] text-muted-foreground">
                     SSH
                   </span>
-                ) : null}
-              </div>
+                </div>
+              ) : null}
             </div>
 
             <InputArea

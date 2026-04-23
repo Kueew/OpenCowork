@@ -749,7 +749,6 @@
   .composer-toolbar {
     position: relative;
     z-index: 1;
-    border-top: 1px solid var(--composer-toolbar-border);
     background: transparent;
   }
 

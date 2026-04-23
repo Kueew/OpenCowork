@@ -689,6 +689,9 @@
   "terminalDock": {
     "sshContext": "SSH 工作区",
     "newTerminal": "新建终端",
+    "newClaude": "新建 Claude",
+    "newCodex": "新建 Codex",
+    "newGemini": "新建 Gemini",
     "closeTerminal": "关闭当前终端",
     "collapse": "收起终端",
     "empty": "当前还没有打开终端。",

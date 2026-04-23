@@ -32,6 +32,62 @@ const messageLookupCache = new WeakMap<UnifiedMessage[], Map<string, UnifiedMess
 const transcriptStaticAnalysisCache = new WeakMap<UnifiedMessage[], TranscriptStaticAnalysis>()
 const HIDDEN_MESSAGE_LIST_TOOL_NAMES = new Set(['TaskCreate', 'TaskUpdate'])
 
+// --- Signature-based fast cache for transcriptStaticAnalysis ---
+// The WeakMap above is keyed by array reference, which misses on every Immer
+// state update (new array produced each time). This two-level cache avoids the
+// full O(n) rebuild during streaming when only message content changes.
+//
+// Structural signature (length + firstId + lastId) — changes only when messages
+// are added or removed. When stable, we reuse renderableMessageIds,
+// lastRealUserMessageId, lastAssistantMessageId, tailToolExecutionState, and
+// toolResultsLookup, and only rebuild the cheap parts (messageLookup + binding hash).
+let _lastStructuralSignature = ''
+let _lastAnalysisResult: TranscriptStaticAnalysis | null = null
+
+function buildStructuralSignature(messages: UnifiedMessage[]): string {
+  const len = messages.length
+  if (len === 0) return '0'
+  return `${len}:${messages[0].id}:${messages[len - 1].id}`
+}
+
+type ToolResultsInnerMap = Map<string, { content: ToolResultContent; isError?: boolean }>
+
+interface AssistantToolResultsCacheEntry {
+  contributors: UnifiedMessage[]
+  innerMap: ToolResultsInnerMap
+}
+
+const assistantToolResultsCache = new WeakMap<UnifiedMessage, AssistantToolResultsCacheEntry>()
+const orchestrationBindingEntryCache = new WeakMap<UnifiedMessage, string>()
+
+function contributorsEqual(a: UnifiedMessage[], b: UnifiedMessage[]): boolean {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false
+  }
+  return true
+}
+
+function getStableAssistantToolResults(
+  assistantMessage: UnifiedMessage,
+  contributors: UnifiedMessage[]
+): ToolResultsInnerMap {
+  const cached = assistantToolResultsCache.get(assistantMessage)
+  if (cached && contributorsEqual(cached.contributors, contributors)) {
+    return cached.innerMap
+  }
+  const innerMap: ToolResultsInnerMap = new Map()
+  for (const contributor of contributors) {
+    collectToolResults(contributor.content as ContentBlock[], innerMap)
+  }
+  assistantToolResultsCache.set(assistantMessage, {
+    contributors: contributors.slice(),
+    innerMap
+  })
+  return innerMap
+}
+
 export interface TranscriptStaticAnalysis {
   messageLookup: Map<string, UnifiedMessage>
   toolResultsLookup: Map<string, Map<string, { content: ToolResultContent; isError?: boolean }>>
@@ -147,32 +203,120 @@ export function buildTranscriptStaticAnalysis(
   messages: UnifiedMessage[]
 ): TranscriptStaticAnalysis {
   const cached = transcriptStaticAnalysisCache.get(messages)
-  if (cached) return cached
+  if (cached) {
+    _lastStructuralSignature = buildStructuralSignature(messages)
+    _lastAnalysisResult = cached
+    return cached
+  }
 
+  // Fast path: when the message list structure hasn't changed (no add/remove),
+  // reuse the expensive structural parts and only rebuild messageLookup + binding hash.
+  const structSig = buildStructuralSignature(messages)
+  if (structSig === _lastStructuralSignature && _lastAnalysisResult) {
+    const prev = _lastAnalysisResult
+
+    const messageLookup = new Map<string, UnifiedMessage>()
+    let bindingHash = 0x811c9dc5
+    for (const message of messages) {
+      messageLookup.set(message.id, message)
+
+      let entry = orchestrationBindingEntryCache.get(message)
+      if (entry === undefined) {
+        entry = buildOrchestrationMessageBindingEntry(message)
+        orchestrationBindingEntryCache.set(message, entry)
+      }
+      for (let i = 0; i < entry.length; i += 1) {
+        bindingHash ^= entry.charCodeAt(i)
+        bindingHash =
+          (bindingHash +
+            ((bindingHash << 1) +
+              (bindingHash << 4) +
+              (bindingHash << 7) +
+              (bindingHash << 8) +
+              (bindingHash << 24))) >>>
+          0
+      }
+      bindingHash ^= 0x7c
+      bindingHash =
+        (bindingHash +
+          ((bindingHash << 1) +
+            (bindingHash << 4) +
+            (bindingHash << 7) +
+            (bindingHash << 8) +
+            (bindingHash << 24))) >>>
+        0
+    }
+
+    const bindingSig = bindingHash.toString(36)
+    if (
+      bindingSig === prev.orchestrationBindingSignature &&
+      messageLookup.size === prev.messageLookup.size
+    ) {
+      return prev
+    }
+
+    const fastResult: TranscriptStaticAnalysis = {
+      messageLookup,
+      toolResultsLookup: prev.toolResultsLookup,
+      renderableMessageIds: prev.renderableMessageIds,
+      lastRealUserMessageId: prev.lastRealUserMessageId,
+      lastAssistantMessageId: prev.lastAssistantMessageId,
+      tailToolExecutionState: prev.tailToolExecutionState,
+      orchestrationBindingSignature: bindingSig
+    }
+    transcriptStaticAnalysisCache.set(messages, fastResult)
+    _lastAnalysisResult = fastResult
+    return fastResult
+  }
+
+  // Full rebuild — message list structure changed.
   const messageLookup = new Map<string, UnifiedMessage>()
-  const toolResultsLookup = new Map<
-    string,
-    Map<string, { content: ToolResultContent; isError?: boolean }>
-  >()
+  const toolResultsLookup = new Map<string, ToolResultsInnerMap>()
   const renderableMessageIds: string[] = []
-  const orchestrationBindingEntries: string[] = []
+  const assistantContributors = new Map<
+    string,
+    { assistant: UnifiedMessage; contributors: UnifiedMessage[] }
+  >()
   let currentAssistantMessageId: string | null = null
   let lastRealUserMessageId: string | null = null
   let lastAssistantMessageId: string | null = null
+  let bindingHash = 0x811c9dc5
 
   for (const message of messages) {
     messageLookup.set(message.id, message)
-    orchestrationBindingEntries.push(buildOrchestrationMessageBindingEntry(message))
+
+    let entry = orchestrationBindingEntryCache.get(message)
+    if (entry === undefined) {
+      entry = buildOrchestrationMessageBindingEntry(message)
+      orchestrationBindingEntryCache.set(message, entry)
+    }
+    for (let i = 0; i < entry.length; i += 1) {
+      bindingHash ^= entry.charCodeAt(i)
+      bindingHash =
+        (bindingHash +
+          ((bindingHash << 1) +
+            (bindingHash << 4) +
+            (bindingHash << 7) +
+            (bindingHash << 8) +
+            (bindingHash << 24))) >>>
+        0
+    }
+    bindingHash ^= 0x7c
+    bindingHash =
+      (bindingHash +
+        ((bindingHash << 1) +
+          (bindingHash << 4) +
+          (bindingHash << 7) +
+          (bindingHash << 8) +
+          (bindingHash << 24))) >>>
+      0
 
     if (message.role === 'assistant') {
       currentAssistantMessageId = message.id
+      assistantContributors.set(message.id, { assistant: message, contributors: [] })
     } else if (isToolResultOnlyUserMessage(message) && currentAssistantMessageId) {
-      let results = toolResultsLookup.get(currentAssistantMessageId)
-      if (!results) {
-        results = new Map()
-        toolResultsLookup.set(currentAssistantMessageId, results)
-      }
-      collectToolResults(message.content as ContentBlock[], results)
+      const bucket = assistantContributors.get(currentAssistantMessageId)
+      if (bucket) bucket.contributors.push(message)
     } else {
       currentAssistantMessageId = null
     }
@@ -188,6 +332,11 @@ export function buildTranscriptStaticAnalysis(
     }
   }
 
+  for (const [assistantId, { assistant, contributors }] of assistantContributors) {
+    if (contributors.length === 0) continue
+    toolResultsLookup.set(assistantId, getStableAssistantToolResults(assistant, contributors))
+  }
+
   const nextAnalysis: TranscriptStaticAnalysis = {
     messageLookup,
     toolResultsLookup,
@@ -195,10 +344,12 @@ export function buildTranscriptStaticAnalysis(
     lastRealUserMessageId,
     lastAssistantMessageId,
     tailToolExecutionState: buildTailToolExecutionState(messages),
-    orchestrationBindingSignature: orchestrationBindingEntries.join('|')
+    orchestrationBindingSignature: bindingHash.toString(36)
   }
 
   transcriptStaticAnalysisCache.set(messages, nextAnalysis)
+  _lastStructuralSignature = structSig
+  _lastAnalysisResult = nextAnalysis
   return nextAnalysis
 }
 

@@ -434,6 +434,7 @@ function App(): React.JSX.Element {
       }
 
       if (!payload?.session?.id) return
+      const sessionPayload = payload.session
 
       const structuralReasons = new Set([
         'message-added',
@@ -442,18 +443,35 @@ function App(): React.JSX.Element {
         'messages-truncated',
         'session-created-with-message'
       ])
-      const activeSessionId = useChatStore.getState().activeSessionId
+      const reason = payload.reason ?? ''
+      const chatState = useChatStore.getState()
+      const existingSession = chatState.sessions.find((session) => session.id === sessionPayload.id)
+      const payloadMessageCount =
+        sessionPayload.message_count ??
+        existingSession?.messageCount ??
+        existingSession?.messages.length ??
+        0
+      const localMessageCount =
+        existingSession?.messageCount ?? existingSession?.messages.length ?? 0
+      const hasResidentMessages = Boolean(
+        existingSession &&
+        (existingSession.messages.length > 0 ||
+          (existingSession.messagesLoaded && existingSession.messageCount > 0))
+      )
+      const isAppendReason = reason === 'message-added' || reason === 'session-created-with-message'
+      const isReplaceReason = reason === 'messages-replaced' || reason === 'messages-truncated'
       const shouldReloadMessages =
-        activeSessionId === payload.session.id && structuralReasons.has(payload.reason ?? '')
+        structuralReasons.has(reason) &&
+        hasResidentMessages &&
+        (isReplaceReason || (isAppendReason && localMessageCount !== payloadMessageCount))
 
-      useChatStore.getState().upsertSessionFromSync(payload.session, {
-        preserveLoadedMessages: shouldReloadMessages
+      chatState.upsertSessionFromSync(sessionPayload, {
+        preserveLoadedMessages: hasResidentMessages || shouldReloadMessages
       })
 
       if (shouldReloadMessages) {
-        void useChatStore
-          .getState()
-          .loadRecentSessionMessages(payload.session.id, true)
+        void chatState
+          .loadRecentSessionMessages(sessionPayload.id, true)
           .finally(() => useChatStore.getState().releaseDormantSessions())
       }
     })

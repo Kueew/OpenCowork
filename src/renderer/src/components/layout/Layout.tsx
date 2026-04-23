@@ -108,11 +108,13 @@ export function Layout({ updateInfo, onOpenUpdateDialog }: LayoutProps): React.J
         s.projects.find((project) => !project.pluginId) ??
         s.projects[0] ??
         null
+      const activeProject = explicitActiveProject ?? fallbackHomeProject
       return {
         activeProjectId: activeSession?.projectId ?? s.activeProjectId ?? null,
-        activeProjectName: explicitActiveProject?.name ?? fallbackHomeProject?.name ?? null,
+        activeProjectName: activeProject?.name ?? null,
+        activeProjectWorkingFolder: activeProject?.workingFolder ?? null,
         activeSessionProjectId: activeSession?.projectId ?? null,
-        activeSessionProjectName: activeSessionProject?.name ?? null,
+        activeSessionProjectWorkingFolder: activeSessionProject?.workingFolder ?? null,
         activeSessionTitle: activeSession?.title ?? null,
         activeSessionMode: activeSession?.mode as SessionMode | undefined
       }
@@ -121,8 +123,9 @@ export function Layout({ updateInfo, onOpenUpdateDialog }: LayoutProps): React.J
   const {
     activeProjectId,
     activeProjectName,
+    activeProjectWorkingFolder,
     activeSessionProjectId,
-    activeSessionProjectName,
+    activeSessionProjectWorkingFolder,
     activeSessionTitle,
     activeSessionMode
   } = activeSessionView
@@ -176,14 +179,14 @@ export function Layout({ updateInfo, onOpenUpdateDialog }: LayoutProps): React.J
       return
     }
 
-    const base = activeSessionTitle ? `${activeSessionTitle} 闂?OpenCoWork` : 'OpenCoWork'
+    const base = activeSessionTitle ? `${activeSessionTitle} — OpenCoWork` : 'OpenCoWork'
     const prefix =
       pendingToolCallCount > 0
         ? `(${pendingToolCallCount} pending) `
         : runningSubAgentCount > 0
-          ? `濡絽鍠氬?${runningSubAgentLabel} | `
+          ? `🧠 ${runningSubAgentLabel} | `
           : streamingMessageId
-            ? '闂?'
+            ? '⏳ '
             : ''
     document.title = `${prefix}${base}`
   }, [
@@ -289,40 +292,47 @@ export function Layout({ updateInfo, onOpenUpdateDialog }: LayoutProps): React.J
     if (chatView === 'project') {
       return {
         title: activeProjectName ?? t('sidebar.projects', { defaultValue: '项目' }),
-        subtitle: null
+        subtitle: null,
+        tooltip: activeProjectWorkingFolder
       }
     }
     if (chatView === 'archive') {
       return {
         title: t('sidebar.projectArchive', { defaultValue: '项目档案' }),
-        subtitle: activeProjectName
+        subtitle: null,
+        tooltip: activeProjectWorkingFolder
       }
     }
     if (chatView === 'channels') {
       return {
         title: t('projectHome.openChannels', { defaultValue: '频道' }),
-        subtitle: activeProjectName
+        subtitle: null,
+        tooltip: activeProjectWorkingFolder
       }
     }
     if (chatView === 'git') {
       return {
         title: t('sidebar.projectGit', { defaultValue: 'Git' }),
-        subtitle: activeProjectName
+        subtitle: null,
+        tooltip: activeProjectWorkingFolder
       }
     }
     if (chatView === 'session') {
       return {
         title: activeSessionTitle ?? t('sidebar.newChat', { defaultValue: '新建聊天' }),
-        subtitle: activeSessionProjectName
+        subtitle: null,
+        tooltip: activeSessionProjectWorkingFolder
       }
     }
     return {
       title: t('sidebar.newChat', { defaultValue: '新建聊天' }),
-      subtitle: mode !== 'chat' ? activeProjectName : null
+      subtitle: null,
+      tooltip: mode !== 'chat' ? activeProjectWorkingFolder : null
     }
   }, [
     activeProjectName,
-    activeSessionProjectName,
+    activeProjectWorkingFolder,
+    activeSessionProjectWorkingFolder,
     activeSessionTitle,
     chatView,
     drawPageOpen,
@@ -636,6 +646,7 @@ export function Layout({ updateInfo, onOpenUpdateDialog }: LayoutProps): React.J
             onOpenUpdateDialog={onOpenUpdateDialog}
             title={contentHeader.title}
             subtitle={contentHeader.subtitle}
+            tooltip={contentHeader.tooltip}
             showSidebarToggle={!showEmbeddedSidebar}
             insetForMacTrafficLights={!showEmbeddedSidebar}
           />

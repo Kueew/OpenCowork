@@ -15,6 +15,7 @@ import {
 } from './transcript-utils'
 import { buildOrchestrationRuns } from '@renderer/lib/orchestration/build-runs'
 import { type EditableUserMessageDraft } from '@renderer/lib/image-attachments'
+import type { RequestRetryState } from '@renderer/lib/agent/types'
 
 const modeHints = {
   chat: {
@@ -59,6 +60,7 @@ type ToolResultsLookup = Map<string, { content: ToolResultContent; isError?: boo
 
 type MessageListRow =
   | { type: 'load-more'; key: string }
+  | { type: 'pending-assistant'; key: string }
   | { type: 'message'; key: string; data: RenderableMessage }
 
 type AutoScrollMode = 'off' | 'user' | 'stream'
@@ -78,7 +80,8 @@ interface MessageRowProps {
   toolResults?: ToolResultsLookup
   orchestrationRun?: import('@renderer/lib/orchestration/types').OrchestrationRun | null
   hiddenToolUseIds?: Set<string>
-  isAnchor?: boolean
+  anchorMessageId?: string | null
+  requestRetryState?: RequestRetryState | null
   onRetry?: () => void
   onContinue?: () => void
   onEditUserMessage?: (messageId: string, draft: EditableUserMessageDraft) => void
@@ -106,6 +109,7 @@ const AUTO_SCROLL_MIN_DELTA = 24
 const INITIAL_MESSAGE_ESTIMATED_HEIGHT = 120
 const PROGRAMMATIC_SCROLL_GUARD_MS = 160
 const STREAMING_AUTO_SCROLL_POLL_MS = 500
+const PENDING_ASSISTANT_ROW_KEY_PREFIX = '__pending_assistant__'
 const EMPTY_ORCHESTRATION_STATE = { runs: [], byId: new Map(), byMessageId: new Map() }
 const MESSAGE_COLUMN_CLASS = 'mx-auto w-full max-w-[820px] px-5'
 const MESSAGE_COLUMN_COMPACT_CLASS = 'mx-auto w-full max-w-[720px] px-5'
@@ -192,6 +196,23 @@ function areStringSetsEqual(a?: Set<string>, b?: Set<string>): boolean {
   }
 
   return true
+}
+void areStringSetsEqual
+
+function areRequestRetryStatesEqual(
+  a?: RequestRetryState | null,
+  b?: RequestRetryState | null
+): boolean {
+  if (a === b) return true
+  if (!a || !b) return !a && !b
+
+  return (
+    a.attempt === b.attempt &&
+    a.maxAttempts === b.maxAttempts &&
+    a.delayMs === b.delayMs &&
+    a.statusCode === b.statusCode &&
+    a.reason === b.reason
+  )
 }
 
 function hasSessionSignatureEntry(sig: string, value: string): boolean {
@@ -432,6 +453,7 @@ function getOrchestrationRunSignature(
     memberSig
   ].join('::')
 }
+void getOrchestrationRunSignature
 
 function areMessageRowPropsEqual(prev: MessageRowProps, next: MessageRowProps): boolean {
   return (
@@ -442,11 +464,12 @@ function areMessageRowPropsEqual(prev: MessageRowProps, next: MessageRowProps): 
     prev.isLastAssistantMessage === next.isLastAssistantMessage &&
     prev.showContinue === next.showContinue &&
     prev.disableAnimation === next.disableAnimation &&
-    areToolResultsEqual(prev.toolResults, next.toolResults) &&
-    getOrchestrationRunSignature(prev.orchestrationRun) ===
-      getOrchestrationRunSignature(next.orchestrationRun) &&
-    areStringSetsEqual(prev.hiddenToolUseIds, next.hiddenToolUseIds) &&
-    prev.isAnchor === next.isAnchor &&
+    (prev.toolResults === next.toolResults ||
+      areToolResultsEqual(prev.toolResults, next.toolResults)) &&
+    prev.orchestrationRun === next.orchestrationRun &&
+    prev.hiddenToolUseIds === next.hiddenToolUseIds &&
+    prev.anchorMessageId === next.anchorMessageId &&
+    areRequestRetryStatesEqual(prev.requestRetryState, next.requestRetryState) &&
     prev.onRetry === next.onRetry &&
     prev.onContinue === next.onContinue &&
     prev.onEditUserMessage === next.onEditUserMessage &&
@@ -469,12 +492,15 @@ const MessageRow = React.memo(function MessageRow({
   toolResults,
   orchestrationRun,
   hiddenToolUseIds,
-  isAnchor,
+  anchorMessageId,
+  requestRetryState,
   onRetry,
   onContinue,
   onEditUserMessage,
   onDeleteMessage
 }: MessageRowProps): React.JSX.Element {
+  const isAnchor = anchorMessageId === message.id
+
   return (
     <div
       data-message-id={message.id}
@@ -497,6 +523,7 @@ const MessageRow = React.memo(function MessageRow({
         toolResults={toolResults}
         orchestrationRun={orchestrationRun}
         hiddenToolUseIds={hiddenToolUseIds}
+        requestRetryState={requestRetryState}
       />
     </div>
   )
@@ -559,6 +586,9 @@ function MessageListInner(props: MessageListProps): React.JSX.Element {
     () => hasAgentOrchestrationData || hasTeamOrchestrationData,
     [hasAgentOrchestrationData, hasTeamOrchestrationData]
   )
+  const sessionRequestRetryState = useAgentStore((s) =>
+    activeSessionId ? (s.sessionRequestRetryState[activeSessionId] ?? null) : null
+  )
   const isSessionOutputting = hasStreamingMessage || hasActiveToolCallOutput
   const canSessionTriggerStreamingAutoScroll =
     (isMainChatSession || isDetachedSessionView) && isSessionOutputting
@@ -576,7 +606,7 @@ function MessageListInner(props: MessageListProps): React.JSX.Element {
   const stableMessagesRef = React.useRef(messages)
   const stableMessagesBindingSignatureRef = React.useRef(orchestrationMessageBindingSignature)
   if (
-    !streamingMessageId ||
+    (!streamingMessageId && !hasActiveToolCallOutput) ||
     stableMessagesBindingSignatureRef.current !== orchestrationMessageBindingSignature
   ) {
     stableMessagesRef.current = messages
@@ -630,6 +660,21 @@ function MessageListInner(props: MessageListProps): React.JSX.Element {
     if (streamingMessageId || isSessionRunning) return null
     return tailToolExecutionState?.assistantMessageId ?? null
   }, [isSessionRunning, streamingMessageId, tailToolExecutionState])
+  const showPendingAssistantRow = isSessionRunning && !streamingMessageId
+  const pendingAssistantRowKey = React.useMemo(
+    () =>
+      `${PENDING_ASSISTANT_ROW_KEY_PREFIX}:${activeSessionId ?? currentActiveSessionId ?? 'active'}`,
+    [activeSessionId, currentActiveSessionId]
+  )
+  const pendingAssistantMessage = React.useMemo<UnifiedMessage>(
+    () => ({
+      id: pendingAssistantRowKey,
+      role: 'assistant',
+      content: '',
+      createdAt: Date.now()
+    }),
+    [pendingAssistantRowKey]
+  )
 
   const renderableMessages = React.useMemo(
     () =>
@@ -649,9 +694,12 @@ function MessageListInner(props: MessageListProps): React.JSX.Element {
       key: message.messageId,
       data: message
     }))
+    if (showPendingAssistantRow) {
+      nextRows.push({ type: 'pending-assistant', key: pendingAssistantRowKey })
+    }
     if (hasLoadMoreRow) nextRows.unshift({ type: 'load-more', key: LOAD_MORE_ROW_KEY })
     return nextRows
-  }, [hasLoadMoreRow, renderableMessages])
+  }, [hasLoadMoreRow, pendingAssistantRowKey, renderableMessages, showPendingAssistantRow])
 
   const lastMessageRowIndex = rows.length - 1
 
@@ -932,7 +980,7 @@ function MessageListInner(props: MessageListProps): React.JSX.Element {
     )
   }
 
-  if (messages.length === 0) {
+  if (messages.length === 0 && !showPendingAssistantRow) {
     const hint = modeHints[mode]
     const projectScoped = Boolean(activeProjectId)
     const emptyTitle = projectScoped
@@ -1010,7 +1058,10 @@ function MessageListInner(props: MessageListProps): React.JSX.Element {
                 hiddenToolUseIds={
                   orchestrationState.byMessageId.get(row.messageId)?.hiddenToolUseIds
                 }
-                isAnchor={false}
+                anchorMessageId={null}
+                requestRetryState={
+                  row.isLastAssistantMessage ? (sessionRequestRetryState ?? null) : null
+                }
                 onRetry={onRetry}
                 onContinue={onContinue}
                 onEditUserMessage={onEditUserMessage}
@@ -1052,14 +1103,38 @@ function MessageListInner(props: MessageListProps): React.JSX.Element {
               )
             }
 
-            const { messageId, isLastUserMessage, isLastAssistantMessage, showContinue } = row.data
-            const message = messageLookup.get(messageId)
-            if (!message) return null
-
             const disableAnimation =
               lastMessageRowIndex >= 0
                 ? rowIndex >= Math.max(0, lastMessageRowIndex - (TAIL_STATIC_MESSAGE_COUNT - 1))
                 : false
+
+            if (row.type === 'pending-assistant') {
+              return (
+                <MessageRow
+                  key={row.key}
+                  message={pendingAssistantMessage}
+                  sessionId={targetSessionId}
+                  isStreaming
+                  isLastUserMessage={false}
+                  isLastAssistantMessage
+                  showContinue={false}
+                  disableAnimation={disableAnimation}
+                  toolResults={undefined}
+                  orchestrationRun={null}
+                  hiddenToolUseIds={undefined}
+                  anchorMessageId={anchorMessageId}
+                  requestRetryState={sessionRequestRetryState ?? null}
+                  onRetry={onRetry}
+                  onContinue={onContinue}
+                  onEditUserMessage={onEditUserMessage}
+                  onDeleteMessage={onDeleteMessage}
+                />
+              )
+            }
+
+            const { messageId, isLastUserMessage, isLastAssistantMessage, showContinue } = row.data
+            const message = messageLookup.get(messageId)
+            if (!message) return null
 
             return (
               <MessageRow
@@ -1074,7 +1149,10 @@ function MessageListInner(props: MessageListProps): React.JSX.Element {
                 toolResults={toolResultsLookup.get(messageId)}
                 orchestrationRun={orchestrationState.byMessageId.get(messageId)?.primaryRun ?? null}
                 hiddenToolUseIds={orchestrationState.byMessageId.get(messageId)?.hiddenToolUseIds}
-                isAnchor={anchorMessageId === messageId}
+                anchorMessageId={anchorMessageId}
+                requestRetryState={
+                  isLastAssistantMessage ? (sessionRequestRetryState ?? null) : null
+                }
                 onRetry={onRetry}
                 onContinue={onContinue}
                 onEditUserMessage={onEditUserMessage}

@@ -1,12 +1,16 @@
 import { nanoid } from 'nanoid'
-import { runAgentLoop } from './agent-loop'
 import type { AgentEvent, AgentLoopConfig, LoopEndReason, ToolCallState } from './types'
 import type { ContentBlock, ToolResultContent, TokenUsage, UnifiedMessage } from '../api/types'
 import type { ToolContext } from '../tools/tool-types'
+import { buildSidecarAgentRunRequest } from '../ipc/sidecar-protocol'
+import { agentBridge } from '../ipc/agent-bridge'
+import { registerSidecarApprovalHandler } from '../ipc/sidecar-approval-registry'
+import { runAgentViaSidecar } from './run-agent-via-sidecar'
 
 export type SharedAgentRuntimeReason = LoopEndReason | 'shutdown'
 
 const MAX_AGGREGATED_TEXT_CHARS = 500_000
+const MAIN_RUNTIME_MESSAGE_POLL_MS = 100
 
 export interface SharedAgentRuntimeState {
   iteration: number
@@ -61,6 +65,10 @@ export interface SharedAgentRuntimeResult {
   error?: string
 }
 
+function runCleanup(cleanup: (() => void) | null): void {
+  cleanup?.()
+}
+
 export async function runSharedAgentRuntime(
   options: SharedAgentRuntimeOptions
 ): Promise<SharedAgentRuntimeResult> {
@@ -81,14 +89,9 @@ export async function runSharedAgentRuntime(
   let stopReason: SharedAgentRuntimeReason | null = null
   let errorMessage: string | undefined
   let capturedFinalMessages: UnifiedMessage[] = []
-  const effectiveLoopConfig: AgentLoopConfig = {
-    ...loopConfig,
-    captureFinalMessages: (messages) => {
-      capturedFinalMessages = messages
-      // Still forward to the caller's hook if they provided one.
-      loopConfig.captureFinalMessages?.(messages)
-    }
-  }
+  let activeRunId = ''
+  let unregisterApprovalHandler: (() => void) | null = null
+  let messagePumpTimer: ReturnType<typeof setInterval> | null = null
 
   const buildHookArgs = (event: AgentEvent): SharedAgentRuntimeHookArgs => ({
     event,
@@ -111,16 +114,93 @@ export async function runSharedAgentRuntime(
   }
 
   try {
-    const loop = runAgentLoop(
-      initialMessages,
-      effectiveLoopConfig,
-      toolContext,
-      async (toolCall) => {
-        if (isReadOnlyTool?.(toolCall.name)) return true
-        if (onApprovalNeeded) return onApprovalNeeded(toolCall)
-        return false
+    const sidecarRequest = buildSidecarAgentRunRequest({
+      messages: initialMessages,
+      provider: loopConfig.provider,
+      tools: loopConfig.tools,
+      sessionId: toolContext.sessionId,
+      workingFolder: toolContext.workingFolder ?? loopConfig.workingFolder,
+      maxIterations: loopConfig.maxIterations,
+      forceApproval: loopConfig.forceApproval === true,
+      maxParallelTools: loopConfig.maxParallelTools,
+      compression: loopConfig.contextCompression?.config ?? null,
+      pluginId: toolContext.pluginId,
+      pluginChatId: toolContext.pluginChatId,
+      pluginChatType: toolContext.pluginChatType,
+      pluginSenderId: toolContext.pluginSenderId,
+      pluginSenderName: toolContext.pluginSenderName,
+      sshConnectionId: toolContext.sshConnectionId,
+      captureFinalMessages: true
+    })
+    if (!sidecarRequest) {
+      throw new Error('Failed to build main-process agent request')
+    }
+
+    let messagePumpActive = false
+    const pendingInjectedMessages: UnifiedMessage[] = []
+
+    const flushQueuedMessages = async (): Promise<void> => {
+      if (!activeRunId || pendingInjectedMessages.length === 0 || messagePumpActive) return
+      messagePumpActive = true
+      const batch = pendingInjectedMessages.splice(0, pendingInjectedMessages.length)
+      try {
+        await agentBridge.appendAgentMessages(activeRunId, batch)
+      } catch (error) {
+        pendingInjectedMessages.unshift(...batch)
+        if (!toolContext.signal.aborted) {
+          console.error('[SharedAgentRuntime] Failed to append runtime messages:', error)
+        }
+      } finally {
+        messagePumpActive = false
       }
-    )
+    }
+
+    const startMessagePump = (): void => {
+      if (!loopConfig.messageQueue) return
+
+      messagePumpTimer = setInterval(() => {
+        const injected = loopConfig.messageQueue?.drain() ?? []
+        if (injected.length > 0) {
+          pendingInjectedMessages.push(...injected)
+        }
+        void flushQueuedMessages()
+      }, MAIN_RUNTIME_MESSAGE_POLL_MS)
+    }
+
+    const loop = runAgentViaSidecar(sidecarRequest, {
+      signal: toolContext.signal,
+      onRunIdAssigned: (assignedRunId) => {
+        activeRunId = assignedRunId
+        unregisterApprovalHandler = registerSidecarApprovalHandler(activeRunId, async (request) => {
+          try {
+            if (isReadOnlyTool?.(request.toolCall.name)) {
+              return { approved: true }
+            }
+
+            if (onApprovalNeeded) {
+              const approved = await onApprovalNeeded(request.toolCall)
+              return {
+                approved,
+                ...(approved ? {} : { reason: 'Runtime approval callback denied permission' })
+              }
+            }
+
+            return {
+              approved: false,
+              reason: 'No runtime approval handler registered for this agent run'
+            }
+          } catch (error) {
+            return {
+              approved: false,
+              reason: error instanceof Error ? error.message : String(error)
+            }
+          }
+        })
+        void flushQueuedMessages()
+      }
+    })
+
+    startMessagePump()
 
     for await (const event of loop) {
       if (toolContext.signal.aborted) {
@@ -172,6 +252,9 @@ export async function runSharedAgentRuntime(
         case 'loop_end':
           commitAssistantText()
           state.finalLoopReason = event.reason
+          if (event.messages) {
+            capturedFinalMessages = event.messages
+          }
           break
 
         case 'error':
@@ -192,6 +275,19 @@ export async function runSharedAgentRuntime(
     stopReason = 'error'
     errorMessage = error instanceof Error ? error.message : String(error)
   } finally {
+    if (activeRunId && !state.finalLoopReason && !toolContext.signal.aborted) {
+      try {
+        await agentBridge.cancelAgent(activeRunId)
+      } catch {
+        // Ignore teardown races when the run already completed.
+      }
+    }
+    if (messagePumpTimer) {
+      clearInterval(messagePumpTimer)
+      messagePumpTimer = null
+    }
+    runCleanup(unregisterApprovalHandler)
+    unregisterApprovalHandler = null
     commitAssistantText()
   }
 

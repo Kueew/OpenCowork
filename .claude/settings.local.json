@@ -31,7 +31,9 @@
       "mcp__MCP_DOCKER__browser_snapshot",
       "mcp__MCP_DOCKER__browser_console_messages",
       "mcp__MCP_DOCKER__browser_network_requests",
-      "Bash(python *)"
+      "Bash(python *)",
+      "Bash(grep -rn \"input_json_delta\\\\|toolBuffer\\\\|args\\\\s*+=\\\\|input\\\\s*=\\\\s*\\\\`\" D:/code/OpenCowork/src/main/ipc/js-agent-runtime.ts)",
+      "Bash(grep -E \"\\\\.\\(tsx|ts\\)$\")"
     ]
   }
 }

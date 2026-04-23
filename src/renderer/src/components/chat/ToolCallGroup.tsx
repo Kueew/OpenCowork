@@ -22,6 +22,7 @@ interface ToolCallGroupProps {
   toolName: string
   items: ToolCallGroupItem[]
   children: React.ReactNode
+  collapsible?: boolean
 }
 
 /** Compute a group-level status from individual items */
@@ -86,46 +87,60 @@ function groupSummaryLabel(
 export function ToolCallGroup({
   toolName,
   items,
-  children
+  children,
+  collapsible = true
 }: ToolCallGroupProps): React.JSX.Element {
   const { t } = useTranslation('chat')
   const status = groupStatus(items)
   const isActive = status === 'running' || status === 'streaming' || status === 'pending_approval'
 
-  const [expanded, setExpanded] = useState(isActive)
+  const [expanded, setExpanded] = useState(isActive || !collapsible)
+  const previousCollapsibleRef = React.useRef(collapsible)
+
   React.useEffect(() => {
-    if (isActive) {
+    if (!collapsible) {
+      setExpanded(true)
+    } else if (!previousCollapsibleRef.current) {
+      setExpanded(isActive)
+    } else if (isActive) {
       setExpanded(true)
     }
-  }, [isActive])
+
+    previousCollapsibleRef.current = collapsible
+  }, [collapsible, isActive])
 
   const summaryLabel = groupSummaryLabel(toolName, items, t)
+  const contentVisible = !collapsible || expanded
 
   return (
     <div className="my-0.5">
-      <button
-        onClick={() => setExpanded((v) => !v)}
-        className="group flex items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-[12px] text-muted-foreground transition-colors hover:bg-accent/70 hover:text-accent-foreground"
-      >
-        <span className="font-medium text-foreground/80 transition-colors group-hover:text-accent-foreground">
-          {summaryLabel}
-        </span>
-        {isActive && <Loader2 className="size-3 animate-spin text-blue-400/70" />}
-        {expanded ? (
-          <ChevronDown className="size-3 text-muted-foreground/60 transition-colors group-hover:text-accent-foreground" />
-        ) : (
-          <ChevronRight className="size-3 text-muted-foreground/60 transition-colors group-hover:text-accent-foreground" />
-        )}
-      </button>
+      {collapsible ? (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((v) => !v)}
+          className="group flex items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-[12px] text-muted-foreground transition-colors hover:bg-accent/70 hover:text-accent-foreground"
+        >
+          <span className="font-medium text-foreground/80 transition-colors group-hover:text-accent-foreground">
+            {summaryLabel}
+          </span>
+          {isActive && <Loader2 className="size-3 animate-spin text-blue-400/70" />}
+          {expanded ? (
+            <ChevronDown className="size-3 text-muted-foreground/60 transition-colors group-hover:text-accent-foreground" />
+          ) : (
+            <ChevronRight className="size-3 text-muted-foreground/60 transition-colors group-hover:text-accent-foreground" />
+          )}
+        </button>
+      ) : null}
 
       <AnimatePresence initial={false}>
-        {expanded && (
+        {contentVisible && (
           <motion.div
-            initial={{ height: 0, opacity: 0 }}
+            initial={collapsible ? { height: 0, opacity: 0 } : false}
             animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            className="mt-1 overflow-hidden pl-3"
+            exit={collapsible ? { height: 0, opacity: 0 } : undefined}
+            transition={{ duration: collapsible ? 0.2 : 0 }}
+            className={collapsible ? 'mt-1 overflow-hidden pl-3' : 'overflow-visible'}
           >
             {children}
           </motion.div>

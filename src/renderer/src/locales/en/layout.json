@@ -689,6 +689,9 @@
   "terminalDock": {
     "sshContext": "SSH workspace",
     "newTerminal": "New terminal",
+    "newClaude": "New Claude",
+    "newCodex": "New Codex",
+    "newGemini": "New Gemini",
     "closeTerminal": "Close current terminal",
     "collapse": "Collapse terminal",
     "empty": "No terminal is open yet.",

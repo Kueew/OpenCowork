@@ -3,12 +3,20 @@ import { ChevronDown, MonitorSmartphone, Plus, SquareTerminal, X } from 'lucide-
 import { useTranslation } from 'react-i18next'
 import { Button } from '@renderer/components/ui/button'
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from '@renderer/components/ui/dropdown-menu'
+import {
   BOTTOM_TERMINAL_DOCK_MAX_HEIGHT,
   BOTTOM_TERMINAL_DOCK_MIN_HEIGHT,
   clampBottomTerminalDockHeight
 } from '@renderer/components/layout/right-panel-defs'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { cn } from '@renderer/lib/utils'
+import { ipcClient } from '@renderer/lib/ipc/ipc-client'
+import { IPC } from '@renderer/lib/ipc/channels'
 import {
   ensureProjectTerminalReady,
   getProjectTerminalBaseTitle
@@ -212,25 +220,42 @@ export function ProjectTerminalDock({
       buildSshTerminalTitle(currentConnection, projectName || t('terminalDock.sshContext'))
     : getProjectTerminalBaseTitle(projectName, workingFolder)
 
-  const handleCreateTerminal = useCallback((): void => {
-    if (sshConnectionId) {
-      activateLocalTab(null)
-      void openSshTerminal(sshConnectionId)
-      return
-    }
+  const handleCreateTerminal = useCallback(
+    (initialCommand?: string): void => {
+      if (sshConnectionId) {
+        activateLocalTab(null)
+        void (async () => {
+          const tabId = await openSshTerminal(sshConnectionId)
+          if (!tabId || !initialCommand) return
+          const command = initialCommand.trim()
+          if (!command) return
+          const sessionId = tabId.startsWith('tab-') ? tabId.slice(4) : null
+          if (!sessionId) return
+          setTimeout(() => {
+            ipcClient.send(IPC.SSH_DATA, { sessionId, data: `${command}\r` })
+          }, 600)
+        })()
+        return
+      }
 
-    if (!workingFolder) return
-    activateSshTab(null)
-    void createLocalTab(workingFolder, getProjectTerminalBaseTitle(projectName, workingFolder))
-  }, [
-    sshConnectionId,
-    activateLocalTab,
-    openSshTerminal,
-    workingFolder,
-    activateSshTab,
-    createLocalTab,
-    projectName
-  ])
+      if (!workingFolder) return
+      activateSshTab(null)
+      void createLocalTab(
+        workingFolder,
+        getProjectTerminalBaseTitle(projectName, workingFolder),
+        initialCommand
+      )
+    },
+    [
+      sshConnectionId,
+      activateLocalTab,
+      openSshTerminal,
+      workingFolder,
+      activateSshTab,
+      createLocalTab,
+      projectName
+    ]
+  )
 
   const handleSetActive = useCallback(
     (tab: UnifiedTerminalTab): void => {
@@ -322,20 +347,37 @@ export function ProjectTerminalDock({
                   </span>
                 </button>
               ))}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    className="workspace-terminal-action size-7 rounded-[10px]"
-                    onClick={handleCreateTerminal}
-                    disabled={!sshConnectionId && !workingFolder}
-                  >
-                    <Plus className="size-3.5" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>{t('terminalDock.newTerminal')}</TooltipContent>
-              </Tooltip>
+              <DropdownMenu>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        className="workspace-terminal-action size-7 rounded-[10px]"
+                        disabled={!sshConnectionId && !workingFolder}
+                      >
+                        <Plus className="size-3.5" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                  </TooltipTrigger>
+                  <TooltipContent>{t('terminalDock.newTerminal')}</TooltipContent>
+                </Tooltip>
+                <DropdownMenuContent align="start" className="w-44">
+                  <DropdownMenuItem onClick={() => handleCreateTerminal()}>
+                    {t('terminalDock.newTerminal')}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleCreateTerminal('claude')}>
+                    {t('terminalDock.newClaude')}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleCreateTerminal('codex')}>
+                    {t('terminalDock.newCodex')}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleCreateTerminal('gemini')}>
+                    {t('terminalDock.newGemini')}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </div>
 
@@ -402,7 +444,7 @@ export function ProjectTerminalDock({
                 variant="outline"
                 size="sm"
                 className="h-7 rounded-[10px] px-3 text-xs"
-                onClick={handleCreateTerminal}
+                onClick={() => handleCreateTerminal()}
                 disabled={!sshConnectionId && !workingFolder}
               >
                 <Plus className="size-3.5" />

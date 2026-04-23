@@ -78,7 +78,7 @@ import {
   getLiveOutputDotClass,
   getLiveOutputSurfaceClass
 } from '@renderer/lib/live-output-animation'
-import type { ToolCallState, ToolCallStatus } from '@renderer/lib/agent/types'
+import type { RequestRetryState, ToolCallState, ToolCallStatus } from '@renderer/lib/agent/types'
 import {
   DESKTOP_CLICK_TOOL_NAME,
   DESKTOP_SCREENSHOT_TOOL_NAME,
@@ -129,6 +129,7 @@ interface AssistantMessageProps {
   renderMode?: AssistantRenderMode
   orchestrationRun?: OrchestrationRun | null
   hiddenToolUseIds?: Set<string>
+  requestRetryState?: RequestRetryState | null
 }
 
 const MARKDOWN_WRAPPER_CLASS = 'text-sm leading-relaxed text-foreground break-words'
@@ -157,6 +158,12 @@ const WORKSPACE_PERSISTENT_TOOLS = new Set([
 ])
 const EMPTY_LIVE_TOOL_CALLS: ToolCallState[] = []
 
+function formatRetryDelay(delayMs: number): string {
+  if (delayMs < 1000) return `${delayMs}ms`
+  if (delayMs < 10_000) return `${(delayMs / 1000).toFixed(1)}s`
+  return `${Math.round(delayMs / 1000)}s`
+}
+
 function resolveToolCallStatus(
   isStreaming: boolean | undefined,
   liveToolCall: ToolCallState | undefined,
@@ -165,6 +172,41 @@ function resolveToolCallStatus(
   if (liveToolCall?.status) return liveToolCall.status
   if (!result && isStreaming) return 'streaming'
   return result?.isError ? 'error' : 'completed'
+}
+
+interface ToolCallRenderState {
+  id: string
+  toolUseId: string
+  name: string
+  input: Record<string, unknown>
+  output?: ToolResultContent
+  status: ToolCallStatus | 'completed'
+  error?: string
+  startedAt?: number
+  completedAt?: number
+}
+
+function buildToolCallRenderState(
+  block: Extract<ContentBlock, { type: 'tool_use' }>,
+  options: {
+    isStreaming?: boolean
+    toolResults?: Map<string, { content: ToolResultContent; isError?: boolean }>
+    liveToolCallMap?: Map<string, ToolCallState> | null
+  }
+): ToolCallRenderState {
+  const result = options.toolResults?.get(block.id)
+  const liveToolCall = options.liveToolCallMap?.get(block.id)
+  return {
+    id: block.id,
+    toolUseId: block.id,
+    name: block.name,
+    input: block.input,
+    output: liveToolCall?.output ?? result?.content,
+    status: resolveToolCallStatus(options.isStreaming, liveToolCall, result),
+    error: liveToolCall?.error,
+    startedAt: liveToolCall?.startedAt,
+    completedAt: liveToolCall?.completedAt
+  }
 }
 
 function shouldShowToolInMessageList(name: string): boolean {
@@ -1002,7 +1044,8 @@ export function AssistantMessage({
   onDelete,
   renderMode = 'default',
   orchestrationRun,
-  hiddenToolUseIds
+  hiddenToolUseIds,
+  requestRetryState
 }: AssistantMessageProps): React.JSX.Element {
   const { t } = useTranslation('chat')
   const devMode = useSettingsStore((s) => s.devMode)
@@ -1494,20 +1537,22 @@ export function AssistantMessage({
       }
       // Generic ToolCallCard — hidden with the workspace collapse.
       if (toolsCollapsed) return null
-      const result = toolResults?.get(block.id)
-      const liveTc = effectiveLiveToolCallMap?.get(block.id)
-      const statusValue = resolveToolCallStatus(isStreaming, liveTc, result)
+      const toolCallState = buildToolCallRenderState(block, {
+        isStreaming,
+        toolResults,
+        liveToolCallMap: effectiveLiveToolCallMap
+      })
       return (
         <ScaleIn key={key} className="w-full origin-left">
           <ToolCallCard
-            toolUseId={block.id}
-            name={block.name}
-            input={block.input}
-            output={liveTc?.output ?? result?.content}
-            status={statusValue}
-            error={liveTc?.error}
-            startedAt={liveTc?.startedAt}
-            completedAt={liveTc?.completedAt}
+            toolUseId={toolCallState.toolUseId}
+            name={toolCallState.name}
+            input={toolCallState.input}
+            output={toolCallState.output}
+            status={toolCallState.status}
+            error={toolCallState.error}
+            startedAt={toolCallState.startedAt}
+            completedAt={toolCallState.completedAt}
           />
         </ScaleIn>
       )
@@ -1697,63 +1742,33 @@ export function AssistantMessage({
           const groupBlocks = item.indices.map(
             (idx) => normalizedContent[idx] as Extract<ContentBlock, { type: 'tool_use' }>
           )
-          const groupKey = `group-${item.indices[0]}`
-
-          // Single item in group — render directly without wrapper
-          if (groupBlocks.length === 1) {
-            const block = groupBlocks[0]
-            const result = toolResults?.get(block.id)
-            const liveTc = effectiveLiveToolCallMap?.get(block.id)
-            const statusValue = resolveToolCallStatus(isStreaming, liveTc, result)
-            return (
-              <ScaleIn key={block.id} className="w-full origin-left">
-                <ToolCallCard
-                  toolUseId={block.id}
-                  name={block.name}
-                  input={block.input}
-                  output={liveTc?.output ?? result?.content}
-                  status={statusValue}
-                  error={liveTc?.error}
-                  startedAt={liveTc?.startedAt}
-                  completedAt={liveTc?.completedAt}
-                />
-              </ScaleIn>
-            )
-          }
-
-          // Multiple items — wrap in ToolCallGroup
-          const groupItems = groupBlocks.map((block) => {
-            const result = toolResults?.get(block.id)
-            const liveTc = effectiveLiveToolCallMap?.get(block.id)
-            return {
-              id: block.id,
-              name: block.name,
-              input: block.input,
-              output: liveTc?.output ?? result?.content,
-              status: resolveToolCallStatus(isStreaming, liveTc, result),
-              error: liveTc?.error,
-              startedAt: liveTc?.startedAt,
-              completedAt: liveTc?.completedAt
-            }
-          })
+          const groupToolCalls = groupBlocks.map((block) =>
+            buildToolCallRenderState(block, {
+              isStreaming,
+              toolResults,
+              liveToolCallMap: effectiveLiveToolCallMap
+            })
+          )
+          const groupKey = groupBlocks[0]?.id ?? `group-${item.indices[0]}`
           return (
             <ScaleIn key={groupKey} className="w-full origin-left">
-              <ToolCallGroup toolName={item.toolName} items={groupItems}>
-                {groupBlocks.map((block) => {
-                  const result = toolResults?.get(block.id)
-                  const liveTc = effectiveLiveToolCallMap?.get(block.id)
-                  const statusValue = resolveToolCallStatus(isStreaming, liveTc, result)
+              <ToolCallGroup
+                toolName={item.toolName}
+                items={groupToolCalls}
+                collapsible={groupBlocks.length > 1}
+              >
+                {groupToolCalls.map((toolCall) => {
                   return (
                     <ToolCallCard
-                      key={block.id}
-                      toolUseId={block.id}
-                      name={block.name}
-                      input={block.input}
-                      output={liveTc?.output ?? result?.content}
-                      status={statusValue}
-                      error={liveTc?.error}
-                      startedAt={liveTc?.startedAt}
-                      completedAt={liveTc?.completedAt}
+                      key={toolCall.toolUseId}
+                      toolUseId={toolCall.toolUseId}
+                      name={toolCall.name}
+                      input={toolCall.input}
+                      output={toolCall.output}
+                      status={toolCall.status}
+                      error={toolCall.error}
+                      startedAt={toolCall.startedAt}
+                      completedAt={toolCall.completedAt}
                     />
                   )
                 })}
@@ -1876,6 +1891,31 @@ export function AssistantMessage({
   return (
     <div className="group/msg flex flex-col">
       <div className="min-w-0 overflow-hidden pl-1.5 sm:pl-2">
+        {requestRetryState && (
+          <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-500/25 bg-amber-500/8 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+            <RotateCcw className="mt-0.5 size-3.5 shrink-0 animate-spin" />
+            <div className="min-w-0">
+              <div className="font-medium">
+                {t('assistantMessage.retryingRequest', {
+                  defaultValue: '请求重试中'
+                })}
+              </div>
+              <div className="mt-0.5 break-words text-[11px] text-amber-700/80 dark:text-amber-200/80">
+                {t('assistantMessage.retryingRequestDetail', {
+                  defaultValue:
+                    '第 {{attempt}} / {{maxAttempts}} 次重试，{{delay}} 后再次发送{{statusSuffix}}',
+                  attempt: requestRetryState.attempt,
+                  maxAttempts: requestRetryState.maxAttempts,
+                  delay: formatRetryDelay(requestRetryState.delayMs),
+                  statusSuffix: requestRetryState.statusCode
+                    ? `，状态码 ${requestRetryState.statusCode}`
+                    : ''
+                })}
+                {requestRetryState.reason ? ` · ${requestRetryState.reason}` : ''}
+              </div>
+            </div>
+          </div>
+        )}
         {collapsed ? (
           <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
             <div className="max-h-10 overflow-hidden whitespace-pre-wrap break-words">

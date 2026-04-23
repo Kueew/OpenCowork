@@ -18,7 +18,7 @@ interface TerminalStore {
   activeTabId: string | null
   initialized: boolean
   init: () => void
-  createTab: (cwd?: string, title?: string) => Promise<string | null>
+  createTab: (cwd?: string, title?: string, initialCommand?: string) => Promise<string | null>
   closeTab: (id: string) => Promise<void>
   setActiveTab: (id: string | null) => void
   findTabByCwd: (cwd?: string | null) => LocalTerminalTab | null
@@ -59,7 +59,7 @@ export const useTerminalStore = create<TerminalStore>()((set, get) => ({
 
     set({ initialized: true })
   },
-  createTab: async (cwd, preferredTitle) => {
+  createTab: async (cwd, preferredTitle, initialCommand) => {
     const title = buildNextTitle(get().tabs, preferredTitle)
     const result = (await ipcClient.invoke(IPC.TERMINAL_CREATE, {
       cwd,
@@ -95,6 +95,16 @@ export const useTerminalStore = create<TerminalStore>()((set, get) => ({
       tabs: [...state.tabs, tab],
       activeTabId: tab.id
     }))
+
+    if (initialCommand && initialCommand.trim().length > 0) {
+      const command = initialCommand.trim()
+      setTimeout(() => {
+        void ipcClient.invoke(IPC.TERMINAL_INPUT, {
+          id: tab.id,
+          data: `${command}\r`
+        })
+      }, 400)
+    }
 
     return tab.id
   },

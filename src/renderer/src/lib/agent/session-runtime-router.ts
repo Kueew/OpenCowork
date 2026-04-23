@@ -133,6 +133,33 @@ export function isSessionForeground(sessionId: string): boolean {
   return getVisibleSessionIds().has(sessionId)
 }
 
+// --- RAF-batched foreground mutations ---
+// During agent execution, multiple store mutations arrive per frame (updateMessage,
+// appendToolUse, updateToolUseInput, etc.). Queueing them and flushing in a single
+// RAF callback lets React 18 batch the resulting re-renders into one pass.
+type ForegroundMutationThunk = () => void
+const _pendingForegroundMutations: ForegroundMutationThunk[] = []
+let _foregroundFlushRafId: number | null = null
+
+function scheduleForegroundFlush(): void {
+  if (_foregroundFlushRafId !== null) return
+  _foregroundFlushRafId = requestAnimationFrame(flushForegroundMutations)
+}
+
+function flushForegroundMutations(): void {
+  _foregroundFlushRafId = null
+  if (_pendingForegroundMutations.length === 0) return
+  const thunks = _pendingForegroundMutations.splice(0)
+  for (const thunk of thunks) {
+    thunk()
+  }
+}
+
+function queueForegroundMutation(thunk: ForegroundMutationThunk): void {
+  _pendingForegroundMutations.push(thunk)
+  scheduleForegroundFlush()
+}
+
 export function updateRuntimeMessage(
   sessionId: string,
   messageId: string,
@@ -141,7 +168,9 @@ export function updateRuntimeMessage(
   emitSessionRuntimeSync({ kind: 'update_message', sessionId, messageId, patch })
 
   if (isSessionForeground(sessionId)) {
-    useChatStore.getState().updateMessage(sessionId, messageId, patch)
+    queueForegroundMutation(() =>
+      useChatStore.getState().updateMessage(sessionId, messageId, patch)
+    )
     return
   }
 
@@ -172,9 +201,10 @@ export function mergeRuntimeMessageUsage(
     const currentMessage = chatStore
       .getSessionMessages(sessionId)
       .find((message) => message.id === messageId)
-    chatStore.updateMessage(sessionId, messageId, {
-      usage: buildMergedRuntimeUsage(currentMessage?.usage, patch)
-    })
+    const merged = buildMergedRuntimeUsage(currentMessage?.usage, patch)
+    queueForegroundMutation(() =>
+      useChatStore.getState().updateMessage(sessionId, messageId, { usage: merged })
+    )
     return
   }
 
@@ -270,9 +300,11 @@ export function setRuntimeThinkingEncryptedContent(
   })
 
   if (isSessionForeground(sessionId)) {
-    useChatStore
-      .getState()
-      .setThinkingEncryptedContent(sessionId, messageId, encryptedContent, provider)
+    queueForegroundMutation(() =>
+      useChatStore
+        .getState()
+        .setThinkingEncryptedContent(sessionId, messageId, encryptedContent, provider)
+    )
     return
   }
 
@@ -330,7 +362,7 @@ export function completeRuntimeThinking(sessionId: string, messageId: string): v
   emitSessionRuntimeSync({ kind: 'complete_thinking', sessionId, messageId })
 
   if (isSessionForeground(sessionId)) {
-    useChatStore.getState().completeThinking(sessionId, messageId)
+    queueForegroundMutation(() => useChatStore.getState().completeThinking(sessionId, messageId))
     return
   }
 
@@ -361,7 +393,9 @@ export function appendRuntimeToolUse(
   })
 
   if (isSessionForeground(sessionId)) {
-    useChatStore.getState().appendToolUse(sessionId, messageId, normalizedToolUse)
+    queueForegroundMutation(() =>
+      useChatStore.getState().appendToolUse(sessionId, messageId, normalizedToolUse)
+    )
     return
   }
 
@@ -390,7 +424,9 @@ export function updateRuntimeToolUseInput(
   })
 
   if (isSessionForeground(sessionId)) {
-    useChatStore.getState().updateToolUseInput(sessionId, messageId, toolUseId, input)
+    queueForegroundMutation(() =>
+      useChatStore.getState().updateToolUseInput(sessionId, messageId, toolUseId, input)
+    )
     return
   }
 
@@ -413,7 +449,9 @@ export function appendRuntimeContentBlock(
   emitSessionRuntimeSync({ kind: 'append_content_block', sessionId, messageId, block })
 
   if (isSessionForeground(sessionId)) {
-    useChatStore.getState().appendContentBlock(sessionId, messageId, block)
+    queueForegroundMutation(() =>
+      useChatStore.getState().appendContentBlock(sessionId, messageId, block)
+    )
     return
   }
 

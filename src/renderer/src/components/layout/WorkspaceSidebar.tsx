@@ -15,7 +15,6 @@ import {
   FileText,
   FolderInput,
   FolderOpen,
-  FolderPlus,
   GitBranch,
   History,
   Loader2,
@@ -449,6 +448,7 @@ export function WorkspaceSidebar(): React.JSX.Element {
       const isRunning = projectSessions.some((session) => {
         return (
           runningSessions[session.id] === 'running' ||
+          runningSessions[session.id] === 'retrying' ||
           runningSubAgentSessionIds.has(session.id) ||
           runningBackgroundSessionIds.has(session.id) ||
           streamingSessionIds.has(session.id) ||
@@ -601,14 +601,6 @@ export function WorkspaceSidebar(): React.JSX.Element {
     [importProjectArchive, t]
   )
 
-  const handleCreateProject = useCallback(() => {
-    setFolderPickerTarget({
-      type: 'create',
-      projectName: 'New Project',
-      preferredSection: 'local'
-    })
-  }, [])
-
   const handleCreateProjectWithDirectory = useCallback(
     async (workingFolder: string, sshConnectionId: string | null) => {
       const projectId = await createProject({
@@ -681,6 +673,7 @@ export function WorkspaceSidebar(): React.JSX.Element {
     } else {
       const hasRunning =
         runningSessions[deleteTarget.id] === 'running' ||
+        runningSessions[deleteTarget.id] === 'retrying' ||
         runningSubAgentSessionIds.has(deleteTarget.id) ||
         runningBackgroundSessionIds.has(deleteTarget.id) ||
         streamingSessionIds.has(deleteTarget.id) ||
@@ -787,8 +780,10 @@ export function WorkspaceSidebar(): React.JSX.Element {
     active: boolean
   ): React.JSX.Element => {
     void pendingQueueSignature
+    const sessionRunStatus = runningSessions[session.id]
     const isRunning =
-      runningSessions[session.id] === 'running' ||
+      sessionRunStatus === 'running' ||
+      sessionRunStatus === 'retrying' ||
       runningSubAgentSessionIds.has(session.id) ||
       runningBackgroundSessionIds.has(session.id) ||
       streamingSessionIds.has(session.id) ||
@@ -811,7 +806,11 @@ export function WorkspaceSidebar(): React.JSX.Element {
           >
             <span className="inline-flex size-3.5 shrink-0 items-center justify-center">
               {isRunning ? (
-                <Loader2 className="size-3.5 shrink-0 animate-spin text-primary" />
+                <Loader2
+                  className={`size-3.5 shrink-0 animate-spin ${
+                    sessionRunStatus === 'retrying' ? 'text-amber-500' : 'text-primary'
+                  }`}
+                />
               ) : session.pinned ? (
                 <Pin className="size-3.5 text-amber-500" />
               ) : (
@@ -980,6 +979,7 @@ export function WorkspaceSidebar(): React.JSX.Element {
     [t]
   )
 
+
   return (
     <>
       <aside
@@ -992,7 +992,9 @@ export function WorkspaceSidebar(): React.JSX.Element {
             isMac ? 'pl-[78px]' : ''
           )}
         >
-          <div className="min-w-0 flex-1 truncate text-sm font-semibold text-sidebar-foreground/90">
+          <div
+            className="min-w-0 flex-1 truncate text-sm font-semibold text-sidebar-foreground/90"
+          >
             OpenCowork
           </div>
           <Button
@@ -1071,59 +1073,6 @@ export function WorkspaceSidebar(): React.JSX.Element {
             {navItems.slice(3).map(renderNavItem)}
           </div>
 
-          <div className="mt-1 flex items-center justify-between gap-2 px-2 pb-1 pt-1">
-            <div className="flex min-w-0 items-center gap-1.5">
-              <span className="text-[9px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/80">
-                {t('sidebar.projects')}
-              </span>
-              <span className="rounded-full border border-border/60 bg-muted/45 px-1 py-0.5 text-[9px] text-muted-foreground">
-                {visibleProjects.length}
-              </span>
-            </div>
-            <div className="flex items-center gap-0.5">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-4"
-                    title={tCommon('action.more', { defaultValue: 'More' })}
-                  >
-                    <MoreHorizontal className="size-2.5" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-52">
-                  <DropdownMenuItem onClick={() => importSessionInputRef.current?.click()}>
-                    <Upload className="size-4" />
-                    {t('sidebar.importSession')}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => importProjectInputRef.current?.click()}>
-                    <FolderInput className="size-4" />
-                    {t('sidebar.importProject')}
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    variant="destructive"
-                    onSelect={() => deferDropdownAction(() => void handleClearAllSessions())}
-                    disabled={sessions.length === 0}
-                  >
-                    <Trash2 className="size-4" />
-                    {t('sidebar.deleteAllSessions')}
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-4"
-                onClick={() => void handleCreateProject()}
-                title={t('sidebar.newProject')}
-              >
-                <FolderPlus className="size-2.5" />
-              </Button>
-            </div>
-          </div>
-
           <div ref={treeScrollRef} className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
             {projectGroups.length === 0 ? (
               <div className="rounded-lg border border-dashed border-border/60 px-3.5 py-5 text-center text-[12px] text-muted-foreground">
@@ -1163,6 +1112,7 @@ export function WorkspaceSidebar(): React.JSX.Element {
                               SIDEBAR_TREE_ROW_CLASS,
                               isProjectActive ? SIDEBAR_TREE_ACTIVE_CLASS : SIDEBAR_TREE_HOVER_CLASS
                             )}
+                            title={project.workingFolder ?? project.name}
                           >
                             <Button
                               variant="ghost"
@@ -1185,7 +1135,7 @@ export function WorkspaceSidebar(): React.JSX.Element {
                               type="button"
                               className="min-w-0 flex-1 rounded-md px-1 py-1 text-left"
                               onClick={() => toggleProjectCollapsed(project.id)}
-                              title={projectToggleTitle}
+                              title={project.workingFolder ?? project.name}
                             >
                               <div className="flex min-w-0 items-center gap-1.5">
                                 <FolderOpen
@@ -1460,7 +1410,7 @@ export function WorkspaceSidebar(): React.JSX.Element {
                       </ContextMenu>
 
                       {!isCollapsed ? (
-                        <div className="space-y-0.5 pl-7">
+                        <div className="space-y-0.5 pl-7" title={project.workingFolder ?? project.name}>
                           {displayedSessions.length > 0 ? (
                             <>
                               {displayedSessions.map((session) =>
@@ -1496,11 +1446,7 @@ export function WorkspaceSidebar(): React.JSX.Element {
                                 </button>
                               ) : null}
                             </>
-                          ) : (
-                            <div className="px-1.5 py-1 text-[10px] text-muted-foreground">
-                              {t('sidebar.noProjectSessions')}
-                            </div>
-                          )}
+                          ) : null}
                         </div>
                       ) : null}
                     </div>

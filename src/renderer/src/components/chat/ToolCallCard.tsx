@@ -44,6 +44,65 @@ interface ToolCallCardProps {
   completedAt?: number
 }
 
+function shallowEqualRecord(prev: Record<string, unknown>, next: Record<string, unknown>): boolean {
+  if (prev === next) return true
+  const prevKeys = Object.keys(prev)
+  const nextKeys = Object.keys(next)
+  if (prevKeys.length !== nextKeys.length) return false
+  for (const key of prevKeys) {
+    if (!Object.prototype.hasOwnProperty.call(next, key)) return false
+    if (!Object.is(prev[key], next[key])) return false
+  }
+  return true
+}
+
+function toolResultContentEqual(
+  prev: ToolResultContent | undefined,
+  next: ToolResultContent | undefined
+): boolean {
+  if (prev === next) return true
+  if (prev === undefined || next === undefined) return false
+  if (typeof prev === 'string' || typeof next === 'string') return prev === next
+  if (prev.length !== next.length) return false
+  for (let i = 0; i < prev.length; i++) {
+    const prevBlock = prev[i]
+    const nextBlock = next[i]
+    if (prevBlock === nextBlock) continue
+    if (prevBlock.type !== nextBlock.type) return false
+    if (prevBlock.type === 'text' && nextBlock.type === 'text') {
+      if (prevBlock.text !== nextBlock.text) return false
+      continue
+    }
+    if (prevBlock.type === 'image' && nextBlock.type === 'image') {
+      if (
+        prevBlock.source.type !== nextBlock.source.type ||
+        prevBlock.source.mediaType !== nextBlock.source.mediaType ||
+        prevBlock.source.data !== nextBlock.source.data ||
+        prevBlock.source.url !== nextBlock.source.url ||
+        prevBlock.source.filePath !== nextBlock.source.filePath
+      ) {
+        return false
+      }
+      continue
+    }
+    return false
+  }
+  return true
+}
+
+function areToolCallCardPropsEqual(prev: ToolCallCardProps, next: ToolCallCardProps): boolean {
+  return (
+    prev.toolUseId === next.toolUseId &&
+    prev.name === next.name &&
+    prev.status === next.status &&
+    prev.error === next.error &&
+    prev.startedAt === next.startedAt &&
+    prev.completedAt === next.completedAt &&
+    shallowEqualRecord(prev.input, next.input) &&
+    toolResultContentEqual(prev.output, next.output)
+  )
+}
+
 /** Extract string representation from ToolResultContent for backward-compat rendering */
 function outputAsString(output: ToolResultContent | undefined): string | undefined {
   if (output === undefined) return undefined
@@ -1880,7 +1939,7 @@ function compactToolPrefixKey(name: string): string | null {
   }
 }
 
-export function ToolCallCard({
+function ToolCallCardInner({
   toolUseId,
   name,
   input,
@@ -1895,8 +1954,18 @@ export function ToolCallCard({
   const isActive = isProcessing || status === 'pending_approval'
   const isTaskTool = ['TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskList'].includes(name)
   const [open, setOpen] = React.useState(isActive)
-  const outputText = outputAsString(output)
-  const summary = inputSummary(name, input, outputText)
+  const prevIsActiveRef = React.useRef(isActive)
+  React.useEffect(() => {
+    if (prevIsActiveRef.current && !isActive) {
+      setOpen(false)
+    }
+    prevIsActiveRef.current = isActive
+  }, [isActive])
+  const outputText = React.useMemo(() => outputAsString(output), [output])
+  const summary = React.useMemo(
+    () => inputSummary(name, input, outputText),
+    [input, name, outputText]
+  )
   const displayName = React.useMemo(
     () => t(`permission.toolLabels.${name}`, { defaultValue: name }),
     [name, t]
@@ -1914,8 +1983,8 @@ export function ToolCallCard({
     ).length
     return t('todo.tasksDone', { completed, total: data.tasks.length })
   }, [name, outputText, summary, t])
-  const outputIsErrorOnly = isErrorOnlyOutput(outputText)
-  const outputError = deriveOutputError(outputText)
+  const outputIsErrorOnly = React.useMemo(() => isErrorOnlyOutput(outputText), [outputText])
+  const outputError = React.useMemo(() => deriveOutputError(outputText), [outputText])
   const suppressErrorPanel = name === 'Bash' && isStructuredBashResult(outputText)
   const displayError = suppressErrorPanel
     ? null
@@ -2213,3 +2282,6 @@ export function ToolCallCard({
     </div>
   )
 }
+
+export const ToolCallCard = React.memo(ToolCallCardInner, areToolCallCardPropsEqual)
+ToolCallCard.displayName = 'ToolCallCard'

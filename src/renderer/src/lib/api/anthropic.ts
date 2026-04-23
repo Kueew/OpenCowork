@@ -195,7 +195,7 @@ class AnthropicProvider implements APIProvider {
       }
     }
 
-    const toolBuffersByBlockIndex = new Map<number, string>()
+    const toolBuffersByBlockIndex = new Map<number, string[]>()
     const toolCallsByBlockIndex = new Map<number, { id: string; name: string }>()
     const emittedThinkingEncrypted = new Set<string>()
 
@@ -250,7 +250,7 @@ class AnthropicProvider implements APIProvider {
         case 'content_block_start': {
           const blockIndex = Number.isFinite(data.index) ? Number(data.index) : -1
           if (data.content_block.type === 'tool_use' && blockIndex >= 0) {
-            toolBuffersByBlockIndex.set(blockIndex, '')
+            toolBuffersByBlockIndex.set(blockIndex, [])
             toolCallsByBlockIndex.set(blockIndex, {
               id: data.content_block.id,
               name: data.content_block.name
@@ -286,8 +286,12 @@ class AnthropicProvider implements APIProvider {
               yield thinkingEncryptedEvent
             }
           } else if (data.delta.type === 'input_json_delta' && blockIndex >= 0) {
-            const next = `${toolBuffersByBlockIndex.get(blockIndex) ?? ''}${data.delta.partial_json}`
-            toolBuffersByBlockIndex.set(blockIndex, next)
+            let chunks = toolBuffersByBlockIndex.get(blockIndex)
+            if (!chunks) {
+              chunks = []
+              toolBuffersByBlockIndex.set(blockIndex, chunks)
+            }
+            chunks.push(data.delta.partial_json)
             const toolCall = toolCallsByBlockIndex.get(blockIndex)
             yield {
               type: 'tool_call_delta',
@@ -302,7 +306,7 @@ class AnthropicProvider implements APIProvider {
           const blockIndex = Number.isFinite(data.index) ? Number(data.index) : -1
           const toolCall = blockIndex >= 0 ? toolCallsByBlockIndex.get(blockIndex) : undefined
           if (toolCall) {
-            const raw = (toolBuffersByBlockIndex.get(blockIndex) ?? '').trim()
+            const raw = (toolBuffersByBlockIndex.get(blockIndex)?.join('') ?? '').trim()
             if (raw) {
               try {
                 yield {
@@ -336,7 +340,7 @@ class AnthropicProvider implements APIProvider {
         case 'message_delta': {
           if (toolCallsByBlockIndex.size > 0) {
             for (const [blockIndex, toolCall] of toolCallsByBlockIndex) {
-              const raw = (toolBuffersByBlockIndex.get(blockIndex) ?? '').trim()
+              const raw = (toolBuffersByBlockIndex.get(blockIndex)?.join('') ?? '').trim()
               let parsed: Record<string, unknown> = {}
               if (raw) {
                 try {

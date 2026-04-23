@@ -2,7 +2,12 @@ import type { ContentBlock, UnifiedMessage } from '@renderer/lib/api/types'
 import type { TeamTask } from '@renderer/lib/agent/teams/types'
 import type { SubAgentState } from '@renderer/stores/agent-store'
 import { buildHistorySnapshot } from './build-history-snapshot'
-import { buildStages, computeMemberProgress, deriveRunStatus, getUsageTokens } from './stage-resolver'
+import {
+  buildStages,
+  computeMemberProgress,
+  deriveRunStatus,
+  getUsageTokens
+} from './stage-resolver'
 import type {
   BuildRunsInput,
   MemberTaskLookup,
@@ -12,10 +17,84 @@ import type {
   TeamCandidate
 } from './types'
 
-const TEAM_TOOL_NAMES = new Set(['TeamCreate', 'TaskCreate', 'TaskUpdate', 'TeamDelete', 'SendMessage'])
+const TEAM_TOOL_NAMES = new Set([
+  'TeamCreate',
+  'TaskCreate',
+  'TaskUpdate',
+  'TeamDelete',
+  'SendMessage'
+])
 const SUBAGENT_TOOL_NAME = 'Task'
 
-function getToolUseBlocks(message: UnifiedMessage): Array<Extract<ContentBlock, { type: 'tool_use' }>> {
+type ByMessageEntry = { primaryRun: OrchestrationRun | null; hiddenToolUseIds: Set<string> }
+
+interface StableEntryCache {
+  entries: Map<string, ByMessageEntry>
+  runSignatures: Map<string, string>
+  hiddenSignatures: Map<string, string>
+}
+
+const stableEntryCacheBySession = new Map<string, StableEntryCache>()
+
+function getStableEntryCache(sessionId: string | null | undefined): StableEntryCache {
+  const key = sessionId ?? '__none__'
+  let cache = stableEntryCacheBySession.get(key)
+  if (!cache) {
+    cache = { entries: new Map(), runSignatures: new Map(), hiddenSignatures: new Map() }
+    stableEntryCacheBySession.set(key, cache)
+  }
+  return cache
+}
+
+function getRunSignature(run: OrchestrationRun | null): string {
+  if (!run) return ''
+  const members = run.members
+    .map(
+      (m) =>
+        `${m.id}:${m.status}:${m.iteration}:${m.progress}:${m.toolCallCount}:${m.completedAt ?? ''}:${m.latestAction}:${m.summary}`
+    )
+    .join('|')
+  return `${run.id}:${run.status}:${run.stageIndex}:${run.stageCount}:${run.selectedMemberId ?? ''}:${run.completedAt ?? ''}:${run.summary}:${run.latestAction}::${members}`
+}
+
+function getHiddenSignature(ids: Set<string>): string {
+  if (ids.size === 0) return ''
+  const arr = Array.from(ids)
+  arr.sort()
+  return arr.join(',')
+}
+
+function stabilizeEntry(
+  cache: StableEntryCache,
+  messageId: string,
+  nextEntry: ByMessageEntry
+): ByMessageEntry {
+  const runSig = getRunSignature(nextEntry.primaryRun)
+  const hiddenSig = getHiddenSignature(nextEntry.hiddenToolUseIds)
+  const prevEntry = cache.entries.get(messageId)
+  const prevRunSig = cache.runSignatures.get(messageId)
+  const prevHiddenSig = cache.hiddenSignatures.get(messageId)
+
+  if (prevEntry && prevRunSig === runSig && prevHiddenSig === hiddenSig) {
+    return prevEntry
+  }
+
+  const stabilized: ByMessageEntry = {
+    primaryRun: prevEntry && prevRunSig === runSig ? prevEntry.primaryRun : nextEntry.primaryRun,
+    hiddenToolUseIds:
+      prevEntry && prevHiddenSig === hiddenSig
+        ? prevEntry.hiddenToolUseIds
+        : nextEntry.hiddenToolUseIds
+  }
+  cache.entries.set(messageId, stabilized)
+  cache.runSignatures.set(messageId, runSig)
+  cache.hiddenSignatures.set(messageId, hiddenSig)
+  return stabilized
+}
+
+function getToolUseBlocks(
+  message: UnifiedMessage
+): Array<Extract<ContentBlock, { type: 'tool_use' }>> {
   if (!Array.isArray(message.content)) return []
   return message.content.filter(
     (block): block is Extract<ContentBlock, { type: 'tool_use' }> => block.type === 'tool_use'
@@ -40,7 +119,8 @@ function getAllSubAgents(input: BuildRunsInput): SubAgentState[] {
 
 function getTeamCandidates(input: BuildRunsInput): TeamCandidate[] {
   const teams = [input.activeTeam, ...input.teamHistory].filter(
-    (team): team is NonNullable<typeof team> => !!team && (!input.sessionId || team.sessionId === input.sessionId)
+    (team): team is NonNullable<typeof team> =>
+      !!team && (!input.sessionId || team.sessionId === input.sessionId)
   )
 
   return teams
@@ -87,11 +167,8 @@ function getLatestAction(summary: string, taskLabel?: string | null): string {
 
 function mapSubAgentToMember(agent: SubAgentState): OrchestrationMember {
   const summary = getMemberSummary(agent.report, agent.streamingText || agent.errorMessage || '')
-  const status: OrchestrationMember['status'] = agent.success === false
-    ? 'failed'
-    : agent.isRunning
-      ? 'working'
-      : 'completed'
+  const status: OrchestrationMember['status'] =
+    agent.success === false ? 'failed' : agent.isRunning ? 'working' : 'completed'
 
   return {
     id: agent.toolUseId,
@@ -126,7 +203,10 @@ function mapSubAgentToMember(agent: SubAgentState): OrchestrationMember {
   }
 }
 
-function mapTeamMember(teamMember: NonNullable<TeamCandidate['team']>['members'][number], taskLookup: MemberTaskLookup): OrchestrationMember {
+function mapTeamMember(
+  teamMember: NonNullable<TeamCandidate['team']>['members'][number],
+  taskLookup: MemberTaskLookup
+): OrchestrationMember {
   const currentTask =
     (teamMember.currentTaskId ? taskLookup.byId.get(teamMember.currentTaskId) : null) ??
     taskLookup.byOwner.get(teamMember.name) ??
@@ -258,7 +338,9 @@ function buildTeamRun(candidate: TeamCandidate): OrchestrationRun {
 function getSourceMessageIdForAgent(agent: SubAgentState, messages: UnifiedMessage[]): string {
   const sourceMessage = messages.find((message) => {
     if (message.role !== 'assistant') return false
-    return getToolUseBlocks(message).some((block) => block.id === agent.toolUseId && block.name === SUBAGENT_TOOL_NAME)
+    return getToolUseBlocks(message).some(
+      (block) => block.id === agent.toolUseId && block.name === SUBAGENT_TOOL_NAME
+    )
   })
   return sourceMessage?.id ?? `single-snapshot:${agent.toolUseId}`
 }
@@ -266,14 +348,14 @@ function getSourceMessageIdForAgent(agent: SubAgentState, messages: UnifiedMessa
 export function buildOrchestrationRuns(input: BuildRunsInput): OrchestrationDerivedState {
   const runs: OrchestrationRun[] = []
   const byId = new Map<string, OrchestrationRun>()
-  const byMessageId = new Map<string, { primaryRun: OrchestrationRun | null; hiddenToolUseIds: Set<string> }>()
+  const rawByMessageId = new Map<string, ByMessageEntry>()
 
   const teamCandidates = getTeamCandidates(input)
   for (const candidate of teamCandidates) {
     const run = buildTeamRun(candidate)
     runs.push(run)
     byId.set(run.id, run)
-    byMessageId.set(run.sourceMessageId, {
+    rawByMessageId.set(run.sourceMessageId, {
       primaryRun: run,
       hiddenToolUseIds: new Set(run.sourceToolUseIds)
     })
@@ -291,7 +373,7 @@ export function buildOrchestrationRuns(input: BuildRunsInput): OrchestrationDeri
     const run = buildSingleAgentRun(agent, getSourceMessageIdForAgent(agent, input.messages))
     runs.push(run)
     byId.set(run.id, run)
-    byMessageId.set(run.sourceMessageId, {
+    rawByMessageId.set(run.sourceMessageId, {
       primaryRun: run,
       hiddenToolUseIds: new Set(run.sourceToolUseIds)
     })
@@ -299,14 +381,14 @@ export function buildOrchestrationRuns(input: BuildRunsInput): OrchestrationDeri
 
   for (const message of input.messages) {
     if (message.role !== 'assistant' || !Array.isArray(message.content)) continue
-    const binding = byMessageId.get(message.id)
+    const binding = rawByMessageId.get(message.id)
     const hiddenToolUseIds = new Set(binding?.hiddenToolUseIds ?? [])
     for (const block of getToolUseBlocks(message)) {
       if (TEAM_TOOL_NAMES.has(block.name)) hiddenToolUseIds.add(block.id)
       if (block.name === SUBAGENT_TOOL_NAME) hiddenToolUseIds.add(block.id)
     }
     if (binding || hiddenToolUseIds.size > 0) {
-      byMessageId.set(message.id, {
+      rawByMessageId.set(message.id, {
         primaryRun: binding?.primaryRun ?? null,
         hiddenToolUseIds
       })
@@ -314,5 +396,21 @@ export function buildOrchestrationRuns(input: BuildRunsInput): OrchestrationDeri
   }
 
   runs.sort((left, right) => right.startedAt - left.startedAt)
+
+  // Stabilize entry references across calls so that MessageRow memo can short-circuit via ===.
+  const cache = getStableEntryCache(input.sessionId)
+  const byMessageId = new Map<string, ByMessageEntry>()
+  for (const [messageId, entry] of rawByMessageId) {
+    byMessageId.set(messageId, stabilizeEntry(cache, messageId, entry))
+  }
+  // Evict cache entries no longer present to avoid unbounded growth.
+  for (const key of cache.entries.keys()) {
+    if (!byMessageId.has(key)) {
+      cache.entries.delete(key)
+      cache.runSignatures.delete(key)
+      cache.hiddenSignatures.delete(key)
+    }
+  }
+
   return { runs, byId, byMessageId }
 }
