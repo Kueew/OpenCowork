@@ -75,7 +75,6 @@ export function registerSidecarHandlers(): void {
   manager.setEventHandler((method, params) => {
     if (method === 'agent/event-batch') {
       const payload = params as { runId: string; events: Array<Record<string, unknown>> }
-      console.log(`[Sidecar] flush runId=${payload.runId} events=${payload.events.length}`)
       for (const win of BrowserWindow.getAllWindows()) {
         safeSendToWindow(win, 'sidecar:event', {
           method: 'agent/event-batch',
