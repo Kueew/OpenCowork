@@ -676,6 +676,30 @@ export const routinAiPreset: BuiltinProviderPreset = {
       type: 'openai-responses'
     },
     {
+      id: 'gpt-5.5',
+      name: 'GPT 5.5',
+      icon: 'openai',
+      enabled: true,
+      serviceTier: 'priority',
+      contextLength: 268_000,
+      maxOutputTokens: 128_000,
+      supportsVision: true,
+      supportsFunctionCall: false,
+      inputPrice: 5,
+      outputPrice: 30,
+      cacheHitPrice: 0.5,
+      supportsThinking: true,
+      thinkingConfig: {
+        bodyParams: {},
+        reasoningEffortLevels: ['none', 'low', 'medium', 'high', 'xhigh'],
+        defaultReasoningEffort: 'medium'
+      },
+      responseSummary: 'detailed',
+      enablePromptCache: true,
+      enableSystemPromptCache: true,
+      type: 'openai-responses'
+    },
+    {
       id: 'gpt-5-pro',
       name: 'GPT 5 Pro',
       icon: 'openai',
