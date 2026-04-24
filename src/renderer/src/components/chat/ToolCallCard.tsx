@@ -43,6 +43,11 @@ interface ToolCallCardProps {
   completedAt?: number
 }
 
+function getBashInputTerminalId(input: Record<string, unknown>): string | null {
+  const terminalId = input.terminalId
+  return typeof terminalId === 'string' && terminalId.trim() ? terminalId.trim() : null
+}
+
 function shallowEqualRecord(prev: Record<string, unknown>, next: Record<string, unknown>): boolean {
   if (prev === next) return true
   const prevKeys = Object.keys(prev)
@@ -632,10 +637,12 @@ function ShellTextPane({
 
 function BashOutputBlock({
   output,
+  input,
   toolUseId,
   status
 }: {
   output: string
+  input: Record<string, unknown>
   toolUseId?: string
   status: ToolCallStatus | 'completed'
 }): React.JSX.Element {
@@ -670,7 +677,8 @@ function BashOutputBlock({
 
   const processId = parsed?.processId ? String(parsed.processId) : null
   const process = useAgentStore((s) => (processId ? s.backgroundProcesses[processId] : undefined))
-  const terminalId = process?.terminalId ?? parsed?.terminalId ?? null
+  const inputTerminalId = React.useMemo(() => getBashInputTerminalId(input), [input])
+  const terminalId = process?.terminalId ?? parsed?.terminalId ?? inputTerminalId ?? null
   const isProcessRunning = process?.status === 'running'
   const exitCode = process?.exitCode ?? parsed?.exitCode
   const statusText = process ? t(`toolCall.processStatus.${process.status}`) : null
@@ -2222,9 +2230,10 @@ function ToolCallCardInner({
                     )}
                   {shouldRenderOutputPanels &&
                     name === 'Bash' &&
-                    (status === 'running' || outputText) && (
+                    (status === 'running' || outputText || getBashInputTerminalId(input)) && (
                       <BashOutputBlock
                         output={outputText ?? ''}
+                        input={input}
                         toolUseId={toolUseId}
                         status={status}
                       />

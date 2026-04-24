@@ -234,6 +234,7 @@ export function registerShellHandlers(): void {
       const timeout = Math.min(args.timeout ?? DEFAULT_TIMEOUT, MAX_TIMEOUT)
       const execId = args.execId
       const startedAt = Date.now()
+      let resolved = false
 
       const created = await createTerminalSession(
         {
@@ -277,8 +278,9 @@ export function registerShellHandlers(): void {
         }
 
         const finalize = (): void => {
-          if (settled) return
+          if (settled || resolved) return
           settled = true
+          resolved = true
           if (timeoutTimer) {
             clearTimeout(timeoutTimer)
             timeoutTimer = null

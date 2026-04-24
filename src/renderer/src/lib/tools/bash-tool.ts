@@ -114,7 +114,10 @@ function appendPreview(
   return next
 }
 
-function buildLivePreviewPayload(preview: LiveShellPreview): string {
+function buildLivePreviewPayload(
+  preview: LiveShellPreview,
+  metadata?: { processId?: string; terminalId?: string }
+): string {
   const stderr =
     preview.errorLines.length > 0
       ? `${preview.errorLines.join('\n')}${preview.stderr ? `\n\n[last stderr lines]\n${preview.stderr}` : ''}`
@@ -122,6 +125,8 @@ function buildLivePreviewPayload(preview: LiveShellPreview): string {
   return encodeStructuredToolResult({
     stdout: preview.stdout,
     stderr,
+    ...(metadata?.processId ? { processId: metadata.processId } : {}),
+    ...(metadata?.terminalId ? { terminalId: metadata.terminalId } : {}),
     summary: {
       live: true,
       mode: 'tail',
@@ -256,12 +261,13 @@ const bashHandler: ToolHandler = {
     }
     let outputTimer: ReturnType<typeof setTimeout> | null = null
     let lastOutputFlush = 0
+    let foregroundResultMetadata: { processId?: string; terminalId?: string } | undefined
     const flushOutput = (): void => {
       outputTimer = null
       lastOutputFlush = Date.now()
       if (toolUseId) {
         useAgentStore.getState().updateToolCall(toolUseId, {
-          output: buildLivePreviewPayload(preview)
+          output: buildLivePreviewPayload(preview, foregroundResultMetadata)
         })
       }
     }
@@ -295,12 +301,17 @@ const bashHandler: ToolHandler = {
     }
 
     try {
-      const result = await ctx.ipc.invoke(IPC.SHELL_EXEC, {
+      const result = (await ctx.ipc.invoke(IPC.SHELL_EXEC, {
         command,
         timeout: input.timeout ?? DEFAULT_BASH_TIMEOUT_MS,
         cwd: ctx.workingFolder,
         execId
-      })
+      })) as { processId?: string; terminalId?: string }
+      foregroundResultMetadata = {
+        processId: result.processId,
+        terminalId: result.terminalId
+      }
+      flushOutput()
       return encodeStructuredToolResult(result as Record<string, unknown>)
     } finally {
       ctx.signal.removeEventListener('abort', abortHandler)

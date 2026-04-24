@@ -2784,74 +2784,87 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
 
         {/* Models */}
         <section className="flex flex-col space-y-3">
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div className="min-w-0 flex-1">
-              <label className="text-sm font-medium">{t('provider.modelList')}</label>
-              <p className="text-[11px] text-muted-foreground">
-                {t('provider.modelCount', {
-                  total: provider.models.length,
-                  enabled: enabledModelCount
-                })}
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center justify-end gap-1.5">
-              {provider.models.length > 0 && (
-                <>
+          <div className="rounded-xl border bg-muted/20 p-3">
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0 flex-1">
+                  <label className="text-sm font-medium">{t('provider.modelList')}</label>
+                  <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
+                    {t('provider.modelCount', {
+                      total: provider.models.length,
+                      enabled: enabledModelCount
+                    })}
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5 self-start rounded-full border bg-background px-2 py-1 text-[11px] text-muted-foreground">
+                  <span className="font-medium text-foreground">{filteredModels.length}</span>
+                  <span>/</span>
+                  <span>{provider.models.length}</span>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                <div className="relative flex-1 lg:max-w-xs">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    placeholder={t('provider.searchModels')}
+                    value={modelSearch}
+                    onChange={(e) => setModelSearch(e.target.value)}
+                    className="h-9 border-0 bg-background pl-8 text-xs shadow-none"
+                  />
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5 lg:justify-end">
+                  {provider.models.length > 0 && (
+                    <>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 rounded-full px-3 text-[11px]"
+                        disabled={!hasDisabledModels}
+                        onClick={() => handleSetAllModelsEnabled(true)}
+                      >
+                        {t('provider.enableAllModels')}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 rounded-full px-3 text-[11px]"
+                        disabled={!hasEnabledModels}
+                        onClick={() => handleSetAllModelsEnabled(false)}
+                      >
+                        {t('provider.disableAllModels')}
+                      </Button>
+                    </>
+                  )}
                   <Button
                     variant="outline"
                     size="sm"
-                    className="h-7 px-2 text-[11px]"
-                    disabled={!hasDisabledModels}
-                    onClick={() => handleSetAllModelsEnabled(true)}
+                    className="h-8 gap-1 rounded-full px-3 text-[11px]"
+                    disabled={fetchingModels}
+                    onClick={handleFetchModels}
                   >
-                    {t('provider.enableAllModels')}
+                    {fetchingModels ? (
+                      <Loader2 className="size-3 animate-spin" />
+                    ) : (
+                      <RefreshCw className="size-3" />
+                    )}
+                    {t('provider.fetchModels')}
                   </Button>
                   <Button
                     variant="outline"
                     size="sm"
-                    className="h-7 px-2 text-[11px]"
-                    disabled={!hasEnabledModels}
-                    onClick={() => handleSetAllModelsEnabled(false)}
+                    className="h-8 w-8 rounded-full p-0"
+                    onClick={() => setAddModelOpen(true)}
                   >
-                    {t('provider.disableAllModels')}
+                    <Plus className="size-3.5" />
                   </Button>
-                  <div className="relative basis-full sm:basis-auto">
-                    <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3 text-muted-foreground" />
-                    <Input
-                      placeholder={t('provider.searchModels')}
-                      value={modelSearch}
-                      onChange={(e) => setModelSearch(e.target.value)}
-                      className="h-7 w-full sm:w-32 pl-7 text-[11px]"
-                    />
-                  </div>
-                </>
-              )}
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 gap-1 text-[11px]"
-                disabled={fetchingModels}
-                onClick={handleFetchModels}
-              >
-                {fetchingModels ? (
-                  <Loader2 className="size-3 animate-spin" />
-                ) : (
-                  <RefreshCw className="size-3" />
-                )}
-                {t('provider.fetchModels')}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 w-7 p-0"
-                onClick={() => setAddModelOpen(true)}
-              >
-                <Plus className="size-3.5" />
-              </Button>
+                </div>
+              </div>
             </div>
           </div>
 
-          <div className="flex min-h-[240px] max-h-[420px] flex-col rounded-lg border overflow-hidden">
+          <div className="flex min-h-[320px] max-h-[420px] flex-col overflow-hidden rounded-xl border bg-background">
             {filteredModels.length === 0 ? (
               <div className="flex flex-1 items-center justify-center p-6 text-center text-xs text-muted-foreground">
                 {provider.models.length === 0
@@ -2919,23 +2932,25 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
                   return (
                     <div
                       key={model.id}
-                      className="flex items-center gap-3 px-3 py-2 hover:bg-muted/30 transition-colors group"
+                      className="group flex items-center gap-3 border-b border-border/60 px-4 py-3 transition-colors last:border-b-0 hover:bg-muted/30"
                     >
-                      <ModelIcon
-                        icon={model.icon}
-                        modelId={model.id}
-                        providerBuiltinId={provider.builtinId}
-                        size={16}
-                        className="shrink-0 opacity-40"
-                      />
-                      <div className="flex-1 min-w-0">
+                      <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted/50 ring-1 ring-border/50">
+                        <ModelIcon
+                          icon={model.icon}
+                          modelId={model.id}
+                          providerBuiltinId={provider.builtinId}
+                          size={18}
+                          className="shrink-0 opacity-70"
+                        />
+                      </div>
+                      <div className="flex-1 min-w-0 space-y-1">
                         <div className="flex items-center gap-2">
-                          <p className="text-xs font-medium truncate">{model.name}</p>
-                          <span className="text-[10px] text-muted-foreground/50 truncate">
+                          <p className="text-sm font-medium truncate">{model.name}</p>
+                          <span className="truncate rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
                             {model.id}
                           </span>
                         </div>
-                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted-foreground/40">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-muted-foreground/70">
                           {model.contextLength && (
                             <span>{Math.round(model.contextLength / 1024)}K context</span>
                           )}
@@ -2985,52 +3000,56 @@ function ProviderConfigPanel({ provider }: { provider: AIProvider }): React.JSX.
                           )}
                         </div>
                       </div>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <button
-                            type="button"
-                            className="size-5 flex items-center justify-center rounded transition-colors text-muted-foreground/20 hover:text-muted-foreground/70 hover:bg-muted/40 opacity-0 group-hover:opacity-100"
-                            onClick={() => setEditingModel(model)}
-                          >
-                            <Pencil className="size-3" />
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent side="top" className="text-[11px]">
-                          {t('provider.editModel')}
-                        </TooltipContent>
-                      </Tooltip>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <button
-                            type="button"
-                            className={`size-5 flex items-center justify-center rounded transition-colors ${
-                              model.supportsThinking
-                                ? 'text-violet-500 hover:bg-violet-500/10'
-                                : 'text-muted-foreground/20 hover:text-muted-foreground/50 hover:bg-muted/40'
-                            } opacity-0 group-hover:opacity-100`}
-                            onClick={() => setEditingThinkingModel(model)}
-                          >
-                            <Brain className="size-3" />
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent side="top" className="text-[11px]">
-                          {model.supportsThinking
-                            ? t('provider.editThinkConfig')
-                            : t('provider.configThinkSupport')}
-                        </TooltipContent>
-                      </Tooltip>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all"
-                        onClick={() => removeModel(provider.id, model.id)}
-                      >
-                        <Trash2 className="size-3" />
-                      </Button>
-                      <Switch
-                        checked={model.enabled}
-                        onCheckedChange={() => toggleModelEnabled(provider.id, model.id)}
-                      />
+                      <div className="ml-auto flex items-center gap-1.5 self-start pl-2">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              type="button"
+                              className="flex size-7 items-center justify-center rounded-full border border-transparent text-muted-foreground/40 transition-all hover:border-border hover:bg-background hover:text-foreground group-hover:opacity-100 sm:opacity-0"
+                              onClick={() => setEditingModel(model)}
+                            >
+                              <Pencil className="size-3.5" />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="text-[11px]">
+                            {t('provider.editModel')}
+                          </TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              type="button"
+                              className={`flex size-7 items-center justify-center rounded-full border border-transparent transition-all hover:border-border hover:bg-background group-hover:opacity-100 sm:opacity-0 ${
+                                model.supportsThinking
+                                  ? 'text-violet-500 hover:text-violet-500'
+                                  : 'text-muted-foreground/40 hover:text-foreground'
+                              }`}
+                              onClick={() => setEditingThinkingModel(model)}
+                            >
+                              <Brain className="size-3.5" />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="text-[11px]">
+                            {model.supportsThinking
+                              ? t('provider.editThinkConfig')
+                              : t('provider.configThinkSupport')}
+                          </TooltipContent>
+                        </Tooltip>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 w-7 rounded-full p-0 text-muted-foreground/40 transition-all hover:bg-background hover:text-destructive group-hover:opacity-100 sm:opacity-0"
+                          onClick={() => removeModel(provider.id, model.id)}
+                        >
+                          <Trash2 className="size-3.5" />
+                        </Button>
+                        <div className="rounded-full border bg-background px-1.5 py-1">
+                          <Switch
+                            checked={model.enabled}
+                            onCheckedChange={() => toggleModelEnabled(provider.id, model.id)}
+                          />
+                        </div>
+                      </div>
                     </div>
                   )
                 })}
