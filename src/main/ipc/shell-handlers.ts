@@ -1,13 +1,12 @@
 import { ipcMain, shell, BrowserWindow } from 'electron'
 import { safeSendToWindow } from '../window-ipc'
-import { spawn } from 'child_process'
+import { createTerminalSession, getTerminalSessionSnapshot, killTerminalSession } from './terminal-handlers'
 
-const ANSI_ESCAPE_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`, 'g')
+const ANSI_ESCAPE_RE = new RegExp(`${String.fromCharCode(27)}\[[0-9;?]*[ -/]*[@-~]`, 'g')
 const COMPACT_OUTPUT_CHAR_THRESHOLD = 6000
 const COMPACT_OUTPUT_LINE_THRESHOLD = 160
 const MAX_RETURNED_STDOUT_CHARS = 12000
 const MAX_RETURNED_STDERR_CHARS = 8000
-const MAX_LIVE_BUFFER_CHARS = 2_000_000
 const HEAD_LINE_COUNT = 8
 const TAIL_LINE_COUNT = 60
 const MAX_ERROR_LINE_COUNT = 30
@@ -15,7 +14,6 @@ const MAX_WARNING_LINE_COUNT = 20
 const ERROR_LIKE_RE =
   /\b(error|failed|exception|traceback|fatal|panic|cannot|unable|undefined reference|syntax error|test(?:s)? failed?)\b/i
 const WARNING_LIKE_RE = /\bwarn(?:ing)?\b/i
-const SHELL_OUTPUT_ENCODING = 'utf-8'
 
 type ShellStream = 'stdout' | 'stderr'
 
@@ -46,12 +44,6 @@ interface CompactStreamResult {
   compacted: boolean
 }
 
-interface ShellLaunchSpec {
-  file: string
-  args: string[]
-  label: string
-}
-
 interface ShellExecutionTiming {
   totalMs: number
   spawnMs: number
@@ -59,31 +51,6 @@ interface ShellExecutionTiming {
   shell: string
   timedOut?: boolean
   aborted?: boolean
-}
-
-function resolveShellLaunch(command: string): ShellLaunchSpec {
-  if (process.platform === 'win32') {
-    const shellPath = process.env.ComSpec?.trim() || 'cmd.exe'
-    return {
-      file: shellPath,
-      args: ['/d', '/s', '/c', command],
-      label: shellPath
-    }
-  }
-
-  return {
-    file: '/bin/sh',
-    args: ['-c', command],
-    label: '/bin/sh'
-  }
-}
-
-function createOutputDecoder(): TextDecoder {
-  return new TextDecoder(SHELL_OUTPUT_ENCODING)
-}
-
-function decodeOutputChunk(decoder: TextDecoder, data: Buffer): string {
-  return decoder.decode(data, { stream: true })
 }
 
 function stripAnsi(raw: string): string {
@@ -188,12 +155,16 @@ function buildShellResult(payload: {
   stdout: string
   stderr: string
   error?: string
+  processId?: string
+  terminalId?: string
   timing?: ShellExecutionTiming
 }): {
   exitCode: number
   stdout: string
   stderr: string
   error?: string
+  processId?: string
+  terminalId?: string
   summary: ShellOutputSummary
 } {
   const stdout = compactStreamOutput(
@@ -214,6 +185,8 @@ function buildShellResult(payload: {
     stdout: stdout.text,
     stderr: stderr.text,
     ...(payload.error ? { error: payload.error } : {}),
+    ...(payload.processId ? { processId: payload.processId } : {}),
+    ...(payload.terminalId ? { terminalId: payload.terminalId } : {}),
     summary: {
       mode: stdout.compacted || stderr.compacted ? 'compact' : 'full',
       noisy: stdout.compacted || stderr.compacted,
@@ -240,148 +213,60 @@ function buildShellResult(payload: {
   }
 }
 
-async function terminateChildProcess(child: ReturnType<typeof spawn>): Promise<void> {
-  if (child.exitCode !== null) return
-
-  if (process.platform === 'win32') {
-    const pid = child.pid
-    if (pid) {
-      await new Promise<void>((resolve) => {
-        const killer = spawn('taskkill', ['/pid', String(pid), '/f', '/t'], {
-          shell: true,
-          windowsHide: true
-        })
-        killer.on('error', () => resolve())
-        killer.on('close', () => resolve())
-      })
-      return
-    }
-  }
-
-  try {
-    child.kill('SIGTERM')
-  } catch {
-    return
-  }
-
-  await new Promise((resolve) => setTimeout(resolve, 300))
-  if (child.exitCode === null) {
-    try {
-      child.kill('SIGKILL')
-    } catch {
-      // ignore
-    }
+async function terminateShellTerminal(terminalId: string): Promise<void> {
+  const result = killTerminalSession(terminalId)
+  if (result.error) {
+    throw new Error(result.error)
   }
 }
 
 export function registerShellHandlers(): void {
   const runningShellProcesses = new Map<
     string,
-    { child: ReturnType<typeof spawn>; abort: () => void }
+    { terminalId: string; abort: (reason?: 'user' | 'timeout') => void }
   >()
 
   ipcMain.handle(
     'shell:exec',
-    async (_event, args: { command: string; timeout?: number; cwd?: string; execId?: string }) => {
+    async (event, args: { command: string; timeout?: number; cwd?: string; execId?: string }) => {
       const DEFAULT_TIMEOUT = 600_000
       const MAX_TIMEOUT = 3_600_000
       const timeout = Math.min(args.timeout ?? DEFAULT_TIMEOUT, MAX_TIMEOUT)
       const execId = args.execId
+      const startedAt = Date.now()
 
-      return new Promise((resolve) => {
-        let stdout = ''
-        let stderr = ''
-        const stdoutDecoder = createOutputDecoder()
-        const stderrDecoder = createOutputDecoder()
-        const startedAt = Date.now()
-        const launch = resolveShellLaunch(args.command)
-        let killed = false
-        let abortReason: 'user' | 'timeout' | null = null
-        let settled = false
-        let timeoutTimer: ReturnType<typeof setTimeout> | null = null
-        let forceResolveTimer: ReturnType<typeof setTimeout> | null = null
-        let exitResolveTimer: ReturnType<typeof setTimeout> | null = null
-        let firstChunkAt: number | null = null
-
-        const child = spawn(launch.file, launch.args, {
+      const created = await createTerminalSession(
+        {
           cwd: args.cwd || process.cwd(),
-          shell: false,
-          stdio: ['ignore', 'pipe', 'pipe'],
-          windowsHide: true,
-          env: {
-            ...process.env,
-            PYTHONIOENCODING: 'utf-8',
-            PYTHONUTF8: '1',
-            PYTHONUNBUFFERED: '1'
+          command: args.command,
+          title: 'Shell',
+          shell: process.platform === 'win32' ? 'powershell.exe' : undefined
+        },
+        event.sender
+      )
+
+      if (!created.id) {
+        return buildShellResult({
+          exitCode: 1,
+          stdout: '',
+          stderr: created.error ?? 'Failed to create terminal session',
+          timing: {
+            totalMs: Date.now() - startedAt,
+            spawnMs: 0,
+            shell: 'pty'
           }
         })
-        const spawnCompletedAt = Date.now()
+      }
 
-        const finalize = (payload: {
-          exitCode: number
-          stdout: string
-          stderr: string
-          error?: string
-        }): void => {
-          if (settled) return
-          settled = true
-          if (execId) runningShellProcesses.delete(execId)
-          if (timeoutTimer) {
-            clearTimeout(timeoutTimer)
-            timeoutTimer = null
-          }
-          if (forceResolveTimer) {
-            clearTimeout(forceResolveTimer)
-            forceResolveTimer = null
-          }
-          if (exitResolveTimer) {
-            clearTimeout(exitResolveTimer)
-            exitResolveTimer = null
-          }
-          stdout += stdoutDecoder.decode()
-          stderr += stderrDecoder.decode()
-          child.stdout?.removeAllListeners('data')
-          child.stderr?.removeAllListeners('data')
-          child.removeAllListeners('error')
-          child.removeAllListeners('exit')
-          child.removeAllListeners('close')
-          resolve(
-            buildShellResult({
-              ...payload,
-              timing: {
-                totalMs: Date.now() - startedAt,
-                spawnMs: spawnCompletedAt - startedAt,
-                ...(firstChunkAt !== null ? { firstChunkMs: firstChunkAt - startedAt } : {}),
-                shell: launch.label,
-                timedOut: abortReason === 'timeout',
-                aborted: abortReason === 'user'
-              }
-            })
-          )
-        }
+      const terminalId = created.id
+      const spawnCompletedAt = Date.now()
 
-        const requestAbort = (reason: 'user' | 'timeout' = 'user'): void => {
-          if (child.exitCode !== null || settled) return
-          killed = true
-          abortReason = reason
-          void terminateChildProcess(child)
-          if (forceResolveTimer) return
-          forceResolveTimer = setTimeout(() => {
-            if (child.exitCode !== null || settled) return
-            finalize({
-              exitCode: reason === 'timeout' ? 124 : 130,
-              stdout,
-              stderr:
-                reason === 'timeout'
-                  ? `${stderr}\n[Timed out waiting for process termination]`
-                  : `${stderr}\n[Process termination timed out]`
-            })
-          }, 2000)
-        }
-
-        if (execId) {
-          runningShellProcesses.set(execId, { child, abort: requestAbort })
-        }
+      return await new Promise((resolve) => {
+        let settled = false
+        let abortReason: 'user' | 'timeout' | null = null
+        let firstChunkAt: number | null = null
+        let timeoutTimer: ReturnType<typeof setTimeout> | null = null
+        let exitCleanup: (() => void) | null = null
 
         const sendChunk = (chunk: string, stream: ShellStream): void => {
           if (!execId) return
@@ -391,53 +276,80 @@ export function registerShellHandlers(): void {
           }
         }
 
-        child.stdout?.on('data', (data: Buffer) => {
-          if (firstChunkAt === null) firstChunkAt = Date.now()
-          const text = decodeOutputChunk(stdoutDecoder, data)
-          stdout += text
-          if (stdout.length > MAX_LIVE_BUFFER_CHARS) {
-            stdout = stdout.slice(-MAX_LIVE_BUFFER_CHARS)
+        const finalize = (): void => {
+          if (settled) return
+          settled = true
+          if (timeoutTimer) {
+            clearTimeout(timeoutTimer)
+            timeoutTimer = null
           }
-          sendChunk(text, 'stdout')
-        })
+          exitCleanup?.()
+          exitCleanup = null
+          if (execId) runningShellProcesses.delete(execId)
 
-        child.stderr?.on('data', (data: Buffer) => {
-          if (firstChunkAt === null) firstChunkAt = Date.now()
-          const text = decodeOutputChunk(stderrDecoder, data)
-          stderr += text
-          if (stderr.length > MAX_LIVE_BUFFER_CHARS) {
-            stderr = stderr.slice(-MAX_LIVE_BUFFER_CHARS)
-          }
-          sendChunk(text, 'stderr')
-        })
+          const snapshot = getTerminalSessionSnapshot(terminalId)
+          const fullOutput = snapshot?.outputBuffer.map((chunk) => chunk.data).join('') ?? ''
+          const normalized = stripAnsi(fullOutput)
+          const exitCode = snapshot?.exitCode ?? (abortReason === 'timeout' ? 124 : 130)
+          const stderr =
+            exitCode === 0
+              ? ''
+              : abortReason === 'timeout'
+                ? '[Timed out]'
+                : abortReason === 'user'
+                  ? '[Aborted]'
+                  : ''
 
-        child.on('exit', (code) => {
-          if (settled || exitResolveTimer) return
-          exitResolveTimer = setTimeout(() => {
-            finalize({
-              exitCode: killed ? (abortReason === 'timeout' ? 124 : 130) : (code ?? 0),
-              stdout,
-              stderr
+          resolve(
+            buildShellResult({
+              exitCode,
+              stdout: normalized,
+              stderr,
+              processId: terminalId,
+              terminalId,
+              timing: {
+                totalMs: Date.now() - startedAt,
+                spawnMs: spawnCompletedAt - startedAt,
+                ...(firstChunkAt !== null ? { firstChunkMs: firstChunkAt - startedAt } : {}),
+                shell: created.shell ?? 'pty',
+                timedOut: abortReason === 'timeout',
+                aborted: abortReason === 'user'
+              }
             })
-          }, 120)
-        })
+          )
+        }
 
-        child.on('close', (code) => {
-          finalize({
-            exitCode: killed ? (abortReason === 'timeout' ? 124 : 130) : (code ?? 0),
-            stdout,
-            stderr
-          })
-        })
+        const terminalOutputListener = (_event: Electron.IpcMainEvent, payload: unknown): void => {
+          const data = payload as { id?: string; data?: string }
+          if (data.id !== terminalId || !data.data) return
+          if (firstChunkAt === null) firstChunkAt = Date.now()
+          sendChunk(data.data, 'stdout')
+        }
 
-        child.on('error', (err) => {
-          finalize({
-            exitCode: 1,
-            stdout,
-            stderr,
-            error: err.message
+        const terminalExitListener = (_event: Electron.IpcMainEvent, payload: unknown): void => {
+          const data = payload as { id?: string }
+          if (data.id !== terminalId) return
+          finalize()
+        }
+
+        ipcMain.on('terminal:output', terminalOutputListener)
+        ipcMain.on('terminal:exit', terminalExitListener)
+        exitCleanup = () => {
+          ipcMain.removeListener('terminal:output', terminalOutputListener)
+          ipcMain.removeListener('terminal:exit', terminalExitListener)
+        }
+
+        const requestAbort = (reason: 'user' | 'timeout' = 'user'): void => {
+          if (settled) return
+          abortReason = reason
+          void terminateShellTerminal(terminalId).finally(() => {
+            setTimeout(finalize, 80)
           })
-        })
+        }
+
+        if (execId) {
+          runningShellProcesses.set(execId, { terminalId, abort: requestAbort })
+        }
 
         timeoutTimer = setTimeout(() => {
           requestAbort('timeout')
@@ -451,7 +363,7 @@ export function registerShellHandlers(): void {
     if (!execId) return
     const running = runningShellProcesses.get(execId)
     if (!running) return
-    running.abort()
+    running.abort('user')
   })
 
   ipcMain.handle('shell:openPath', async (_event, folderPath: string) => {

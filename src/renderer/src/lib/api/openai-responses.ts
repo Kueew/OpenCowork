@@ -24,8 +24,7 @@ import {
   buildResponsesImageGenerationTool,
   extractResponsesImageBlocks,
   extractResponsesPartialImageBlock,
-  getResponsesImageGenerationErrorMessage,
-  inferResponsesImageGenerationOutputFormat
+  getResponsesImageGenerationErrorMessage
 } from './responses-image-generation'
 import { sanitizeMessagesForToolReplay } from '../tools/tool-input-sanitizer'
 

@@ -31,7 +31,13 @@ interface TerminalListEntry {
   buffer?: TerminalOutputChunk[]
 }
 
-export function LocalTerminal({ terminalId }: { terminalId: string }): React.JSX.Element {
+export function LocalTerminal({
+  terminalId,
+  readOnly = false
+}: {
+  terminalId: string
+  readOnly?: boolean
+}): React.JSX.Element {
   const { t } = useTranslation('ssh')
   const { resolvedTheme } = useTheme()
   const themePreset = useSettingsStore((state) => state.themePreset)
@@ -87,9 +93,11 @@ export function LocalTerminal({ terminalId }: { terminalId: string }): React.JSX
       setHasSelection(term.getSelection().length > 0)
     })
 
-    const dataDisposable = term.onData((data) => {
-      void ipcClient.invoke(IPC.TERMINAL_INPUT, { id: terminalId, data })
-    })
+    const dataDisposable = readOnly
+      ? { dispose: () => {} }
+      : term.onData((data) => {
+          void ipcClient.invoke(IPC.TERMINAL_INPUT, { id: terminalId, data })
+        })
 
     const resizeDisposable = term.onResize(({ cols, rows }) => {
       void ipcClient.invoke(IPC.TERMINAL_RESIZE, { id: terminalId, cols, rows })
@@ -166,7 +174,7 @@ export function LocalTerminal({ terminalId }: { terminalId: string }): React.JSX
       term.dispose()
       termRef.current = null
     }
-  }, [terminalId])
+  }, [readOnly, terminalId])
 
   useEffect(() => {
     const term = termRef.current
@@ -212,7 +220,7 @@ export function LocalTerminal({ terminalId }: { terminalId: string }): React.JSX
             <Copy className="mr-2 size-4" />
             {t('terminal.copy')}
           </ContextMenuItem>
-          <ContextMenuItem onClick={() => void handlePaste()}>
+          <ContextMenuItem onClick={() => void handlePaste()} disabled={readOnly}>
             <Clipboard className="mr-2 size-4" />
             {t('terminal.paste')}
           </ContextMenuItem>

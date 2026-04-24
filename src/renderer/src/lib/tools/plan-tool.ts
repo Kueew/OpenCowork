@@ -231,19 +231,36 @@ const exitPlanModeHandler: ToolHandler = {
     const uiStore = useUIStore.getState()
     const sessionId = getSessionId(ctx)
 
-    if (!uiStore.isPlanModeEnabled(sessionId)) {
+    if (!sessionId) {
+      return encodeToolError('No active session.')
+    }
+
+    const planStore = usePlanStore.getState()
+    const existingPlan = planStore.getPlanBySession(sessionId)
+    const isPlanModeEnabled = uiStore.isPlanModeEnabled(sessionId)
+
+    if (!isPlanModeEnabled) {
+      if (existingPlan?.status === 'awaiting_review' && existingPlan.filePath) {
+        return encodeStructuredToolResult(
+          {
+            status: 'awaiting_review',
+            awaiting_user_review: true,
+            plan_id: existingPlan.id,
+            plan_file_path: existingPlan.filePath,
+            title: existingPlan.title,
+            message: 'Plan is already finalized and awaiting user review.'
+          },
+          'json'
+        )
+      }
+
       return encodeStructuredToolResult({
         status: 'not_in_plan_mode',
         message: 'You are not currently in plan mode.'
       })
     }
 
-    if (!sessionId) {
-      return encodeToolError('No active session.')
-    }
-
-    const planStore = usePlanStore.getState()
-    const plan = planStore.getPlanBySession(sessionId)
+    const plan = existingPlan
     if (!plan?.filePath) {
       return encodeToolError('No active plan file for this session.')
     }

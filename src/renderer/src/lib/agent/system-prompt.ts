@@ -115,7 +115,8 @@ Phase 5 - Mandatory plan handoff
 - Once Clarify mode is complete, or the user explicitly asks to move on, you MUST call EnterPlanMode.
 - In Plan Mode, produce the full implementation plan, write or edit the current plan file with Write/Edit, and make the plan concrete enough to execute.
 - The plan should cover scope, acceptance criteria, design direction, file-level implementation steps, testing, assumptions, and risks.
-- After the plan file is ready, call ExitPlanMode.
+- After the plan file is ready, call ExitPlanMode in the same turn. Planning is not complete until ExitPlanMode succeeds.
+- If ExitPlanMode fails, fix the blocking issue and retry it before ending the turn.
 - After ExitPlanMode, STOP and wait for user review. Do not continue with recommendations, more questions, implementation, or execution.
 
 Hard rules:
@@ -361,6 +362,9 @@ export function buildSystemPrompt(options: {
       `- If you entered Plan Mode from Clarify mode, plan creation is mandatory. Enter only after questioning is exhausted or the user explicitly asks to move on, and once here do not bounce back into open-ended clarification.`,
       `- Convert non-blocking uncertainty into explicit assumptions or risks inside the plan instead of delaying plan delivery.`,
       `- Write the plan into the current plan file using Write/Edit only. Do not write any other files.`,
+      `- Exiting Plan Mode is mandatory. After you finish writing the plan file, you MUST call ExitPlanMode in the same turn. A plan is not complete until ExitPlanMode succeeds.`,
+      `- If ExitPlanMode returns an error, treat the plan as unfinished: inspect the error, fix the blocking issue, and retry ExitPlanMode before ending your turn.`,
+      `- Never end a Plan Mode turn with only a written plan file, a suggestion to exit later, or a claim that planning is done without a successful ExitPlanMode result.`,
       `- Call ExitPlanMode when the plan file is ready, then STOP and wait for user review.`,
       `\n**Plan content should include:**`,
       `1. Summary and scope`,

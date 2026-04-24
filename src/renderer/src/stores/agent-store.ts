@@ -518,6 +518,7 @@ export interface BackgroundProcessState {
   toolUseId?: string
   description?: string
   source?: string
+  terminalId?: string
   status: 'running' | 'exited' | 'stopped' | 'error'
   output: string
   port?: number
@@ -539,6 +540,7 @@ interface ProcessListItem {
     sessionId?: string
     toolUseId?: string
     description?: string
+    terminalId?: string
   }
 }
 
@@ -553,6 +555,7 @@ interface ProcessOutputEvent {
     sessionId?: string
     toolUseId?: string
     description?: string
+    terminalId?: string
   }
 }
 
@@ -567,6 +570,7 @@ interface BufferedProcessOutputEvent {
     sessionId?: string
     toolUseId?: string
     description?: string
+    terminalId?: string
   }
 }
 
@@ -607,6 +611,7 @@ function applyProcessOutputEvent(
         toolUseId: payload.metadata?.toolUseId,
         description: payload.metadata?.description,
         source: payload.metadata?.source,
+        terminalId: payload.metadata?.terminalId,
         status: payload.exited ? 'exited' : 'running',
         output: '',
         port: payload.port,
@@ -624,6 +629,7 @@ function applyProcessOutputEvent(
     next.toolUseId = payload.metadata.toolUseId ?? next.toolUseId
     next.description = payload.metadata.description ?? next.description
     next.source = payload.metadata.source ?? next.source
+    next.terminalId = payload.metadata.terminalId ?? next.terminalId
   }
   if (payload.exited) {
     next.status = next.status === 'stopped' ? 'stopped' : 'exited'
@@ -852,6 +858,7 @@ interface AgentStore {
     toolUseId?: string
     description?: string
     source?: string
+    terminalId?: string
   }) => void
   stopBackgroundProcess: (id: string) => Promise<void>
   sendBackgroundProcessInput: (id: string, input: string, appendNewline?: boolean) => Promise<void>
@@ -1148,6 +1155,7 @@ export const useAgentStore = create<AgentStore>()(
                 toolUseId: item.metadata?.toolUseId ?? existing?.toolUseId,
                 description: item.metadata?.description ?? existing?.description,
                 source: item.metadata?.source ?? existing?.source,
+                terminalId: item.metadata?.terminalId ?? existing?.terminalId,
                 status: item.running === false ? 'exited' : 'running',
                 output: existing?.output ?? '',
                 port: item.port ?? existing?.port,
@@ -1248,6 +1256,7 @@ export const useAgentStore = create<AgentStore>()(
             toolUseId: process.toolUseId,
             description: process.description,
             source: process.source,
+            terminalId: process.terminalId,
             status: 'running',
             output: state.backgroundProcesses[process.id]?.output ?? '',
             port: state.backgroundProcesses[process.id]?.port,

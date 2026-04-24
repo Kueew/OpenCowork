@@ -1241,8 +1241,8 @@ export function FileChangeCard({
     <div
       className={cn(
         useCompactChangeLayout
-          ? 'my-0 overflow-hidden bg-transparent text-zinc-100 transition-all duration-200'
-          : 'activity-card-shell my-3 overflow-hidden rounded-[18px] text-zinc-100 transition-all duration-200',
+          ? 'my-0 overflow-hidden bg-transparent text-foreground transition-all duration-200'
+          : 'activity-card-shell my-3 overflow-hidden rounded-[18px] text-foreground transition-all duration-200',
         borderColor
       )}
     >
@@ -1259,10 +1259,10 @@ export function FileChangeCard({
       >
         {useCompactChangeLayout ? (
           <div
-            className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-zinc-400 transition-colors group-hover:bg-white/[0.015] group-hover:text-zinc-100"
+            className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-muted-foreground transition-colors group-hover:bg-muted/40 group-hover:text-foreground"
             title={filePath || undefined}
           >
-            <span className="shrink-0 text-[10px] font-medium text-zinc-400">
+            <span className="shrink-0 text-[10px] font-medium text-muted-foreground">
               {compactActionOp === 'create'
                 ? t('fileChange.created')
                 : compactActionOp === 'delete'
@@ -1307,12 +1307,12 @@ export function FileChangeCard({
               <CompactStatusDot status={status} />
             )}
             {elapsed && (
-              <span className="shrink-0 text-[9px] tabular-nums text-zinc-600">{elapsed}</span>
+              <span className="shrink-0 text-[9px] tabular-nums text-muted-foreground/70">{elapsed}</span>
             )}
             {collapsed ? (
-              <ChevronRight className="size-3 shrink-0 text-zinc-600" />
+              <ChevronRight className="size-3 shrink-0 text-muted-foreground/70" />
             ) : (
-              <ChevronDown className="size-3 shrink-0 text-zinc-600" />
+              <ChevronDown className="size-3 shrink-0 text-muted-foreground/70" />
             )}
           </div>
         ) : (
@@ -1349,7 +1349,7 @@ export function FileChangeCard({
               </span>
             )}
             {elapsed && (
-              <span className="text-[9px] text-zinc-600 tabular-nums shrink-0">{elapsed}</span>
+              <span className="text-[9px] text-muted-foreground/70 tabular-nums shrink-0">{elapsed}</span>
             )}
             <StatusIndicator status={status} />
           </>
@@ -1367,7 +1367,7 @@ export function FileChangeCard({
               'overflow-hidden',
               useCompactChangeLayout
                 ? 'bg-transparent px-0 pb-3 pt-0.5'
-                : 'activity-card-divider border-t bg-[#0f1012]'
+                : 'activity-card-divider border-t bg-background/40'
             )}
           >
             {showTrackedEditDiff && trackedChange && (
@@ -1428,11 +1428,11 @@ export function FileChangeCard({
           className={cn(
             useCompactChangeLayout
               ? 'bg-transparent px-3 py-2'
-              : 'activity-card-divider border-t bg-[#15171a] px-3 py-2'
+              : 'activity-card-divider border-t bg-muted/20 px-3 py-2'
           )}
         >
           <div className="flex items-center justify-between gap-2">
-            <p className="text-[10px] text-zinc-500">
+            <p className="text-[10px] text-muted-foreground">
               {trackedChange.status === 'accepted'
                 ? t('fileChange.kept')
                 : trackedChange.status === 'reverted'

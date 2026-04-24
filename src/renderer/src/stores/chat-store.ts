@@ -429,6 +429,7 @@ function matchesMessageLoadSnapshot(
   const currentKnownCount = session.messageCount ?? session.messages.length
   if (currentKnownCount !== expectedMessageCount) return false
   if (expectedTailMessageIds.length === 0) return true
+  if (session.messages.length === 0) return true
 
   const currentTailMessageIds = session.messages
     .slice(-expectedTailMessageIds.length)

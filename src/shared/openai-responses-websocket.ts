@@ -590,20 +590,12 @@ function normalizeResponsesFunctionCallOutputItem(
 function normalizeResponsesImageGenerationOutputItem(
   item: Record<string, unknown>
 ): Record<string, unknown> | null {
-  const rawResults = Array.isArray(item.result)
-    ? item.result
-    : typeof item.result === 'string'
-      ? [item.result]
-      : []
-  const results = rawResults.filter(
-    (value): value is string => typeof value === 'string' && value.trim().length > 0
-  )
-  if (results.length === 0) return null
+  const id = typeof item.id === 'string' && item.id.trim().length > 0 ? item.id : null
+  if (!id) return null
 
   return {
     type: 'image_generation_call',
-    result: results.length === 1 ? results[0] : results,
-    ...(typeof item.output_format === 'string' ? { output_format: item.output_format } : {})
+    id
   }
 }
 

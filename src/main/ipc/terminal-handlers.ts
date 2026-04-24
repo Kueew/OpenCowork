@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow } from 'electron'
+import { ipcMain, BrowserWindow, type WebContents } from 'electron'
 import { homedir } from 'os'
 import { randomUUID } from 'crypto'
 import { accessSync, constants, statSync } from 'fs'
@@ -15,14 +15,38 @@ interface TerminalSession {
   rows: number
   createdAt: number
   title: string
+  command?: string
   nextSeq: number
   outputBuffer: TerminalOutputChunk[]
   outputBufferBytes: number
+  exitCode?: number
+  exitSignal?: number
 }
 
 interface ResolvedShellLaunch {
   shell: string
   args: string[]
+}
+
+interface CreateTerminalSessionArgs {
+  cwd?: string
+  shell?: string
+  cols?: number
+  rows?: number
+  title?: string
+  command?: string
+}
+
+interface CreateTerminalSessionResult {
+  id?: string
+  shell?: string
+  cwd?: string
+  cols?: number
+  rows?: number
+  createdAt?: number
+  title?: string
+  command?: string
+  error?: string
 }
 
 interface TerminalOutputChunk {
@@ -45,7 +69,15 @@ function isExecutableFile(filePath?: string): filePath is string {
 
 function getShellLaunchCandidates(preferredShell?: string): ResolvedShellLaunch[] {
   if (process.platform === 'win32') {
-    return [{ shell: preferredShell?.trim() || process.env.COMSPEC || 'cmd.exe', args: [] }]
+    const preferred = preferredShell?.trim()
+    if (preferred) {
+      return [{ shell: preferred, args: [] }]
+    }
+    return [
+      { shell: process.env.ComSpec?.trim() || 'cmd.exe', args: [] },
+      { shell: 'powershell.exe', args: [] },
+      { shell: 'pwsh.exe', args: [] }
+    ]
   }
 
   const shells = [
@@ -82,6 +114,10 @@ function resolveCwd(cwd?: string): string {
   return process.cwd()
 }
 
+function resolveOwnerWindowId(sender?: WebContents | null): number | null {
+  return sender ? BrowserWindow.fromWebContents(sender)?.id ?? null : null
+}
+
 function createWindowEvent(windowId: number | null, channel: string, payload: unknown): void {
   const win =
     (typeof windowId === 'number'
@@ -89,6 +125,99 @@ function createWindowEvent(windowId: number | null, channel: string, payload: un
       : null) ?? BrowserWindow.getAllWindows()[0]
   if (!win) return
   safeSendToWindow(win, channel, payload)
+}
+
+function getWindowsCommandArgs(command?: string): string[] {
+  if (!command?.trim()) return []
+  return ['/d', '/s', '/c', command]
+}
+
+function getPosixCommandArgs(command?: string): string[] {
+  if (!command?.trim()) return ['-i']
+  return ['-lc', command]
+}
+
+export async function createTerminalSession(
+  args: CreateTerminalSessionArgs,
+  sender?: WebContents | null
+): Promise<CreateTerminalSessionResult> {
+  const launches = getShellLaunchCandidates(args.shell)
+  const requestedCwd = args.cwd?.trim()
+  const cwd = resolveCwd(requestedCwd)
+  const cols = Math.max(20, Math.floor(args.cols ?? 80))
+  const rows = Math.max(5, Math.floor(args.rows ?? 24))
+  const id = `term-${randomUUID()}`
+  let lastError = 'Unknown error'
+  const ownerWindowId = resolveOwnerWindowId(sender)
+
+  for (const launch of launches) {
+    try {
+      const launchArgs =
+        process.platform === 'win32'
+          ? getWindowsCommandArgs(args.command)
+          : getPosixCommandArgs(args.command)
+      const pty = spawn(launch.shell, launchArgs, {
+        name: 'xterm-256color',
+        cols,
+        rows,
+        cwd,
+        env: {
+          ...process.env,
+          TERM: 'xterm-256color'
+        }
+      })
+
+      const session: TerminalSession = {
+        id,
+        pty,
+        windowId: ownerWindowId,
+        shell: launch.shell,
+        cwd,
+        cols,
+        rows,
+        createdAt: Date.now(),
+        title: args.title?.trim() || launch.shell.split(/[\\/]/).pop() || launch.shell,
+        command: args.command?.trim() || undefined,
+        nextSeq: 0,
+        outputBuffer: [],
+        outputBufferBytes: 0
+      }
+
+      terminalSessions.set(id, session)
+
+      pty.onData((data) => {
+        const chunk = appendTerminalOutput(session, data)
+        createWindowEvent(session.windowId, 'terminal:output', { id, data, seq: chunk.seq })
+      })
+
+      pty.onExit(({ exitCode, signal }) => {
+        session.exitCode = exitCode
+        session.exitSignal = signal
+        createWindowEvent(session.windowId, 'terminal:exit', { id, exitCode, signal })
+      })
+
+      return {
+        id,
+        shell: launch.shell,
+        cwd,
+        cols,
+        rows,
+        createdAt: session.createdAt,
+        title: session.title,
+        command: session.command
+      }
+    } catch (error) {
+      lastError = `${launch.shell}${launch.args.length > 0 ? ` ${launch.args.join(' ')}` : ''}: ${error instanceof Error ? error.message : String(error)}`
+    }
+  }
+
+  const cwdHint =
+    requestedCwd && requestedCwd !== cwd
+      ? ` Requested cwd: ${requestedCwd}. Fallback cwd: ${cwd}.`
+      : ` Cwd: ${cwd}.`
+  return {
+    error: `Failed to start terminal shell.${cwdHint} Tried: ${launches.map((launch) => `${launch.shell}${launch.args.length > 0 ? ` ${launch.args.join(' ')}` : ''}`).join(', ')}. Last error: ${lastError}`
+  }
 }
 
 function appendTerminalOutput(session: TerminalSession, data: string): TerminalOutputChunk {
@@ -114,86 +243,9 @@ function appendTerminalOutput(session: TerminalSession, data: string): TerminalO
 }
 
 export function registerTerminalHandlers(): void {
-  ipcMain.handle(
-    'terminal:create',
-    async (
-      event,
-      args: { cwd?: string; shell?: string; cols?: number; rows?: number; title?: string }
-    ) => {
-      const launches = getShellLaunchCandidates(args.shell)
-      const requestedCwd = args.cwd?.trim()
-      const cwd = resolveCwd(requestedCwd)
-      const cols = Math.max(20, Math.floor(args.cols ?? 80))
-      const rows = Math.max(5, Math.floor(args.rows ?? 24))
-      const id = `term-${randomUUID()}`
-
-      let lastError = 'Unknown error'
-
-      const ownerWindowId = BrowserWindow.fromWebContents(event.sender)?.id ?? null
-
-      for (const launch of launches) {
-        try {
-          const pty = spawn(launch.shell, launch.args, {
-            name: 'xterm-256color',
-            cols,
-            rows,
-            cwd,
-            env: {
-              ...process.env,
-              TERM: 'xterm-256color'
-            }
-          })
-
-          const session: TerminalSession = {
-            id,
-            pty,
-            windowId: ownerWindowId,
-            shell: launch.shell,
-            cwd,
-            cols,
-            rows,
-            createdAt: Date.now(),
-            title: args.title?.trim() || launch.shell.split(/[\\/]/).pop() || launch.shell,
-            nextSeq: 0,
-            outputBuffer: [],
-            outputBufferBytes: 0
-          }
-
-          terminalSessions.set(id, session)
-
-          pty.onData((data) => {
-            const chunk = appendTerminalOutput(session, data)
-            createWindowEvent(session.windowId, 'terminal:output', { id, data, seq: chunk.seq })
-          })
-
-          pty.onExit(({ exitCode, signal }) => {
-            terminalSessions.delete(id)
-            createWindowEvent(session.windowId, 'terminal:exit', { id, exitCode, signal })
-          })
-
-          return {
-            id,
-            shell: launch.shell,
-            cwd,
-            cols,
-            rows,
-            createdAt: session.createdAt,
-            title: session.title
-          }
-        } catch (error) {
-          lastError = `${launch.shell}${launch.args.length > 0 ? ` ${launch.args.join(' ')}` : ''}: ${error instanceof Error ? error.message : String(error)}`
-        }
-      }
-
-      const cwdHint =
-        requestedCwd && requestedCwd !== cwd
-          ? ` Requested cwd: ${requestedCwd}. Fallback cwd: ${cwd}.`
-          : ` Cwd: ${cwd}.`
-      return {
-        error: `Failed to start terminal shell.${cwdHint} Tried: ${launches.map((launch) => `${launch.shell}${launch.args.length > 0 ? ` ${launch.args.join(' ')}` : ''}`).join(', ')}. Last error: ${lastError}`
-      }
-    }
-  )
+  ipcMain.handle('terminal:create', async (event, args: CreateTerminalSessionArgs) => {
+    return await createTerminalSession(args, event.sender)
+  })
 
   ipcMain.handle('terminal:input', async (_event, args: { id: string; data: string }) => {
     const session = terminalSessions.get(args.id)
@@ -225,15 +277,7 @@ export function registerTerminalHandlers(): void {
   )
 
   ipcMain.handle('terminal:kill', async (_event, args: { id: string }) => {
-    const session = terminalSessions.get(args.id)
-    if (!session) return { error: 'Terminal not found' }
-    try {
-      session.pty.kill()
-      terminalSessions.delete(args.id)
-      return { success: true }
-    } catch (error) {
-      return { error: error instanceof Error ? error.message : String(error) }
-    }
+    return killTerminalSession(args.id)
   })
 
   ipcMain.handle('terminal:list', async () => {
@@ -245,9 +289,28 @@ export function registerTerminalHandlers(): void {
       rows: session.rows,
       createdAt: session.createdAt,
       title: session.title,
+      command: session.command,
+      exitCode: session.exitCode,
+      exitSignal: session.exitSignal,
       buffer: session.outputBuffer
     }))
   })
+}
+
+export function getTerminalSessionSnapshot(id: string): TerminalSession | undefined {
+  const session = terminalSessions.get(id)
+  return session ? { ...session, outputBuffer: [...session.outputBuffer] } : undefined
+}
+
+export function killTerminalSession(id: string): { success?: true; error?: string } {
+  const session = terminalSessions.get(id)
+  if (!session) return { error: 'Terminal not found' }
+  try {
+    session.pty.kill()
+    return { success: true }
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) }
+  }
 }
 
 export function killAllTerminalSessions(): void {

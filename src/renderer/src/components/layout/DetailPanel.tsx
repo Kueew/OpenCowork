@@ -7,7 +7,6 @@ import {
   Users,
   Bot,
   Terminal,
-  SendHorizontal,
   Clock,
   ChevronDown,
   ChevronRight,
@@ -25,7 +24,6 @@ import { Separator } from '@renderer/components/ui/separator'
 import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
 import { SubAgentExecutionDetail } from './SubAgentExecutionDetail'
-import { Input } from '@renderer/components/ui/input'
 import { ChangeReviewPanelContent } from '@renderer/components/chat/ChangeReviewSheet'
 import {
   Collapsible,
@@ -37,6 +35,7 @@ import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { AnimatePresence, motion } from 'motion/react'
 import { FadeIn } from '@renderer/components/animate-ui'
+import { LocalTerminal } from '@renderer/components/terminal/LocalTerminal'
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -572,13 +571,6 @@ function TerminalDetailView({ processId }: { processId: string }): React.JSX.Ele
   const process = useAgentStore((s) => s.backgroundProcesses[processId])
   const sendBackgroundProcessInput = useAgentStore((s) => s.sendBackgroundProcessInput)
   const stopBackgroundProcess = useAgentStore((s) => s.stopBackgroundProcess)
-  const [input, setInput] = React.useState('')
-  const outputRef = React.useRef<HTMLDivElement>(null)
-
-  React.useEffect(() => {
-    if (!outputRef.current) return
-    outputRef.current.scrollTop = outputRef.current.scrollHeight
-  }, [process?.output, process?.status])
 
   if (!process) {
     return (
@@ -598,12 +590,6 @@ function TerminalDetailView({ processId }: { processId: string }): React.JSX.Ele
         : process.status === 'error'
           ? t('detailPanel.error')
           : t('detailPanel.exited')
-
-  const handleSend = (): void => {
-    if (input.length === 0 || !isRunning) return
-    void sendBackgroundProcessInput(processId, input, true)
-    setInput('')
-  }
 
   return (
     <div className="space-y-3">
@@ -629,37 +615,15 @@ function TerminalDetailView({ processId }: { processId: string }): React.JSX.Ele
         )}
       </div>
 
-      <div
-        ref={outputRef}
-        className="h-[360px] overflow-auto rounded-lg border bg-zinc-950 px-3 py-2 text-[11px] font-mono text-zinc-200 whitespace-pre-wrap break-words"
-      >
-        {process.output || '[no output yet]'}
-      </div>
-
-      <div className="flex items-center gap-2">
-        <Input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault()
-              handleSend()
-            }
-          }}
-          placeholder={t('detailPanel.inputPlaceholder')}
-          disabled={!isRunning}
-          className="h-8 text-xs"
-        />
-        <Button
-          size="sm"
-          className="h-8 gap-1.5"
-          onClick={handleSend}
-          disabled={!isRunning || input.length === 0}
-        >
-          <SendHorizontal className="size-3.5" />
-          {t('detailPanel.sendInput')}
-        </Button>
-      </div>
+      {process.terminalId ? (
+        <div className="h-[360px] overflow-hidden rounded-lg border bg-background">
+          <LocalTerminal terminalId={process.terminalId} readOnly={!isRunning} />
+        </div>
+      ) : (
+        <div className="h-[360px] overflow-auto rounded-lg border bg-zinc-950 px-3 py-2 text-[11px] font-mono text-zinc-200 whitespace-pre-wrap break-words">
+          {process.output || '[no output yet]'}
+        </div>
+      )}
 
       <div className="flex items-center gap-2">
         <Button

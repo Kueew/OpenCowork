@@ -7,7 +7,6 @@ import {
   XCircle,
   Copy,
   Check,
-  SendHorizontal,
   Square,
   FileCode,
   Search,
@@ -27,11 +26,11 @@ import { estimateTokens, formatTokens } from '@renderer/lib/format-tokens'
 import { useAgentStore } from '@renderer/stores/agent-store'
 import { useUIStore } from '@renderer/stores/ui-store'
 import { Button } from '@renderer/components/ui/button'
-import { Input } from '@renderer/components/ui/input'
 import { LazySyntaxHighlighter } from './LazySyntaxHighlighter'
 import { TaskCard } from './TodoCard'
 import { inputSummary } from './tool-call-summary'
 import { useChatActions } from '@renderer/hooks/use-chat-actions'
+import { LocalTerminal } from '@renderer/components/terminal/LocalTerminal'
 
 interface ToolCallCardProps {
   toolUseId?: string
@@ -590,19 +589,44 @@ function ShellTextPane({
   const isLong = text.length > 1000
   const displayed = isLong && !expanded ? `...\n${text.slice(-1000)}` : text
   return (
-    <div className="space-y-1.5">
-      <div className={cn('text-[10px]', tone === 'error' ? 'text-red-300/80' : 'text-zinc-500')}>
-        {title}
+    <section
+      className={cn(
+        'overflow-hidden rounded-lg border',
+        tone === 'error'
+          ? 'border-destructive/25 bg-destructive/[0.045]'
+          : 'border-border/70 bg-background/70'
+      )}
+    >
+      <div
+        className={cn(
+          'flex items-center justify-between gap-2 border-b px-3 py-1.5',
+          tone === 'error'
+            ? 'border-destructive/20 bg-destructive/[0.05]'
+            : 'border-border/60 bg-muted/30'
+        )}
+      >
+        <span
+          className={cn(
+            'text-[10px] font-medium uppercase tracking-[0.12em]',
+            tone === 'error' ? 'text-destructive/80' : 'text-muted-foreground/80'
+          )}
+        >
+          {title}
+        </span>
+        <span className="text-[10px] tabular-nums text-muted-foreground/60">
+          {lineCount(text)} lines
+        </span>
       </div>
       <pre
         className={cn(
-          'whitespace-pre-wrap break-words text-[11px] leading-5',
-          tone === 'error' ? 'text-red-200/90' : 'text-zinc-200'
+          'max-h-56 overflow-auto whitespace-pre-wrap break-words px-3 py-2.5 text-[11px] leading-5 antialiased',
+          tone === 'error' ? 'text-destructive/90' : 'text-foreground/88'
         )}
+        style={{ fontFamily: MONO_FONT }}
       >
         {displayed}
       </pre>
-    </div>
+    </section>
   )
 }
 
@@ -616,9 +640,6 @@ function BashOutputBlock({
   status: ToolCallStatus | 'completed'
 }): React.JSX.Element {
   const { t } = useTranslation('chat')
-  const [expanded, setExpanded] = React.useState(false)
-  const [terminalInput, setTerminalInput] = React.useState('')
-  const scrollRef = React.useRef<HTMLDivElement>(null)
   const openDetailPanel = useUIStore((s) => s.openDetailPanel)
   const sendBackgroundProcessInput = useAgentStore((s) => s.sendBackgroundProcessInput)
   const stopBackgroundProcess = useAgentStore((s) => s.stopBackgroundProcess)
@@ -627,7 +648,6 @@ function BashOutputBlock({
     toolUseId ? Boolean(s.foregroundShellExecByToolUseId[toolUseId]) : false
   )
 
-  // Try to parse JSON output from shell tool (may contain stdout, stderr, exitCode, processId)
   const parsed = React.useMemo(() => {
     const obj = decodeStructuredToolResult(output)
     if (
@@ -641,6 +661,7 @@ function BashOutputBlock({
         exitCode?: number
         output?: string
         processId?: string
+        terminalId?: string
         summary?: ShellOutputSummary
       }
     }
@@ -649,95 +670,89 @@ function BashOutputBlock({
 
   const processId = parsed?.processId ? String(parsed.processId) : null
   const process = useAgentStore((s) => (processId ? s.backgroundProcesses[processId] : undefined))
-
-  const stdoutText = process ? process.output : (parsed?.stdout ?? parsed?.output ?? '')
-  const stderrText = process ? '' : (parsed?.stderr ?? '')
-  const hasStructuredStreams = !process && !!parsed && (Boolean(stdoutText) || Boolean(stderrText))
-  const text = process ? process.output : [stderrText, stdoutText].filter(Boolean).join('\n\n')
-  const exitCode = process?.exitCode ?? parsed?.exitCode
+  const terminalId = process?.terminalId ?? parsed?.terminalId ?? null
   const isProcessRunning = process?.status === 'running'
+  const exitCode = process?.exitCode ?? parsed?.exitCode
   const statusText = process ? t(`toolCall.processStatus.${process.status}`) : null
   const canStopForegroundExec = !process && status === 'running' && !!toolUseId && hasForegroundExec
 
-  const isLong = text.length > 1000
-  const displayed = isLong && !expanded ? `...\n${text.slice(-1000)}` : text
-  const lineCount = text.split('\n').length
+  const stdoutText = process ? process.output : (parsed?.stdout ?? parsed?.output ?? '')
+  const stderrText = process ? '' : (parsed?.stderr ?? '')
+  const text = process ? process.output : [stderrText, stdoutText].filter(Boolean).join('\n\n')
+  const lineCount = text ? text.split('\n').length : 0
   const tokenCount = React.useMemo(() => estimateTokens(text), [text])
-
-  const handleSendInput = (): void => {
-    if (!process || !isProcessRunning || terminalInput.length === 0) return
-    void sendBackgroundProcessInput(process.id, terminalInput, true)
-    setTerminalInput('')
-  }
-
-  // Auto-scroll to bottom when output is streaming
-  React.useEffect(() => {
-    if ((isProcessRunning || exitCode === undefined) && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
-  }, [text, exitCode, isProcessRunning])
+  const showTerminal = Boolean(terminalId)
 
   return (
     <div className="space-y-2">
-      <div className="activity-card-shell overflow-hidden rounded-[14px]">
-        <div className="activity-card-header flex items-center justify-between gap-2 px-3 py-2">
-          <span className="text-[12px] font-medium text-zinc-100">{t('toolCall.shell')}</span>
+      <div className="activity-card-shell overflow-hidden rounded-[14px] border border-border/60 bg-background/70 shadow-sm">
+        <div className="activity-card-header flex items-center justify-between gap-2 border-b border-border/60 px-3 py-2">
+          <div className="flex items-center gap-2">
+            <span className="text-[12px] font-medium text-foreground">{t('toolCall.shell')}</span>
+            {processId ? (
+              <span className="rounded-md border border-border/60 bg-muted/60 px-1.5 py-0.5 text-[9px] text-muted-foreground">
+                {processId}
+              </span>
+            ) : null}
+          </div>
           <div className="flex items-center gap-1.5">
-            {processId ? <span className="text-[9px] text-zinc-500">{processId}</span> : null}
-            <CopyBtn text={text} />
+            {!showTerminal ? <CopyBtn text={text} /> : null}
           </div>
         </div>
-        <div
-          ref={scrollRef}
-          className="activity-card-divider max-h-72 overflow-auto border-t px-3 py-2.5 text-[11px] font-mono text-zinc-200"
-          style={{ fontFamily: MONO_FONT }}
-        >
-          {text ? (
-            hasStructuredStreams ? (
-              <div className="space-y-3">
-                <ShellTextPane title="stderr" text={stderrText} expanded={expanded} tone="error" />
-                <ShellTextPane
-                  title={stderrText ? 'stdout' : 'output'}
-                  text={stdoutText}
-                  expanded={expanded}
-                />
-              </div>
+
+        {showTerminal ? (
+          <div className="border-b border-border/60 bg-black/90">
+            <div className="h-[320px] min-h-[220px] w-full">
+              <LocalTerminal terminalId={terminalId ?? ''} readOnly={!isProcessRunning} />
+            </div>
+          </div>
+        ) : (
+          <div className="activity-card-divider border-b border-border/60 px-3 py-2.5 text-[11px]" style={{ fontFamily: MONO_FONT }}>
+            {text ? (
+              stderrText ? (
+                <div className="space-y-3">
+                  <ShellTextPane title="stderr" text={stderrText} expanded tone="error" />
+                  <ShellTextPane title={stderrText ? 'stdout' : 'output'} text={stdoutText} expanded />
+                </div>
+              ) : (
+                <pre className="whitespace-pre-wrap break-words leading-5 text-foreground/88">{text}</pre>
+              )
             ) : (
-              <pre className="whitespace-pre-wrap break-words leading-5 text-zinc-200">
-                {displayed}
+              <pre className="whitespace-pre-wrap break-words text-muted-foreground">
+                {t('toolCall.noOutputYet')}
               </pre>
-            )
-          ) : (
-            <pre className="whitespace-pre-wrap break-words text-zinc-500">
-              {t('toolCall.noOutputYet')}
-            </pre>
-          )}
-        </div>
+            )}
+          </div>
+        )}
+
         {(statusText || exitCode !== undefined || lineCount > 0) && (
-          <div className="activity-card-divider flex items-center justify-between gap-2 border-t px-3 py-2">
-            <span className="text-[10px] text-zinc-500">{lineCount} lines</span>
+          <div className="activity-card-divider flex items-center justify-between gap-2 px-3 py-2">
+            <span className="text-[10px] text-muted-foreground">
+              {lineCount} lines · {formatTokens(tokenCount)} tokens
+            </span>
             <div className="flex items-center gap-2 text-[11px]">
-              {statusText && exitCode === undefined && (
+              {statusText && exitCode === undefined ? (
                 <span
                   className={cn(
+                    'rounded-full px-2 py-0.5',
                     process?.status === 'running'
-                      ? 'text-blue-300/80'
+                      ? 'bg-blue-500/12 text-blue-600 dark:text-blue-300'
                       : process?.status === 'error'
-                        ? 'text-red-300/85'
-                        : 'text-zinc-400'
+                        ? 'bg-destructive/10 text-destructive'
+                        : 'bg-muted text-muted-foreground'
                   )}
                 >
                   {statusText}
                 </span>
-              )}
+              ) : null}
               {exitCode !== undefined ? (
                 exitCode === 0 ? (
-                  <span className="inline-flex items-center gap-1 text-zinc-300">
-                    <Check className="size-3 text-zinc-400" />
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/12 px-2 py-0.5 text-emerald-600 dark:text-emerald-300">
+                    <Check className="size-3" />
                     {t('toolCall.success')}
                   </span>
                 ) : (
-                  <span className="text-zinc-400">
+                  <span className="rounded-full bg-destructive/10 px-2 py-0.5 text-destructive">
                     {t('toolCall.exitCode', { code: exitCode })}
                   </span>
                 )
@@ -747,65 +762,39 @@ function BashOutputBlock({
         )}
       </div>
 
-      {process && (
-        <div className="mt-2 space-y-1.5">
-          <div className="flex items-center gap-1.5">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 px-2 text-[10px]"
-              onClick={() => openDetailPanel({ type: 'terminal', processId: process.id })}
-            >
-              {t('toolCall.openSession')}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-6 px-2 text-[10px]"
-              disabled={!isProcessRunning}
-              onClick={() => void sendBackgroundProcessInput(process.id, '\u0003', false)}
-            >
-              {t('toolCall.sendCtrlC')}
-            </Button>
-            <Button
-              variant="destructive"
-              size="sm"
-              className="h-6 gap-1 px-2 text-[10px]"
-              disabled={!isProcessRunning}
-              onClick={() => void stopBackgroundProcess(process.id)}
-            >
-              <Square className="size-2.5 fill-current" />
-              {t('toolCall.stopProcess')}
-            </Button>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <Input
-              value={terminalInput}
-              onChange={(e) => setTerminalInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  handleSendInput()
-                }
-              }}
-              disabled={!isProcessRunning}
-              placeholder={t('toolCall.inputPlaceholder')}
-              className="h-7 text-[11px]"
-            />
-            <Button
-              size="sm"
-              className="h-7 gap-1 px-2 text-[10px]"
-              disabled={!isProcessRunning || terminalInput.length === 0}
-              onClick={handleSendInput}
-            >
-              <SendHorizontal className="size-3.5" />
-              {t('toolCall.sendInput')}
-            </Button>
-          </div>
+      {process ? (
+        <div className="mt-2 flex items-center gap-1.5">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2 text-[10px]"
+            onClick={() => openDetailPanel({ type: 'terminal', processId: process.id })}
+          >
+            {t('toolCall.openSession')}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-6 px-2 text-[10px]"
+            disabled={!isProcessRunning}
+            onClick={() => void sendBackgroundProcessInput(process.id, '\u0003', false)}
+          >
+            {t('toolCall.sendCtrlC')}
+          </Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            className="h-6 gap-1 px-2 text-[10px]"
+            disabled={!isProcessRunning}
+            onClick={() => void stopBackgroundProcess(process.id)}
+          >
+            <Square className="size-2.5 fill-current" />
+            {t('toolCall.stopProcess')}
+          </Button>
         </div>
-      )}
+      ) : null}
 
-      {canStopForegroundExec && (
+      {canStopForegroundExec ? (
         <div className="mt-2 flex items-center gap-1.5">
           <Button
             variant="destructive"
@@ -820,18 +809,7 @@ function BashOutputBlock({
             {t('toolCall.stopProcess')}
           </Button>
         </div>
-      )}
-
-      {isLong && (
-        <button
-          onClick={() => setExpanded(!expanded)}
-          className="mt-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
-        >
-          {expanded
-            ? t('action.showLess', { ns: 'common' })
-            : t('toolCall.showAllTokens', { tokens: formatTokens(tokenCount), lines: lineCount })}
-        </button>
-      )}
+      ) : null}
     </div>
   )
 }
