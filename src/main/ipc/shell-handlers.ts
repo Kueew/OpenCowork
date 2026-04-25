@@ -343,6 +343,11 @@ export function registerShellHandlers(): void {
           cleanupExitListener()
         }
 
+        if (getTerminalSessionSnapshot(terminalId)?.exitCode !== undefined) {
+          finalize()
+          return
+        }
+
         const requestAbort = (reason: 'user' | 'timeout' = 'user'): void => {
           if (settled) return
           abortReason = reason
