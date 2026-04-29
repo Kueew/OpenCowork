@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.84] - 2026-04-25
+
+### Changed
+
+- Refined chat context compression to use context tokens in usage accounting.
+- Preserved image requests during provider routing so image-related turns remain intact.
+
 ## [0.9.82] - 2026-04-25
 
 ### Changed
