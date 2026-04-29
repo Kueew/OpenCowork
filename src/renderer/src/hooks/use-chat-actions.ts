@@ -1157,6 +1157,7 @@ async function resolveMainRequestProvider(options: {
   mode?: 'chat' | 'clarify' | 'cowork' | 'code' | 'acp'
   allowTools?: boolean
   isContinue?: boolean
+  requiresVision?: boolean
   signal?: AbortSignal
 }): Promise<{
   providerConfig: ProviderConfig | null
@@ -1194,6 +1195,16 @@ async function resolveMainRequestProvider(options: {
   }
 
   if (settings.mainModelSelectionMode === 'auto') {
+    if (options.requiresVision) {
+      const providerConfig = providerStore.getActiveProviderConfig()
+      return {
+        providerConfig,
+        modelConfig: findProviderModel(providerConfig?.providerId, providerConfig?.model)
+          .modelConfig,
+        autoSelection: null
+      }
+    }
+
     if (!options.latestUserInput) {
       const providerConfig = providerStore.getActiveProviderConfig()
       return {
@@ -1230,6 +1241,19 @@ async function resolveMainRequestProvider(options: {
     modelConfig: findProviderModel(providerConfig?.providerId, providerConfig?.model).modelConfig,
     autoSelection: null
   }
+}
+
+function messageContainsImage(message: UnifiedMessage): boolean {
+  return Array.isArray(message.content) && message.content.some((block) => block.type === 'image')
+}
+
+function latestUserMessageContainsImage(messages: UnifiedMessage[]): boolean {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message?.role !== 'user') continue
+    return messageContainsImage(message)
+  }
+  return false
 }
 
 function notifyPendingSessionMessageListeners(): void {
@@ -2692,6 +2716,10 @@ export function useChatActions(): {
           source === 'continue'
             ? extractLatestUserInput(inMemoryMessages)
             : effectiveResolvedCommand.userText || text
+        const latestUserHasImages =
+          source === 'continue'
+            ? latestUserMessageContainsImage(inMemoryMessages)
+            : Boolean(images?.length)
         const requestedToolsAllowed = shouldAllowToolsForRequest({
           latestUserInput,
           mode: resolvedSessionMode,
@@ -2706,7 +2734,8 @@ export function useChatActions(): {
           latestUserInput,
           mode: resolvedSessionMode,
           allowTools: requestedToolsAllowed,
-          isContinue: source === 'continue'
+          isContinue: source === 'continue',
+          requiresVision: latestUserHasImages
         })
         const baseProviderConfig = buildProviderConfigWithRuntimeSettings(
           providerResolution.providerConfig,
@@ -3522,24 +3551,22 @@ export function useChatActions(): {
               sshConnectionId: session?.sshConnectionId
             })
 
-            const useSidecar = settings.devMode
-              ? false
-              : await canUseSidecarForAgentRun({
-                  messages: messagesToSend,
-                  provider: agentProviderConfig,
-                  tools: effectiveToolDefs,
-                  sessionId,
-                  workingFolder: sessionWorkingFolder,
-                  sshConnectionId: session?.sshConnectionId,
-                  maxIterations: DEFAULT_AGENT_MAX_ITERATIONS,
-                  forceApproval: false,
-                  compression: compressionConfig,
-                  isPlanMode,
-                  sessionMode: mode,
-                  desktopControlMode,
-                  hasChannels: scopedActiveChannels.length > 0,
-                  hasMcps: activeMcps.length > 0
-                })
+            const useSidecar = await canUseSidecarForAgentRun({
+              messages: messagesToSend,
+              provider: agentProviderConfig,
+              tools: effectiveToolDefs,
+              sessionId,
+              workingFolder: sessionWorkingFolder,
+              sshConnectionId: session?.sshConnectionId,
+              maxIterations: DEFAULT_AGENT_MAX_ITERATIONS,
+              forceApproval: false,
+              compression: compressionConfig,
+              isPlanMode,
+              sessionMode: mode,
+              desktopControlMode,
+              hasChannels: scopedActiveChannels.length > 0,
+              hasMcps: activeMcps.length > 0
+            })
 
             console.log('[ChatActions] Agent execution path', {
               sessionId,
@@ -5227,6 +5254,8 @@ async function runSimpleChat(
     options?.expectedUserMessage
   )
   const streamDeltaBuffer = createStreamDeltaBuffer(sessionId, assistantMsgId)
+  const requestHasImages = requestMessages.some(messageContainsImage)
+  const preferRendererProvider = useSettingsStore.getState().devMode || requestHasImages
   const sidecarRequest = buildSidecarAgentRunRequest({
     messages: requestMessages,
     provider: config,
@@ -5255,11 +5284,13 @@ async function runSimpleChat(
   // Stage 3: provider.<type> capability probing is gone — unsupported
   // provider types are flagged mode=bridged by mapSidecarProvider and the
   // sidecar's BridgedProvider handles streaming via the renderer bridge.
-  const supportsAgentRun = sidecarRequest ? await canSidecarHandle('agent.run') : false
+  const supportsAgentRun =
+    !preferRendererProvider && sidecarRequest ? await canSidecarHandle('agent.run') : false
   const supportsProvider = sidecarRequest
-    ? await canSidecarHandle(`provider.${config.type}`)
+    ? !preferRendererProvider && (await canSidecarHandle(`provider.${config.type}`))
     : false
-  const useSidecar = !!sidecarRequest && supportsAgentRun && supportsProvider
+  const useSidecar =
+    !preferRendererProvider && !!sidecarRequest && supportsAgentRun && supportsProvider
 
   console.log('[ChatActions] Simple chat sidecar decision', {
     sessionId,
@@ -5270,15 +5301,17 @@ async function runSimpleChat(
     hasSidecarRequest: !!sidecarRequest,
     supportsAgentRun,
     supportsProvider,
+    requestHasImages,
+    devMode: useSettingsStore.getState().devMode,
     useSidecar
   })
 
-  if (!sidecarRequest) {
+  if (!sidecarRequest && !preferRendererProvider) {
     throw new Error('Sidecar chat request build failed')
   }
 
   setRequestTraceInfo(assistantMsgId, {
-    executionPath: 'node'
+    executionPath: useSidecar ? 'sidecar' : 'node'
   })
 
   try {

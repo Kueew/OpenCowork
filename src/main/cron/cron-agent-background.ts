@@ -1044,6 +1044,60 @@ function normalizeMessagesForReplay(messages: UnifiedMessage[]): UnifiedMessage[
   return normalized
 }
 
+type ImageLikeBlock = {
+  type: 'image'
+  source: { type: 'base64' | 'url'; data?: string; mediaType?: string; url?: string }
+}
+type ToolResultContentBlock = Exclude<ToolResultContent, string>[number]
+
+function getImageBlockUrl(block: ImageLikeBlock): string | null {
+  if (block.source.type === 'base64') {
+    if (!block.source.data) return null
+    return `data:${block.source.mediaType || 'image/png'};base64,${block.source.data}`
+  }
+  return block.source.url || null
+}
+
+function formatOpenAIChatImagePart(block: ImageLikeBlock): unknown | null {
+  const url = getImageBlockUrl(block)
+  return url ? { type: 'image_url', image_url: { url } } : null
+}
+
+function formatOpenAIResponsesImagePart(block: ImageLikeBlock): unknown | null {
+  const url = getImageBlockUrl(block)
+  return url ? { type: 'input_image', image_url: url } : null
+}
+
+function formatOpenAIChatToolResultContent(content: ToolResultContent): unknown {
+  if (!Array.isArray(content)) return content
+
+  const parts: unknown[] = []
+  for (const block of content) {
+    if (block.type === 'text') {
+      parts.push({ type: 'text', text: block.text })
+      continue
+    }
+    const imagePart = formatOpenAIChatImagePart(block)
+    if (imagePart) parts.push(imagePart)
+  }
+  return parts
+}
+
+function formatOpenAIResponsesToolResultOutput(content: ToolResultContent): string {
+  if (!Array.isArray(content)) return content
+
+  const textParts = content
+    .filter((block): block is Extract<ToolResultContentBlock, { type: 'text' }> => {
+      return block.type === 'text'
+    })
+    .map((block) => block.text)
+  const imageCount = content.filter((block) => block.type === 'image').length
+  return (
+    [...textParts, ...Array.from({ length: imageCount }, () => '[Image attached]')].join('\n') ||
+    '[Image]'
+  )
+}
+
 function formatOpenAIChatMessages(
   messages: UnifiedMessage[],
   systemPrompt?: string,
@@ -1063,21 +1117,41 @@ function formatOpenAIChatMessages(
     }
     const blocks = message.content as ContentBlock[]
     if (message.role === 'user') {
-      const textBlocks = blocks.filter((block): block is TextBlock => block.type === 'text')
-      if (textBlocks.length > 0) {
+      const toolResults = blocks.filter(
+        (block): block is ToolResultBlock => block.type === 'tool_result'
+      )
+      for (const result of toolResults) {
         formatted.push({
-          role: 'user',
-          content: textBlocks.map((block) => ({ type: 'text', text: block.text }))
+          role: 'tool',
+          tool_call_id: result.toolUseId,
+          content: formatOpenAIChatToolResultContent(result.content)
         })
-        continue
       }
+
+      const parts: unknown[] = []
+      for (const block of blocks) {
+        if (block.type === 'text') {
+          parts.push({ type: 'text', text: block.text })
+        } else if (block.type === 'image') {
+          const imagePart = formatOpenAIChatImagePart(block)
+          if (imagePart) parts.push(imagePart)
+        }
+      }
+      if (parts.length > 0) {
+        formatted.push({ role: 'user', content: parts })
+      }
+      continue
     }
     const toolResults = blocks.filter(
       (block): block is ToolResultBlock => block.type === 'tool_result'
     )
     if (toolResults.length > 0) {
       for (const result of toolResults) {
-        formatted.push({ role: 'tool', tool_call_id: result.toolUseId, content: result.content })
+        formatted.push({
+          role: 'tool',
+          tool_call_id: result.toolUseId,
+          content: formatOpenAIChatToolResultContent(result.content)
+        })
       }
       continue
     }
@@ -1099,6 +1173,13 @@ function formatOpenAIChatMessages(
               (block.encryptedContentProvider === 'google' || !block.encryptedContentProvider)
           )?.encryptedContent
       : undefined
+    const hasAssistantPayload =
+      textContent.length > 0 ||
+      reasoningContent.length > 0 ||
+      !!googleThinkingSignature ||
+      toolUses.length > 0
+    if (!hasAssistantPayload) continue
+
     const nextMessage: Record<string, unknown> = { role: 'assistant', content: textContent || null }
     if (reasoningContent) nextMessage.reasoning_content = reasoningContent
     if (googleThinkingSignature) nextMessage.reasoning_encrypted_content = googleThinkingSignature
@@ -1143,6 +1224,36 @@ function formatOpenAIResponsesMessages(
       continue
     }
     const blocks = message.content as ContentBlock[]
+    if (message.role === 'user') {
+      const parts: unknown[] = []
+      let emittedToolResult = false
+
+      for (const block of blocks) {
+        if (block.type !== 'tool_result') continue
+        emittedToolResult = true
+        input.push({
+          type: 'function_call_output',
+          call_id: block.toolUseId,
+          output: formatOpenAIResponsesToolResultOutput(block.content)
+        })
+      }
+
+      for (const block of blocks) {
+        if (block.type === 'text') {
+          parts.push({ type: 'input_text', text: block.text })
+        } else if (block.type === 'image') {
+          const imagePart = formatOpenAIResponsesImagePart(block)
+          if (imagePart) parts.push(imagePart)
+        }
+      }
+
+      if (parts.length > 0) {
+        input.push({ type: 'message', role: 'user', content: parts })
+        continue
+      }
+      if (emittedToolResult) continue
+    }
+
     for (const block of blocks) {
       switch (block.type) {
         case 'text':
@@ -1176,11 +1287,16 @@ function formatOpenAIResponsesMessages(
           input.push({
             type: 'function_call_output',
             call_id: block.toolUseId,
-            output: block.content
+            output: formatOpenAIResponsesToolResultOutput(block.content)
           })
           break
-        case 'image':
+        case 'image': {
+          const imagePart = formatOpenAIResponsesImagePart(block)
+          if (imagePart && message.role === 'user') {
+            input.push({ type: 'message', role: 'user', content: [imagePart] })
+          }
           break
+        }
       }
     }
   }
