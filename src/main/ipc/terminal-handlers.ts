@@ -129,7 +129,7 @@ function resolveCwd(cwd?: string): string {
 }
 
 function resolveOwnerWindowId(sender?: WebContents | null): number | null {
-  return sender ? BrowserWindow.fromWebContents(sender)?.id ?? null : null
+  return sender ? (BrowserWindow.fromWebContents(sender)?.id ?? null) : null
 }
 
 function createWindowEvent(windowId: number | null, channel: string, payload: unknown): void {
@@ -149,14 +149,35 @@ function emitTerminalExit(event: TerminalExitEvent): void {
   terminalExitListeners.forEach((listener) => listener(event))
 }
 
-function getWindowsCommandArgs(command?: string): string[] {
-  if (!command?.trim()) return []
+function getShellName(shellPath: string): string {
+  return (shellPath.split(/[\\/]/).pop() || shellPath).toLowerCase()
+}
+
+function isPowerShell(shellPath: string): boolean {
+  const shellName = getShellName(shellPath)
+  return (
+    shellName === 'powershell.exe' ||
+    shellName === 'powershell' ||
+    shellName === 'pwsh.exe' ||
+    shellName === 'pwsh'
+  )
+}
+
+function getWindowsCommandArgs(shellPath: string, command?: string): string[] {
+  if (!command?.trim()) return isPowerShell(shellPath) ? ['-NoLogo'] : []
+  if (isPowerShell(shellPath)) return ['-NoLogo', '-NoProfile', '-Command', command]
   return ['/d', '/s', '/c', command]
 }
 
-function getPosixCommandArgs(command?: string): string[] {
-  if (!command?.trim()) return ['-i']
+function getPosixCommandArgs(launch: ResolvedShellLaunch, command?: string): string[] {
+  if (!command?.trim()) return launch.args
   return ['-lc', command]
+}
+
+function getLaunchArgs(launch: ResolvedShellLaunch, command?: string): string[] {
+  return process.platform === 'win32'
+    ? getWindowsCommandArgs(launch.shell, command)
+    : getPosixCommandArgs(launch, command)
 }
 
 export async function createTerminalSession(
@@ -174,10 +195,7 @@ export async function createTerminalSession(
 
   for (const launch of launches) {
     try {
-      const launchArgs =
-        process.platform === 'win32'
-          ? getWindowsCommandArgs(args.command)
-          : getPosixCommandArgs(args.command)
+      const launchArgs = getLaunchArgs(launch, args.command)
       const pty = spawn(launch.shell, launchArgs, {
         name: 'xterm-256color',
         cols,
@@ -233,7 +251,8 @@ export async function createTerminalSession(
         command: session.command
       }
     } catch (error) {
-      lastError = `${launch.shell}${launch.args.length > 0 ? ` ${launch.args.join(' ')}` : ''}: ${error instanceof Error ? error.message : String(error)}`
+      const launchArgs = getLaunchArgs(launch, args.command)
+      lastError = `${launch.shell}${launchArgs.length > 0 ? ` ${launchArgs.join(' ')}` : ''}: ${error instanceof Error ? error.message : String(error)}`
     }
   }
 
@@ -242,7 +261,12 @@ export async function createTerminalSession(
       ? ` Requested cwd: ${requestedCwd}. Fallback cwd: ${cwd}.`
       : ` Cwd: ${cwd}.`
   return {
-    error: `Failed to start terminal shell.${cwdHint} Tried: ${launches.map((launch) => `${launch.shell}${launch.args.length > 0 ? ` ${launch.args.join(' ')}` : ''}`).join(', ')}. Last error: ${lastError}`
+    error: `Failed to start terminal shell.${cwdHint} Tried: ${launches
+      .map((launch) => {
+        const launchArgs = getLaunchArgs(launch, args.command)
+        return `${launch.shell}${launchArgs.length > 0 ? ` ${launchArgs.join(' ')}` : ''}`
+      })
+      .join(', ')}. Last error: ${lastError}`
   }
 }
 
@@ -268,7 +292,9 @@ function appendTerminalOutput(session: TerminalSession, data: string): TerminalO
   return chunk
 }
 
-export function onTerminalSessionOutput(listener: (event: TerminalOutputEvent) => void): () => void {
+export function onTerminalSessionOutput(
+  listener: (event: TerminalOutputEvent) => void
+): () => void {
   terminalOutputListeners.add(listener)
   return () => terminalOutputListeners.delete(listener)
 }

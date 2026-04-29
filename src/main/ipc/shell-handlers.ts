@@ -8,7 +8,7 @@ import {
   onTerminalSessionOutput
 } from './terminal-handlers'
 
-const ANSI_ESCAPE_RE = new RegExp(`${String.fromCharCode(27)}\[[0-9;?]*[ -/]*[@-~]`, 'g')
+const ANSI_ESCAPE_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`, 'g')
 const COMPACT_OUTPUT_CHAR_THRESHOLD = 6000
 const COMPACT_OUTPUT_LINE_THRESHOLD = 160
 const MAX_RETURNED_STDOUT_CHARS = 12000
@@ -246,8 +246,7 @@ export function registerShellHandlers(): void {
         {
           cwd: args.cwd || process.cwd(),
           command: args.command,
-          title: 'Shell',
-          shell: process.platform === 'win32' ? 'powershell.exe' : undefined
+          title: 'Shell'
         },
         event.sender
       )
