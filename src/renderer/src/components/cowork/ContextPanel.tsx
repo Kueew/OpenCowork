@@ -59,7 +59,6 @@ export function ContextPanel(): React.JSX.Element {
     activeSession,
     activeProject,
     activeProjectId,
-    streamingMessageId,
     updateProjectDirectory
   } = useChatStore(
     useShallow((s) => {
@@ -74,7 +73,6 @@ export function ContextPanel(): React.JSX.Element {
         activeSession,
         activeProject,
         activeProjectId: s.activeProjectId,
-        streamingMessageId: s.streamingMessageId,
         updateProjectDirectory: s.updateProjectDirectory
       }
     })
@@ -413,13 +411,9 @@ export function ContextPanel(): React.JSX.Element {
                   : 0
                 const lastUsage = [...activeSession.messages].reverse().find((m) => {
                   if (!m.usage) return false
-                  if (streamingMessageId && m.id === streamingMessageId) {
-                    const streamingCtxUsed = m.usage.contextTokens ?? 0
-                    if (streamingCtxUsed <= 0) return false
-                  }
-                  return true
+                  return (m.usage.contextTokens ?? 0) > 0
                 })?.usage
-                const ctxUsed = lastUsage?.contextTokens ?? lastUsage?.inputTokens ?? 0
+                const ctxUsed = lastUsage?.contextTokens ?? 0
                 const ctxLimit =
                   lastUsage?.contextLength ?? compressionConfig?.contextLength ?? null
                 const ctxGaugeLimit = compressionWindow ?? ctxLimit

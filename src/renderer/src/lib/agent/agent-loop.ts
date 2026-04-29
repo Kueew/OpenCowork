@@ -53,7 +53,7 @@ class ProviderRequestError extends Error {
 }
 
 function readContextUsage(usage?: UnifiedMessage['usage']): number {
-  return usage?.contextTokens ?? usage?.inputTokens ?? 0
+  return usage?.contextTokens ?? 0
 }
 
 function findRecentContextUsage(messages: UnifiedMessage[]): number {

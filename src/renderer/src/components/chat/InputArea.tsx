@@ -163,11 +163,9 @@ function ContextRing(): React.JSX.Element | null {
         const message = messages[index]
         const usage = message?.usage
         if (!usage) continue
-        if (s.streamingMessageId && message?.id === s.streamingMessageId) {
-          const streamingCtxUsed = usage.contextTokens ?? 0
-          if (streamingCtxUsed <= 0) continue
-        }
-        return [usage.contextTokens ?? 0, usage.contextLength ?? null]
+        const contextTokens = usage.contextTokens ?? 0
+        if (contextTokens <= 0) continue
+        return [contextTokens, usage.contextLength ?? null]
       }
       return [0, null]
     }, []),
