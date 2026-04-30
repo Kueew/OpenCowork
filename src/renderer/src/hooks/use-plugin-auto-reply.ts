@@ -475,6 +475,7 @@ async function _runPluginAgent(task: PluginAutoReplyTask): Promise<void> {
 
   const memorySnapshot = await loadLayeredMemorySnapshot(ipcClient, {
     workingFolder: session.workingFolder,
+    sshConnectionId: session.sshConnectionId,
     scope: 'shared'
   })
   const sshConnection = session.sshConnectionId

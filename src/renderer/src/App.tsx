@@ -121,6 +121,7 @@ interface TeamWorkerParams {
   model: string | null
   agentName: string | null
   workingFolder?: string
+  sshConnectionId?: string | null
 }
 
 function isSshWindowView(): boolean {
@@ -217,7 +218,8 @@ function App(): React.JSX.Element {
       taskId: search.get('taskId'),
       model: search.get('model'),
       agentName: search.get('agentName'),
-      workingFolder: search.get('workingFolder') ?? undefined
+      workingFolder: search.get('workingFolder') ?? undefined,
+      sshConnectionId: search.get('sshConnectionId')
     }
   }, [])
   const workerBootStartedRef = useRef(false)
@@ -256,7 +258,8 @@ function App(): React.JSX.Element {
           taskId: teamWorkerParams.taskId,
           model: teamWorkerParams.model,
           agentName: teamWorkerParams.agentName,
-          workingFolder: teamWorkerParams.workingFolder
+          workingFolder: teamWorkerParams.workingFolder,
+          sshConnectionId: teamWorkerParams.sshConnectionId ?? undefined
         })
 
         window.close()
@@ -540,6 +543,7 @@ function App(): React.JSX.Element {
         agentId?: string | null
         model?: string | null
         workingFolder?: string | null
+        sshConnectionId?: string | null
         firedAt?: number
         deliveryMode?: string
         deliveryTarget?: string | null

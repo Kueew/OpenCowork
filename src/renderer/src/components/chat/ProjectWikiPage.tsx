@@ -261,6 +261,7 @@ export function ProjectWikiPage(): React.JSX.Element {
           projectId: activeProjectId,
           projectName: activeProject.name,
           workingFolder: activeProject.workingFolder,
+          sshConnectionId: activeProject.sshConnectionId,
           mode
         },
         {

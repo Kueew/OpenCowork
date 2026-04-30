@@ -81,6 +81,7 @@ export interface SpawnIsolatedTeamWorkerArgs {
   model?: string | null
   agentName?: string | null
   workingFolder?: string
+  sshConnectionId?: string | null
 }
 
 export interface SpawnIsolatedTeamWorkerResult {

@@ -36,6 +36,7 @@ import {
 import { useChatStore } from '@renderer/stores/chat-store'
 import { useUIStore } from '@renderer/stores/ui-store'
 import { ipcClient } from '@renderer/lib/ipc/ipc-client'
+import { IPC } from '@renderer/lib/ipc/channels'
 import { createSelectFileTag } from '@renderer/lib/select-file-tags'
 import { cn } from '@renderer/lib/utils'
 import { AnimatePresence, motion } from 'motion/react'
@@ -148,6 +149,21 @@ function toRelativePath(filePath: string, workingFolder?: string): string {
   if (!workingFolder) return filePath
   if (!filePath.startsWith(workingFolder)) return filePath
   return filePath.slice(workingFolder.length).replace(/^[\\/]+/, '')
+}
+
+function basename(filePath: string): string {
+  const normalized = filePath.replace(/[\\/]+$/, '')
+  return normalized.split(/[\\/]/).filter(Boolean).pop() ?? normalized
+}
+
+function parentPath(filePath: string, separator: string): string {
+  const index = filePath.lastIndexOf(separator)
+  if (index <= 0) return separator === '/' ? '/' : ''
+  return filePath.slice(0, index)
+}
+
+function joinPath(parent: string, name: string, separator: string): string {
+  return `${parent.replace(/[\\/]+$/, '')}${separator}${name}`
 }
 
 function DepthGuides({ depth }: { depth: number }): React.JSX.Element | null {
@@ -500,11 +516,13 @@ export function FileTreePanel({
 
       return {
         sessionId: resolvedSessionId,
-        workingFolder: currentSession?.workingFolder ?? currentProject?.workingFolder
+        workingFolder: currentSession?.workingFolder ?? currentProject?.workingFolder,
+        sshConnectionId: currentSession?.sshConnectionId ?? currentProject?.sshConnectionId
       }
     })
   )
   const workingFolder = sessionView.workingFolder
+  const sshConnectionId = sessionView.sshConnectionId
   const previewPanelState = useUIStore((s) => s.previewPanelState)
 
   const [tree, setTree] = useState<TreeNode[]>([])
@@ -519,19 +537,27 @@ export function FileTreePanel({
   const [newItemParent, setNewItemParent] = useState<string | null>(null)
   const [newItemType, setNewItemType] = useState<'file' | 'directory'>('file')
 
-  const loadDir = useCallback(async (dirPath: string): Promise<TreeNode[]> => {
-    const result = (await ipcClient.invoke('fs:list-dir', { path: dirPath })) as
-      | FileEntry[]
-      | { error: string }
-    if ('error' in result) throw new Error(String(result.error))
-    const sorted = sortEntries(result as FileEntry[])
-    return sorted.map((e) => ({
-      ...e,
-      expanded: false,
-      loaded: e.type === 'file',
-      children: e.type === 'directory' ? [] : undefined
-    }))
-  }, [])
+  const loadDir = useCallback(
+    async (dirPath: string): Promise<TreeNode[]> => {
+      const result = sshConnectionId
+        ? ((await ipcClient.invoke(IPC.SSH_FS_LIST_DIR, {
+            connectionId: sshConnectionId,
+            path: dirPath
+          })) as FileEntry[] | { error: string })
+        : ((await ipcClient.invoke(IPC.FS_LIST_DIR, { path: dirPath })) as
+            | FileEntry[]
+            | { error: string })
+      if ('error' in result) throw new Error(String(result.error))
+      const sorted = sortEntries(result as FileEntry[])
+      return sorted.map((e) => ({
+        ...e,
+        expanded: false,
+        loaded: e.type === 'file',
+        children: e.type === 'directory' ? [] : undefined
+      }))
+    },
+    [sshConnectionId]
+  )
 
   const loadRoot = useCallback(async () => {
     if (!workingFolder) return
@@ -563,13 +589,36 @@ export function FileTreePanel({
     setSearchLoading(true)
     const timer = window.setTimeout(() => {
       void ipcClient
-        .invoke('fs:search-files', {
-          path: workingFolder,
-          query,
-          limit: 100
-        })
+        .invoke(
+          sshConnectionId ? IPC.SSH_FS_GLOB : 'fs:search-files',
+          sshConnectionId
+            ? {
+                connectionId: sshConnectionId,
+                path: workingFolder,
+                pattern: `*${query}*`
+              }
+            : {
+                path: workingFolder,
+                query,
+                limit: 100
+              }
+        )
         .then((result) => {
           if (cancelled) return
+          if (sshConnectionId) {
+            const matches = (
+              result as { matches?: Array<{ path: string; type?: 'file' | 'directory' }> }
+            ).matches
+            setSearchResults(
+              Array.isArray(matches)
+                ? matches
+                    .filter((item) => item.type !== 'directory')
+                    .slice(0, 100)
+                    .map((item) => ({ path: item.path, name: basename(item.path) }))
+                : []
+            )
+            return
+          }
           setSearchResults(Array.isArray(result) ? (result as FileSearchItem[]) : [])
         })
         .catch(() => {
@@ -586,7 +635,7 @@ export function FileTreePanel({
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [searchQuery, workingFolder])
+  }, [searchQuery, sshConnectionId, workingFolder])
 
   const handleToggle = useCallback(
     async (dirPath: string) => {
@@ -658,7 +707,7 @@ export function FileTreePanel({
 
   // --- Context menu action handlers ---
 
-  const sep = workingFolder?.includes('/') ? '/' : '\\'
+  const sep = sshConnectionId ? '/' : workingFolder?.includes('/') ? '/' : '\\'
 
   const handleDelete = useCallback(
     async (nodePath: string, nodeName: string, isDir: boolean) => {
@@ -671,8 +720,11 @@ export function FileTreePanel({
       })
       if (!confirmed) return
       try {
-        await ipcClient.invoke('fs:delete', { path: nodePath })
-        const parentDir = nodePath.substring(0, nodePath.lastIndexOf(sep))
+        await ipcClient.invoke(
+          sshConnectionId ? IPC.SSH_FS_DELETE : IPC.FS_DELETE,
+          sshConnectionId ? { connectionId: sshConnectionId, path: nodePath } : { path: nodePath }
+        )
+        const parentDir = parentPath(nodePath, sep)
         if (parentDir === workingFolder) {
           await loadRoot()
         } else {
@@ -682,7 +734,7 @@ export function FileTreePanel({
         console.error('Delete failed:', err)
       }
     },
-    [sep, t, workingFolder, loadRoot, refreshDir]
+    [sep, sshConnectionId, t, workingFolder, loadRoot, refreshDir]
   )
 
   const handleRenameStart = useCallback((nodePath: string) => {
@@ -693,10 +745,15 @@ export function FileTreePanel({
   const handleRenameConfirm = useCallback(
     async (newName: string) => {
       if (!renamingPath) return
-      const parentDir = renamingPath.substring(0, renamingPath.lastIndexOf(sep))
-      const newPath = parentDir + sep + newName
+      const parentDir = parentPath(renamingPath, sep)
+      const newPath = joinPath(parentDir, newName, sep)
       try {
-        await ipcClient.invoke('fs:move', { from: renamingPath, to: newPath })
+        await ipcClient.invoke(
+          sshConnectionId ? IPC.SSH_FS_MOVE : IPC.FS_MOVE,
+          sshConnectionId
+            ? { connectionId: sshConnectionId, from: renamingPath, to: newPath }
+            : { from: renamingPath, to: newPath }
+        )
         setRenamingPath(null)
         if (parentDir === workingFolder) {
           await loadRoot()
@@ -707,7 +764,7 @@ export function FileTreePanel({
         console.error('Rename failed:', err)
       }
     },
-    [renamingPath, sep, workingFolder, loadRoot, refreshDir]
+    [renamingPath, sep, sshConnectionId, workingFolder, loadRoot, refreshDir]
   )
 
   const handleRenameCancel = useCallback(() => setRenamingPath(null), [])
@@ -766,12 +823,20 @@ export function FileTreePanel({
   const handleNewItemConfirm = useCallback(
     async (name: string) => {
       if (!newItemParent) return
-      const newPath = newItemParent + sep + name
+      const newPath = joinPath(newItemParent, name, sep)
       try {
         if (newItemType === 'directory') {
-          await ipcClient.invoke('fs:mkdir', { path: newPath })
+          await ipcClient.invoke(
+            sshConnectionId ? IPC.SSH_FS_MKDIR : IPC.FS_MKDIR,
+            sshConnectionId ? { connectionId: sshConnectionId, path: newPath } : { path: newPath }
+          )
         } else {
-          await ipcClient.invoke('fs:write-file', { path: newPath, content: '' })
+          await ipcClient.invoke(
+            sshConnectionId ? IPC.SSH_FS_WRITE_FILE : IPC.FS_WRITE_FILE,
+            sshConnectionId
+              ? { connectionId: sshConnectionId, path: newPath, content: '' }
+              : { path: newPath, content: '' }
+          )
         }
         setNewItemParent(null)
         await refreshDir(newItemParent)
@@ -779,7 +844,7 @@ export function FileTreePanel({
         console.error('Create failed:', err)
       }
     },
-    [newItemParent, newItemType, sep, refreshDir]
+    [newItemParent, newItemType, sep, sshConnectionId, refreshDir]
   )
 
   const handleNewItemCancel = useCallback(() => setNewItemParent(null), [])

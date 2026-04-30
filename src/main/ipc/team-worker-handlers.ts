@@ -1,5 +1,6 @@
 import { BrowserWindow, ipcMain } from 'electron'
 import { nanoid } from 'nanoid'
+import path from 'path'
 import type {
   SpawnIsolatedTeamWorkerArgs,
   SpawnIsolatedTeamWorkerResult,
@@ -22,7 +23,8 @@ function buildWorkerUrl(args: SpawnIsolatedTeamWorkerArgs): string {
     ...(args.taskId ? { taskId: args.taskId } : {}),
     ...(args.model ? { model: args.model } : {}),
     ...(args.agentName ? { agentName: args.agentName } : {}),
-    ...(args.workingFolder ? { workingFolder: args.workingFolder } : {})
+    ...(args.workingFolder ? { workingFolder: args.workingFolder } : {}),
+    ...(args.sshConnectionId ? { sshConnectionId: args.sshConnectionId } : {})
   })
 
   if (process.env['ELECTRON_RENDERER_URL']) {
@@ -42,7 +44,7 @@ export async function spawnIsolatedTeamWorker(
     show: false,
     autoHideMenuBar: true,
     webPreferences: {
-      preload: require('path').join(__dirname, '../preload/index.js'),
+      preload: path.join(__dirname, '../preload/index.js'),
       sandbox: false
     }
   })

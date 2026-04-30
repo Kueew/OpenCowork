@@ -100,6 +100,7 @@ interface TaskPageSessionSummary {
   title: string
   projectId?: string
   workingFolder?: string
+  sshConnectionId?: string
   providerId?: string
   modelId?: string
 }
@@ -113,6 +114,7 @@ function selectTaskPageSessionSummaries(state: {
     title: string
     projectId?: string
     workingFolder?: string
+    sshConnectionId?: string
     providerId?: string
     modelId?: string
   }>
@@ -132,6 +134,7 @@ function selectTaskPageSessionSummaries(state: {
       cached.title === session.title &&
       cached.projectId === session.projectId &&
       cached.workingFolder === session.workingFolder &&
+      cached.sshConnectionId === session.sshConnectionId &&
       cached.providerId === session.providerId &&
       cached.modelId === session.modelId
     ) {
@@ -146,6 +149,7 @@ function selectTaskPageSessionSummaries(state: {
       title: session.title,
       projectId: session.projectId,
       workingFolder: session.workingFolder,
+      sshConnectionId: session.sshConnectionId,
       providerId: session.providerId,
       modelId: session.modelId
     }
@@ -605,6 +609,7 @@ export function TasksPage(): React.JSX.Element {
       prompt: editorForm.prompt.trim(),
       model: editorForm.model.trim() || null,
       workingFolder: editorForm.workingFolder.trim() || null,
+      sshConnectionId: session?.sshConnectionId ?? null,
       deliveryMode: editorForm.deliveryMode,
       deliveryTarget: editorForm.deliveryTarget.trim() || null,
       deleteAfterRun: editorForm.deleteAfterRun,

@@ -27,6 +27,7 @@ import {
   Plus,
   Search,
   Settings,
+  Server,
   Trash2,
   Upload,
   Wand2,
@@ -1188,6 +1189,15 @@ export function WorkspaceSidebar(): React.JSX.Element {
                                 >
                                   {project.name}
                                 </span>
+                                {project.sshConnectionId ? (
+                                  <span
+                                    className="inline-flex shrink-0 items-center gap-0.5 rounded border border-sky-500/30 bg-sky-500/10 px-1 py-px text-[9px] font-semibold leading-none text-sky-600 dark:text-sky-300"
+                                    title="SSH project"
+                                  >
+                                    <Server className="size-2.5" />
+                                    SSH
+                                  </span>
+                                ) : null}
                               </div>
                             </button>
 

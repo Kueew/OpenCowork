@@ -3227,6 +3227,7 @@ export function useChatActions(): {
           const sessionWorkingFolder = resolveSessionWorkingFolder(session)
           const memorySnapshot = await loadLayeredMemorySnapshot(ipcClient, {
             workingFolder: sessionWorkingFolder,
+            sshConnectionId: session?.sshConnectionId,
             scope: sessionScope
           })
           const sshConnection = session?.sshConnectionId
@@ -5152,6 +5153,10 @@ export async function sendImplementPlanInNewSession(planId: string): Promise<voi
   const providerStore = useProviderStore.getState()
   const sourceSession = chatStore.sessions.find((item) => item.id === latestPlan.sessionId)
   if (!sourceSession) return
+  const sourceProject = sourceSession.projectId
+    ? chatStore.projects.find((item) => item.id === sourceSession.projectId)
+    : undefined
+  const sourceSshConnectionId = sourceSession.sshConnectionId ?? sourceProject?.sshConnectionId
 
   const newSessionId = chatStore.createSession('code', sourceSession.projectId, { planId })
   chatStore.updateSessionTitle(newSessionId, latestPlan.title)
@@ -5159,7 +5164,7 @@ export async function sendImplementPlanInNewSession(planId: string): Promise<voi
   if (sourceSession.workingFolder) {
     chatStore.setWorkingFolder(newSessionId, sourceSession.workingFolder)
   }
-  chatStore.setSshConnectionId(newSessionId, sourceSession.sshConnectionId ?? null)
+  chatStore.setSshConnectionId(newSessionId, sourceSshConnectionId ?? null)
 
   if (sourceSession.providerId && sourceSession.modelId) {
     chatStore.updateSessionModel(newSessionId, sourceSession.providerId, sourceSession.modelId)
@@ -5172,7 +5177,12 @@ export async function sendImplementPlanInNewSession(planId: string): Promise<voi
   }
 
   try {
-    const result = await ipcClient.invoke(IPC.FS_READ_FILE, { path: latestPlan.filePath })
+    const result = await ipcClient.invoke(
+      sourceSshConnectionId ? IPC.SSH_FS_READ_FILE : IPC.FS_READ_FILE,
+      sourceSshConnectionId
+        ? { connectionId: sourceSshConnectionId, path: latestPlan.filePath }
+        : { path: latestPlan.filePath }
+    )
     if (typeof result !== 'string' || !result.trim()) {
       throw new Error(
         i18n.t('plan.missingPlanFile', {

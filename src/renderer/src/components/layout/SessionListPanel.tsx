@@ -23,6 +23,7 @@ import {
   FolderOpen,
   FolderPlus,
   ChevronRight,
+  Server,
   Sparkles,
   ExternalLink
 } from 'lucide-react'
@@ -1308,6 +1309,15 @@ export function SessionListPanel(): React.JSX.Element {
               </span>
               <FolderOpen className="size-4 shrink-0" />
               <span className="min-w-0 flex-1 truncate">{group.project.name}</span>
+              {group.project.sshConnectionId ? (
+                <span
+                  className="inline-flex shrink-0 items-center gap-0.5 rounded border border-sky-500/30 bg-sky-500/10 px-1 py-px text-[9px] font-semibold leading-none text-sky-600 dark:text-sky-300"
+                  title="SSH project"
+                >
+                  <Server className="size-2.5" />
+                  SSH
+                </span>
+              ) : null}
               {group.project.pinned && (
                 <Pin className="size-3 text-muted-foreground/35 -rotate-45" />
               )}

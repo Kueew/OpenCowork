@@ -51,9 +51,15 @@ function StatusBadge({ status }: { status: PlanStatus }): React.JSX.Element {
   )
 }
 
-async function readPlanContent(filePath?: string): Promise<string> {
+async function readPlanContent(
+  filePath?: string,
+  sshConnectionId?: string | null
+): Promise<string> {
   if (!filePath) return ''
-  const result = await ipcClient.invoke(IPC.FS_READ_FILE, { path: filePath })
+  const result = await ipcClient.invoke(
+    sshConnectionId ? IPC.SSH_FS_READ_FILE : IPC.FS_READ_FILE,
+    sshConnectionId ? { connectionId: sshConnectionId, path: filePath } : { path: filePath }
+  )
   if (result && typeof result === 'object' && 'error' in result) {
     return ''
   }
@@ -249,6 +255,14 @@ function PlanContent({ plan, content }: { plan: Plan; content: string }): React.
 export function PlanPanel(): React.JSX.Element {
   const { t } = useTranslation('cowork')
   const activeSessionId = useChatStore((s) => s.activeSessionId)
+  const sshConnectionId = useChatStore((s) => {
+    if (!activeSessionId) return null
+    const session = s.sessions.find((item) => item.id === activeSessionId)
+    const project = session?.projectId
+      ? s.projects.find((item) => item.id === session.projectId)
+      : undefined
+    return session?.sshConnectionId ?? project?.sshConnectionId ?? null
+  })
   const planSummary = usePlanStore(
     useShallow((s) => {
       if (!activeSessionId) return undefined
@@ -285,13 +299,13 @@ export function PlanPanel(): React.JSX.Element {
       const nextPlan = loadedPlan ?? planSummary
       setPlan(nextPlan)
 
-      const nextContent = await readPlanContent(nextPlan?.filePath)
+      const nextContent = await readPlanContent(nextPlan?.filePath, sshConnectionId)
       if (!cancelled) {
         setContent(nextContent)
       }
 
       const watchedFilePath = nextPlan?.filePath
-      if (watchedFilePath) {
+      if (watchedFilePath && !sshConnectionId) {
         await ipcClient.invoke(IPC.FS_WATCH_FILE, { path: watchedFilePath })
         unsubscribe = ipcClient.on(IPC.FS_FILE_CHANGED, (payload) => {
           const changedPath =
@@ -299,7 +313,7 @@ export function PlanPanel(): React.JSX.Element {
               ? String((payload as { path?: unknown }).path ?? '')
               : ''
           if (changedPath !== watchedFilePath) return
-          void readPlanContent(watchedFilePath).then((updated) => {
+          void readPlanContent(watchedFilePath, sshConnectionId).then((updated) => {
             if (!cancelled) {
               setContent(updated)
             }
@@ -312,12 +326,12 @@ export function PlanPanel(): React.JSX.Element {
 
     return () => {
       cancelled = true
-      if (planSummary?.filePath) {
+      if (planSummary?.filePath && !sshConnectionId) {
         void ipcClient.invoke(IPC.FS_UNWATCH_FILE, { path: planSummary.filePath })
       }
       unsubscribe?.()
     }
-  }, [activeSessionId, planSummary, planSummary?.id, planSummary?.filePath])
+  }, [activeSessionId, planSummary, planSummary?.id, planSummary?.filePath, sshConnectionId])
 
   if (!plan) {
     return (
