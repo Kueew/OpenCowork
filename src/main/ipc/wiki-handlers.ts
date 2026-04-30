@@ -6,6 +6,7 @@ import * as projectsDao from '../db/projects-dao'
 import * as wikiDao from '../db/wiki-dao'
 import { glob } from 'glob'
 import { createGitIgnoreMatcher } from './gitignore-utils'
+import { getSshClientForGitExec } from './ssh-handlers'
 
 const DEFAULT_WIKI_EXPORT_DIR = '.agents/wiki-export'
 const SOURCE_INCLUDE_PATTERNS = [
@@ -59,6 +60,106 @@ async function collectProjectFiles(rootDir: string): Promise<string[]> {
     }
   }
   return Array.from(result).sort((a, b) => a.localeCompare(b))
+}
+
+function shellEscape(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`
+}
+
+function joinWorkspacePath(
+  workingFolder: string,
+  sshConnectionId: string | null,
+  ...segments: string[]
+): string {
+  return sshConnectionId
+    ? path.posix.join(workingFolder, ...segments)
+    : path.join(workingFolder, ...segments)
+}
+
+function execSshCommand(
+  connectionId: string,
+  command: string,
+  timeout = 60_000
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return new Promise((resolve) => {
+    void (async () => {
+      const client = await getSshClientForGitExec(connectionId)
+      if (!client) {
+        resolve({ stdout: '', stderr: `SSH connection unavailable: ${connectionId}`, exitCode: 1 })
+        return
+      }
+
+      const timer = setTimeout(() => {
+        resolve({ stdout: '', stderr: 'SSH exec timeout', exitCode: 124 })
+      }, timeout)
+      client.exec(command, (err, stream) => {
+        if (err) {
+          clearTimeout(timer)
+          resolve({ stdout: '', stderr: err.message, exitCode: 1 })
+          return
+        }
+        let stdout = ''
+        let stderr = ''
+        stream.on('data', (chunk: Buffer) => {
+          stdout += chunk.toString('utf8')
+        })
+        stream.stderr?.on('data', (chunk: Buffer) => {
+          stderr += chunk.toString('utf8')
+        })
+        stream.on('close', (exitCode: number) => {
+          clearTimeout(timer)
+          resolve({ stdout, stderr, exitCode: exitCode ?? 0 })
+        })
+      })
+    })().catch((error) => {
+      resolve({
+        stdout: '',
+        stderr: error instanceof Error ? error.message : String(error),
+        exitCode: 1
+      })
+    })
+  })
+}
+
+async function collectRemoteProjectFiles(
+  rootDir: string,
+  sshConnectionId: string
+): Promise<string[]> {
+  const ignored = IGNORED_DIRS.map((item) => `-path './${item}' -o -path '*/${item}/*'`).join(
+    ' -o '
+  )
+  const filePredicates = [
+    "-name '*.ts'",
+    "-name '*.tsx'",
+    "-name '*.js'",
+    "-name '*.jsx'",
+    "-name '*.py'",
+    "-name '*.go'",
+    "-name '*.rs'",
+    "-name '*.java'",
+    "-name '*.cs'",
+    "-name 'package.json'",
+    "-iname 'README*'",
+    "-path './docs/*'",
+    "-name '*.json'",
+    "-name '*.yml'",
+    "-name '*.yaml'"
+  ].join(' -o ')
+  const result = await execSshCommand(
+    sshConnectionId,
+    `cd ${shellEscape(rootDir)} && find . \\( ${ignored} \\) -prune -o -type f \\( ${filePredicates} \\) -print | sed 's#^./##' | head -2000`,
+    60_000
+  )
+  if (result.exitCode !== 0) return []
+  return normalizeLines(result.stdout)
+}
+
+async function collectProjectFilesForTarget(
+  rootDir: string,
+  sshConnectionId: string | null
+): Promise<string[]> {
+  if (sshConnectionId) return collectRemoteProjectFiles(rootDir, sshConnectionId)
+  return collectProjectFiles(rootDir)
 }
 
 function deriveModuleGroups(
@@ -119,8 +220,14 @@ function buildDocumentContent(args: {
 
 function execGit(
   args: string[],
-  cwd: string
+  cwd: string,
+  sshConnectionId?: string | null
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  if (sshConnectionId) {
+    const renderedArgs = args.map(shellEscape).join(' ')
+    return execSshCommand(sshConnectionId, `git -C ${shellEscape(cwd)} ${renderedArgs}`)
+  }
+
   return new Promise((resolve) => {
     const child = spawn('git', args, {
       cwd,
@@ -148,29 +255,57 @@ function normalizeLines(text: string): string[] {
     .filter(Boolean)
 }
 
-async function getHeadCommitId(workingFolder: string): Promise<string | null> {
-  const result = await execGit(['rev-parse', 'HEAD'], workingFolder)
+async function getHeadCommitId(
+  workingFolder: string,
+  sshConnectionId?: string | null
+): Promise<string | null> {
+  const result = await execGit(['rev-parse', 'HEAD'], workingFolder, sshConnectionId)
   if (result.exitCode !== 0) return null
   return result.stdout.trim() || null
 }
 
 async function getChangedFiles(
   workingFolder: string,
-  baseCommitId: string
+  baseCommitId: string,
+  sshConnectionId?: string | null
 ): Promise<string[] | null> {
-  const result = await execGit(['diff', '--name-only', `${baseCommitId}..HEAD`], workingFolder)
+  const result = await execGit(
+    ['diff', '--name-only', `${baseCommitId}..HEAD`],
+    workingFolder,
+    sshConnectionId
+  )
   if (result.exitCode !== 0) return null
   return normalizeLines(result.stdout)
 }
 
-async function exportProjectWiki(projectId: string, workingFolder: string): Promise<string[]> {
+async function exportProjectWiki(
+  projectId: string,
+  workingFolder: string,
+  sshConnectionId: string | null
+): Promise<string[]> {
   const documents = wikiDao.listWikiLeafDocuments(projectId)
-  const exportDir = path.join(workingFolder, DEFAULT_WIKI_EXPORT_DIR)
-  fs.mkdirSync(exportDir, { recursive: true })
+  const exportDir = joinWorkspacePath(workingFolder, sshConnectionId, DEFAULT_WIKI_EXPORT_DIR)
+  if (sshConnectionId) {
+    await execSshCommand(sshConnectionId, `mkdir -p ${shellEscape(exportDir)}`)
+  } else {
+    fs.mkdirSync(exportDir, { recursive: true })
+  }
   const exportedPaths: string[] = []
   for (const document of documents) {
-    const filePath = path.join(exportDir, `${document.slug || slugify(document.name)}.md`)
-    fs.writeFileSync(filePath, document.content_markdown, 'utf8')
+    const filePath = joinWorkspacePath(
+      exportDir,
+      sshConnectionId,
+      `${document.slug || slugify(document.name)}.md`
+    )
+    if (sshConnectionId) {
+      const encoded = Buffer.from(document.content_markdown, 'utf8').toString('base64')
+      await execSshCommand(
+        sshConnectionId,
+        `printf %s ${shellEscape(encoded)} | base64 -d > ${shellEscape(filePath)}`
+      )
+    } else {
+      fs.writeFileSync(filePath, document.content_markdown, 'utf8')
+    }
     exportedPaths.push(filePath)
   }
   return exportedPaths
@@ -194,13 +329,20 @@ async function generateProjectWiki(
   const project = projectsDao.getProject(projectId)
   if (!project?.working_folder) return { error: 'Project working folder is missing' }
   const workingFolder = project.working_folder
-  const files = changedFiles?.length ? changedFiles : await collectProjectFiles(workingFolder)
+  const sshConnectionId = project.ssh_connection_id ?? null
+  const files = changedFiles?.length
+    ? changedFiles
+    : await collectProjectFilesForTarget(workingFolder, sshConnectionId)
   const grouped = deriveModuleGroups(files)
-  const headCommit = await getHeadCommitId(workingFolder)
+  const headCommit = await getHeadCommitId(workingFolder, sshConnectionId)
   if (mode === 'regenerate') {
     wikiDao.clearWikiProject(projectId)
-    const exportDir = path.join(workingFolder, DEFAULT_WIKI_EXPORT_DIR)
-    fs.rmSync(exportDir, { recursive: true, force: true })
+    const exportDir = joinWorkspacePath(workingFolder, sshConnectionId, DEFAULT_WIKI_EXPORT_DIR)
+    if (sshConnectionId) {
+      await execSshCommand(sshConnectionId, `rm -rf ${shellEscape(exportDir)}`)
+    } else {
+      fs.rmSync(exportDir, { recursive: true, force: true })
+    }
   }
   wikiDao.saveWikiProjectState(projectId, {
     wikiEnabled: true,
@@ -295,7 +437,7 @@ async function generateProjectWiki(
     }
     savedDocuments.push({ id: saved.id, name: saved.name, files: doc.files })
   }
-  const exportedPaths = await exportProjectWiki(projectId, workingFolder)
+  const exportedPaths = await exportProjectWiki(projectId, workingFolder, sshConnectionId)
   wikiDao.saveWikiProjectState(projectId, {
     wikiEnabled: true,
     lastGenerationStatus: 'completed',
@@ -346,7 +488,11 @@ export function registerWikiHandlers(): void {
     if (!baseCommitId) {
       return await generateProjectWiki(args.projectId, 'full')
     }
-    const changedFiles = await getChangedFiles(project.working_folder, baseCommitId)
+    const changedFiles = await getChangedFiles(
+      project.working_folder,
+      baseCommitId,
+      project.ssh_connection_id ?? null
+    )
     if (changedFiles === null) {
       return await generateProjectWiki(args.projectId, 'full')
     }
@@ -365,7 +511,10 @@ export function registerWikiHandlers(): void {
   ipcMain.handle('wiki:get-head-commit', async (_event, args: { projectId: string }) => {
     const project = projectsDao.getProject(args.projectId)
     if (!project?.working_folder) return { commitId: null }
-    const commitId = await getHeadCommitId(project.working_folder)
+    const commitId = await getHeadCommitId(
+      project.working_folder,
+      project.ssh_connection_id ?? null
+    )
     return { commitId }
   })
 
@@ -374,7 +523,11 @@ export function registerWikiHandlers(): void {
     async (_event, args: { projectId: string; baseCommitId: string }) => {
       const project = projectsDao.getProject(args.projectId)
       if (!project?.working_folder) return { changedFiles: null }
-      const changedFiles = await getChangedFiles(project.working_folder, args.baseCommitId)
+      const changedFiles = await getChangedFiles(
+        project.working_folder,
+        args.baseCommitId,
+        project.ssh_connection_id ?? null
+      )
       return { changedFiles }
     }
   )
@@ -383,7 +536,11 @@ export function registerWikiHandlers(): void {
     const project = projectsDao.getProject(args.projectId)
     if (!project?.working_folder)
       return { exportedPaths: [], error: 'Project working folder is missing' }
-    const exportedPaths = await exportProjectWiki(args.projectId, project.working_folder)
+    const exportedPaths = await exportProjectWiki(
+      args.projectId,
+      project.working_folder,
+      project.ssh_connection_id ?? null
+    )
     return { exportedPaths }
   })
 }

@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.85] - 2026-04-25
+
+### Added
+
+- Improved wiki generation to collect project source files locally and over SSH with ignore-aware filtering.
+
+### Changed
+
+- Synced teammate runtime state so running tasks and member status stay aligned during team execution.
+
 ## [0.9.84] - 2026-04-25
 
 ### Changed

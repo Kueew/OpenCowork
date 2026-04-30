@@ -120,6 +120,7 @@ interface RunTeammateOptions {
   model: string | null
   agentName: string | null
   workingFolder?: string
+  sshConnectionId?: string
 }
 
 interface SingleTaskResult {
@@ -133,7 +134,7 @@ interface SingleTaskResult {
 }
 
 export async function runTeammate(options: RunTeammateOptions): Promise<void> {
-  const { memberId, memberName, model, agentName, workingFolder } = options
+  const { memberId, memberName, model, agentName, workingFolder, sshConnectionId } = options
   let { prompt, taskId } = options
 
   const team = useTeamStore.getState().activeTeam
@@ -228,6 +229,7 @@ export async function runTeammate(options: RunTeammateOptions): Promise<void> {
       model,
       agentName,
       workingFolder,
+      sshConnectionId,
       abortController,
       toolDefs,
       messageQueue
@@ -302,6 +304,7 @@ async function runSingleTaskLoop(opts: {
   model: string | null
   agentName: string | null
   workingFolder?: string
+  sshConnectionId?: string
   abortController: AbortController
   toolDefs: ReturnType<typeof toolRegistry.getDefinitions>
   messageQueue?: MessageQueue
@@ -314,6 +317,7 @@ async function runSingleTaskLoop(opts: {
     model,
     agentName,
     workingFolder,
+    sshConnectionId,
     abortController,
     toolDefs,
     messageQueue
@@ -414,6 +418,7 @@ async function runSingleTaskLoop(opts: {
       },
       toolContext: {
         workingFolder,
+        sshConnectionId,
         signal: abortController.signal,
         ipc: ipcClient,
         callerAgent: 'teammate'
@@ -491,6 +496,7 @@ async function runSingleTaskLoop(opts: {
     loopConfig,
     toolContext: {
       workingFolder,
+      sshConnectionId,
       signal: abortController.signal,
       ipc: ipcClient,
       callerAgent: 'teammate'
@@ -604,6 +610,7 @@ async function runSingleTaskLoop(opts: {
       loopConfig,
       toolContext: {
         workingFolder,
+        sshConnectionId,
         signal: abortController.signal,
         ipc: ipcClient,
         callerAgent: 'teammate'
