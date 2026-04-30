@@ -32,6 +32,7 @@ interface CronAddArgs {
   agentId?: string
   model?: string
   workingFolder?: string
+  sshConnectionId?: string | null
   deliveryMode?: 'desktop' | 'session' | 'none'
   deliveryTarget?: string
   deleteAfterRun?: boolean
@@ -59,6 +60,7 @@ interface CronUpdateArgs {
     agentId: string | null
     model: string | null
     workingFolder: string | null
+    sshConnectionId: string | null
     deliveryMode: 'desktop' | 'session' | 'none'
     deliveryTarget: string | null
     enabled: boolean
@@ -164,6 +166,7 @@ interface CronJobApi {
   agentId: string | null
   model: string | null
   workingFolder: string | null
+  sshConnectionId: string | null
   deliveryMode: 'desktop' | 'session' | 'none'
   deliveryTarget: string | null
   pluginId: string | null
@@ -255,6 +258,7 @@ function jobToApi(
     agentId: r.agent_id,
     model: r.model,
     workingFolder: r.working_folder,
+    sshConnectionId: r.ssh_connection_id,
     deliveryMode: r.delivery_mode,
     deliveryTarget: r.delivery_target,
     pluginId: r.plugin_id,
@@ -328,6 +332,7 @@ export function registerCronHandlers(): void {
       agent_id: args.agentId ?? null,
       model: args.model ?? null,
       working_folder: args.workingFolder ?? null,
+      ssh_connection_id: args.sshConnectionId ?? null,
       source_session_title: args.sourceSessionTitle ?? null,
       source_project_id: args.sourceProjectId ?? null,
       source_project_name: args.sourceProjectName ?? null,
@@ -352,12 +357,12 @@ export function registerCronHandlers(): void {
         `
         INSERT INTO cron_jobs
           (id, name, session_id, schedule_kind, schedule_at, schedule_every, schedule_expr, schedule_tz,
-           prompt, agent_id, model, working_folder,
+           prompt, agent_id, model, working_folder, ssh_connection_id,
            source_session_title, source_project_id, source_project_name, source_provider_id,
            delivery_mode, delivery_target, plugin_id, plugin_chat_id,
            enabled, delete_after_run, max_iterations, deleted_at,
            last_fired_at, fire_count, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `
       ).run(
         record.id,
@@ -372,6 +377,7 @@ export function registerCronHandlers(): void {
         record.agent_id,
         record.model,
         record.working_folder,
+        record.ssh_connection_id,
         record.source_session_title,
         record.source_project_id,
         record.source_project_name,
@@ -425,6 +431,7 @@ export function registerCronHandlers(): void {
       if (p.agentId !== undefined) updated.agent_id = p.agentId
       if (p.model !== undefined) updated.model = p.model
       if (p.workingFolder !== undefined) updated.working_folder = p.workingFolder
+      if (p.sshConnectionId !== undefined) updated.ssh_connection_id = p.sshConnectionId
       if (p.deliveryMode !== undefined) updated.delivery_mode = p.deliveryMode
       if (p.deliveryTarget !== undefined) updated.delivery_target = p.deliveryTarget
       if (p.enabled !== undefined) updated.enabled = p.enabled ? 1 : 0
@@ -452,7 +459,7 @@ export function registerCronHandlers(): void {
         `
         UPDATE cron_jobs SET
           name=?, session_id=?, schedule_kind=?, schedule_at=?, schedule_every=?, schedule_expr=?, schedule_tz=?,
-          prompt=?, agent_id=?, model=?, working_folder=?,
+          prompt=?, agent_id=?, model=?, working_folder=?, ssh_connection_id=?,
           source_session_title=?, source_project_id=?, source_project_name=?, source_provider_id=?,
           delivery_mode=?, delivery_target=?,
           enabled=?, delete_after_run=?, max_iterations=?, updated_at=?
@@ -470,6 +477,7 @@ export function registerCronHandlers(): void {
         updated.agent_id,
         updated.model,
         updated.working_folder,
+        updated.ssh_connection_id,
         updated.source_session_title,
         updated.source_project_id,
         updated.source_project_name,
@@ -621,6 +629,7 @@ export function registerCronHandlers(): void {
           model: row.model,
           sourceProviderId: row.source_provider_id,
           workingFolder: row.working_folder,
+          sshConnectionId: row.ssh_connection_id,
           sessionId: row.session_id,
           firedAt,
           deliveryMode: row.delivery_mode,
@@ -645,6 +654,7 @@ export function registerCronHandlers(): void {
           model: row.model,
           sourceProviderId: row.source_provider_id,
           workingFolder: row.working_folder,
+          sshConnectionId: row.ssh_connection_id,
           firedAt,
           deliveryMode: row.delivery_mode,
           deliveryTarget: row.delivery_target,

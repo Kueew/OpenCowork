@@ -479,6 +479,7 @@ export function getDb(): Database.Database {
       agent_id             TEXT,
       model                TEXT,
       working_folder       TEXT,
+      ssh_connection_id    TEXT,
       session_id           TEXT,
       source_session_title TEXT,
       source_project_id    TEXT,
@@ -817,6 +818,7 @@ export function getDb(): Database.Database {
     'source_project_id',
     'source_project_name',
     'source_provider_id',
+    'ssh_connection_id',
     'deleted_at'
   ] as const
   for (const column of cronJobColumns) {

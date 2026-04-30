@@ -20,6 +20,7 @@ export interface CronJobRecord {
   agent_id: string | null
   model: string | null
   working_folder: string | null
+  ssh_connection_id: string | null
   session_id: string | null
   source_session_title: string | null
   source_project_id: string | null
@@ -158,6 +159,7 @@ function onJobFired(job: CronJobRecord): void {
       model: job.model,
       sourceProviderId: job.source_provider_id,
       workingFolder: job.working_folder,
+      sshConnectionId: job.ssh_connection_id,
       sessionId: job.session_id,
       firedAt,
       deliveryMode: job.delivery_mode,
@@ -177,6 +179,7 @@ function onJobFired(job: CronJobRecord): void {
         model: job.model,
         sourceProviderId: job.source_provider_id,
         workingFolder: job.working_folder,
+        sshConnectionId: job.ssh_connection_id,
         firedAt,
         deliveryMode: job.delivery_mode,
         deliveryTarget: job.delivery_target,

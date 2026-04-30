@@ -21,6 +21,7 @@ export interface CronJobEntry {
   agentId: string | null
   model: string | null
   workingFolder: string | null
+  sshConnectionId: string | null
   deliveryMode: string
   deliveryTarget: string | null
   pluginId: string | null

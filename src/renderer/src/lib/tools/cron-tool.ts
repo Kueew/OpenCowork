@@ -204,6 +204,7 @@ const cronAddHandler: ToolHandler = {
       agentId: input.agentId ? String(input.agentId) : undefined,
       model: input.model ? String(input.model) : undefined,
       workingFolder: input.workingFolder ? String(input.workingFolder) : ctx.workingFolder,
+      sshConnectionId: ctx.sshConnectionId ?? null,
       deliveryMode: input.deliveryMode ? String(input.deliveryMode) : 'desktop',
       deliveryTarget: input.deliveryTarget ? String(input.deliveryTarget) : ctx.sessionId,
       deleteAfterRun: input.deleteAfterRun,
@@ -252,7 +253,7 @@ const cronUpdateHandler: ToolHandler = {
         patch: {
           type: 'object',
           description:
-            'Fields to update. Any subset of: name, schedule, prompt, agentId, model, workingFolder, deliveryMode, deliveryTarget, enabled, deleteAfterRun, maxIterations.',
+            'Fields to update. Any subset of: name, schedule, prompt, agentId, model, workingFolder, sshConnectionId, deliveryMode, deliveryTarget, enabled, deleteAfterRun, maxIterations.',
           properties: {
             name: { type: 'string' },
             schedule: {
@@ -269,6 +270,7 @@ const cronUpdateHandler: ToolHandler = {
             agentId: { type: 'string' },
             model: { type: 'string' },
             workingFolder: { type: 'string' },
+            sshConnectionId: { type: 'string' },
             deliveryMode: { type: 'string' },
             deliveryTarget: { type: 'string' },
             enabled: { type: 'boolean' },
@@ -283,10 +285,21 @@ const cronUpdateHandler: ToolHandler = {
   execute: async (input, ctx) => {
     const jobId = String(input.jobId ?? '')
     if (!jobId) return encodeStructuredToolResult({ error: 'jobId is required' })
+    const patch =
+      input.patch && typeof input.patch === 'object'
+        ? { ...(input.patch as Record<string, unknown>) }
+        : {}
+    if (
+      ctx.sshConnectionId &&
+      patch.workingFolder !== undefined &&
+      patch.sshConnectionId === undefined
+    ) {
+      patch.sshConnectionId = ctx.sshConnectionId
+    }
 
     const result = (await ctx.ipc.invoke(IPC.CRON_UPDATE, {
       jobId,
-      patch: input.patch
+      patch
     })) as { error?: string; success?: boolean }
 
     if (result.error) return encodeStructuredToolResult({ error: result.error })
