@@ -96,6 +96,7 @@ export const TASK_TOOL_NAME = 'Task'
 interface TeamContext {
   limiter: ConcurrencyLimiter
   workingFolder?: string
+  sshConnectionId?: string
   defaultBackend?: 'in-process' | 'isolated-renderer'
 }
 
@@ -194,7 +195,8 @@ function scheduleNextTask(teamName: string): void {
         taskId: nextTask.id,
         model: null,
         agentName: null,
-        workingFolder: ctx.workingFolder
+        workingFolder: ctx.workingFolder,
+        sshConnectionId: ctx.sshConnectionId
       }).finally(() => {
         limiter.release()
         scheduleNextTask(teamName)
@@ -308,6 +310,7 @@ async function executeBackgroundTeammate(
   const teamName = team.name
   const teamCtx = getTeamContext(teamName)
   teamCtx.workingFolder = ctx.workingFolder
+  teamCtx.sshConnectionId = ctx.sshConnectionId
   teamCtx.defaultBackend = team.defaultBackend
   const limiter = teamCtx.limiter
   const backendType =
@@ -402,7 +405,8 @@ async function executeBackgroundTeammate(
               taskId: assignedTaskId,
               model: input.model ? String(input.model) : null,
               agentName: agentDefinition?.name ?? null,
-              workingFolder: ctx.workingFolder
+              workingFolder: ctx.workingFolder,
+              sshConnectionId: ctx.sshConnectionId ?? null
             }).then(markWorking)
           : markWorking().then(() =>
               runTeammate({
@@ -412,7 +416,8 @@ async function executeBackgroundTeammate(
                 taskId: assignedTaskId,
                 model: input.model ? String(input.model) : null,
                 agentName: agentDefinition?.name ?? null,
-                workingFolder: ctx.workingFolder
+                workingFolder: ctx.workingFolder,
+                sshConnectionId: ctx.sshConnectionId
               })
             )
 

@@ -75,6 +75,7 @@ interface WikiGeneratorOptions {
   projectId: string
   projectName: string
   workingFolder: string
+  sshConnectionId?: string | null
   mode: WikiGenerationMode
 }
 
@@ -538,6 +539,7 @@ async function generateStructure(options: {
   providerConfig: ProviderConfig
   projectName: string
   workingFolder: string
+  sshConnectionId?: string | null
   signal: AbortSignal
 }): Promise<WikiTreeNodeDraft[]> {
   const state: { nodes: WikiTreeNodeDraft[] | null } = { nodes: null }
@@ -563,6 +565,7 @@ async function generateStructure(options: {
         tools: toolDefs,
         sessionId: wikiSessionId,
         workingFolder: options.workingFolder,
+        sshConnectionId: options.sshConnectionId ?? undefined,
         maxIterations: 20,
         forceApproval: false
       })
@@ -647,6 +650,7 @@ async function generateLeafMarkdown(args: {
   providerConfig: ProviderConfig
   projectName: string
   workingFolder: string
+  sshConnectionId?: string | null
   document: WikiDocumentRow
   commitId: string | null
   signal: AbortSignal
@@ -657,6 +661,7 @@ async function generateLeafMarkdown(args: {
     parentProvider: { ...args.providerConfig, systemPrompt: undefined },
     toolContext: {
       workingFolder: args.workingFolder,
+      sshConnectionId: args.sshConnectionId ?? undefined,
       signal: args.signal,
       ipc: ipcClient
     },
@@ -800,6 +805,7 @@ export class WikiGeneratorController {
           providerConfig,
           projectName: options.projectName,
           workingFolder: options.workingFolder,
+          sshConnectionId: options.sshConnectionId,
           signal
         })
 
@@ -914,6 +920,7 @@ export class WikiGeneratorController {
                 providerConfig,
                 projectName: options.projectName,
                 workingFolder: options.workingFolder,
+                sshConnectionId: options.sshConnectionId,
                 document,
                 commitId: headCommitId,
                 signal

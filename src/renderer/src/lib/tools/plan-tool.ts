@@ -40,34 +40,53 @@ function isFsErrorResult(value: unknown): value is { error: string } {
 }
 
 async function ensurePlanFile(
-  ipc: ToolContext['ipc'],
+  ctx: ToolContext,
   workingFolder: string,
   planFilePath: string
 ): Promise<void> {
+  const ipc = ctx.ipc
+  const sshConnectionId = ctx.sshConnectionId?.trim()
   const planDirectory = joinFsPath(workingFolder, PLAN_DIRECTORY_NAME)
-  const mkdirResult = await ipc.invoke(IPC.FS_MKDIR, { path: planDirectory })
+  const mkdirResult = await ipc.invoke(
+    sshConnectionId ? IPC.SSH_FS_MKDIR : IPC.FS_MKDIR,
+    sshConnectionId
+      ? { connectionId: sshConnectionId, path: planDirectory }
+      : { path: planDirectory }
+  )
   if (isFsErrorResult(mkdirResult)) {
     throw new Error(`Failed to create plan directory: ${mkdirResult.error}`)
   }
 
-  const readResult = await ipc.invoke(IPC.FS_READ_FILE, { path: planFilePath })
+  const readResult = await ipc.invoke(
+    sshConnectionId ? IPC.SSH_FS_READ_FILE : IPC.FS_READ_FILE,
+    sshConnectionId ? { connectionId: sshConnectionId, path: planFilePath } : { path: planFilePath }
+  )
   if (!isFsErrorResult(readResult)) return
 
   if (!/ENOENT|No such file/i.test(readResult.error)) {
     throw new Error(`Failed to access plan file: ${readResult.error}`)
   }
 
-  const writeResult = await ipc.invoke(IPC.FS_WRITE_FILE, {
-    path: planFilePath,
-    content: ''
-  })
+  const writeResult = await ipc.invoke(
+    sshConnectionId ? IPC.SSH_FS_WRITE_FILE : IPC.FS_WRITE_FILE,
+    sshConnectionId
+      ? { connectionId: sshConnectionId, path: planFilePath, content: '' }
+      : {
+          path: planFilePath,
+          content: ''
+        }
+  )
   if (isFsErrorResult(writeResult)) {
     throw new Error(`Failed to initialize plan file: ${writeResult.error}`)
   }
 }
 
-async function readPlanFile(ipc: ToolContext['ipc'], planFilePath: string): Promise<string> {
-  const result = await ipc.invoke(IPC.FS_READ_FILE, { path: planFilePath })
+async function readPlanFile(ctx: ToolContext, planFilePath: string): Promise<string> {
+  const sshConnectionId = ctx.sshConnectionId?.trim()
+  const result = await ctx.ipc.invoke(
+    sshConnectionId ? IPC.SSH_FS_READ_FILE : IPC.FS_READ_FILE,
+    sshConnectionId ? { connectionId: sshConnectionId, path: planFilePath } : { path: planFilePath }
+  )
   if (isFsErrorResult(result)) {
     throw new Error(result.error)
   }
@@ -165,7 +184,7 @@ const enterPlanModeHandler: ToolHandler = {
       (existingPlan.status === 'drafting' || existingPlan.status === 'rejected')
     ) {
       try {
-        await ensurePlanFile(ctx.ipc, workingFolder, existingPlan.filePath)
+        await ensurePlanFile(ctx, workingFolder, existingPlan.filePath)
       } catch (error) {
         return encodeToolError(error instanceof Error ? error.message : String(error))
       }
@@ -189,7 +208,7 @@ const enterPlanModeHandler: ToolHandler = {
     planStore.updatePlan(plan.id, { filePath: planFilePath })
 
     try {
-      await ensurePlanFile(ctx.ipc, workingFolder, planFilePath)
+      await ensurePlanFile(ctx, workingFolder, planFilePath)
     } catch (error) {
       planStore.deletePlan(plan.id)
       return encodeToolError(error instanceof Error ? error.message : String(error))
@@ -267,7 +286,7 @@ const exitPlanModeHandler: ToolHandler = {
 
     let content = ''
     try {
-      content = await readPlanFile(ctx.ipc, plan.filePath)
+      content = await readPlanFile(ctx, plan.filePath)
     } catch (error) {
       return encodeToolError(
         `Failed to read the current plan file before exiting plan mode: ${error instanceof Error ? error.message : String(error)}`
