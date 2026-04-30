@@ -1,11 +1,11 @@
 import { toolRegistry } from '../agent/tool-registry'
 import { IPC } from '../ipc/channels'
+import { DEFAULT_COMMAND_TIMEOUT_MS, selectCommandExecutor } from './command-executor'
 import { encodeStructuredToolResult } from './tool-result-format'
 import type { ToolHandler } from './tool-types'
 import { useAgentStore } from '@renderer/stores/agent-store'
 
 let execCounter = 0
-const DEFAULT_BASH_TIMEOUT_MS = 600_000
 const LONG_RUNNING_COMMAND_PATTERNS: RegExp[] = [
   /\b(npm|pnpm|yarn|bun)\s+(run\s+)?(dev|start|serve)\b/i,
   /\b(next|vite|nuxt|astro)\s+dev\b/i,
@@ -170,18 +170,14 @@ const bashHandler: ToolHandler = {
       return encodeStructuredToolResult({ exitCode: 1, stderr: 'Missing command' })
     }
 
-    // SSH routing: execute command on remote server via ssh:exec
-    if (ctx.sshConnectionId) {
-      const result = (await ctx.ipc.invoke(IPC.SSH_EXEC, {
-        connectionId: ctx.sshConnectionId,
-        command: ctx.workingFolder ? `cd ${ctx.workingFolder} && ${command}` : command,
-        timeout: input.timeout ?? DEFAULT_BASH_TIMEOUT_MS
-      })) as { exitCode?: number; stdout?: string; stderr?: string; error?: string }
-
-      if (result.error) {
-        return encodeStructuredToolResult({ exitCode: 1, stderr: result.error })
-      }
-      return encodeStructuredToolResult(result as Record<string, unknown>)
+    const commandExecutor = selectCommandExecutor(ctx)
+    if (commandExecutor?.transport === 'ssh') {
+      return (
+        await commandExecutor.executeForeground({
+          command,
+          timeout: typeof input.timeout === 'number' ? input.timeout : DEFAULT_COMMAND_TIMEOUT_MS
+        })
+      ).output
     }
 
     const explicitBackground =
@@ -303,7 +299,7 @@ const bashHandler: ToolHandler = {
     try {
       const result = (await ctx.ipc.invoke(IPC.SHELL_EXEC, {
         command,
-        timeout: input.timeout ?? DEFAULT_BASH_TIMEOUT_MS,
+        timeout: input.timeout ?? DEFAULT_COMMAND_TIMEOUT_MS,
         cwd: ctx.workingFolder,
         execId
       })) as { processId?: string; terminalId?: string }

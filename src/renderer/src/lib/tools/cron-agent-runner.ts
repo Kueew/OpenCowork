@@ -100,6 +100,7 @@ export interface CronAgentRunOptions {
   agentId?: string | null
   model?: string | null
   workingFolder?: string | null
+  sshConnectionId?: string | null
   firedAt?: number
   deliveryMode?: string
   deliveryTarget?: string | null
@@ -260,6 +261,7 @@ async function _runCronAgentAsync(
     agentId,
     model: modelOverride,
     workingFolder,
+    sshConnectionId,
     firedAt,
     deliveryMode: _deliveryMode = 'desktop',
     deliveryTarget,
@@ -289,6 +291,8 @@ async function _runCronAgentAsync(
   const sourceSessionTitle = sourceSession?.title ?? null
   const sourceProjectId = sourceProject?.id ?? sourceSession?.projectId ?? null
   const sourceProjectName = sourceProject?.name ?? null
+  const effectiveSshConnectionId =
+    sshConnectionId || sourceSession?.sshConnectionId || sourceProject?.sshConnectionId || null
 
   const persistRunCreate = async (): Promise<void> => {
     await ipcClient.invoke(IPC.CRON_RUN_CREATE, {
@@ -492,6 +496,7 @@ Begin working on this task now.`
     tools: innerTools,
     sessionId: deliveryTarget ?? undefined,
     workingFolder: effectiveWorkingFolder ?? undefined,
+    sshConnectionId: effectiveSshConnectionId ?? undefined,
     maxIterations: maxIter ?? definition.maxTurns,
     forceApproval: false,
     pluginId: channelsId ?? undefined,

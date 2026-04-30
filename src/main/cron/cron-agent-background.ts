@@ -20,6 +20,7 @@ import type {
 } from '../../shared/agent-loop-types'
 export type { ToolCallState, InteractiveAgentEvent }
 import { executePluginAction } from '../ipc/channel-handlers'
+import { getSshClientForGitExec } from '../ipc/ssh-handlers'
 import { safeSendToAllWindows } from '../window-ipc'
 import { getDb } from '../db/database'
 import {
@@ -357,6 +358,7 @@ export interface CronAgentRunOptions {
   model?: string | null
   sourceProviderId?: string | null
   workingFolder?: string | null
+  sshConnectionId?: string | null
   firedAt?: number
   deliveryMode?: string
   deliveryTarget?: string | null
@@ -3114,13 +3116,86 @@ function isAbsolutePath(inputPath: string): boolean {
   return /^[a-zA-Z]:[\\/]/.test(inputPath)
 }
 
-function resolveToolPath(inputPath: unknown, workingFolder?: string): string {
+function shellEscape(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`
+}
+
+function resolveToolPath(inputPath: unknown, workingFolder?: string, isRemote = false): string {
   const raw = typeof inputPath === 'string' ? inputPath.trim() : ''
   const base = workingFolder?.trim()
   if (!raw || raw === '.') return base && base.length > 0 ? base : '.'
   if (isAbsolutePath(raw)) return raw
-  if (base && base.length > 0) return path.join(base, raw)
+  if (base && base.length > 0) return isRemote ? path.posix.join(base, raw) : path.join(base, raw)
   return raw
+}
+
+async function sshExecForCron(
+  connectionId: string,
+  command: string,
+  timeout = DEFAULT_BASH_TIMEOUT_MS
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  const client = await getSshClientForGitExec(connectionId)
+  if (!client) {
+    return { exitCode: 1, stdout: '', stderr: `SSH connection unavailable: ${connectionId}` }
+  }
+
+  return await new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      resolve({ exitCode: 124, stdout: '', stderr: 'SSH exec timeout' })
+    }, timeout)
+
+    client.exec(command, (err, stream) => {
+      if (err) {
+        clearTimeout(timer)
+        resolve({ exitCode: 1, stdout: '', stderr: err.message })
+        return
+      }
+
+      let stdout = ''
+      let stderr = ''
+      stream.on('data', (chunk: Buffer) => {
+        stdout += chunk.toString('utf8')
+      })
+      stream.stderr?.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString('utf8')
+      })
+      stream.on('close', (code: number) => {
+        clearTimeout(timer)
+        resolve({ exitCode: code ?? 0, stdout, stderr })
+      })
+    })
+  })
+}
+
+async function readTextForCron(ctx: ToolContext, filePath: string): Promise<string> {
+  if (ctx.sshConnectionId) {
+    const result = await sshExecForCron(ctx.sshConnectionId, `cat ${shellEscape(filePath)}`)
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr || `Remote read failed: ${filePath}`)
+    }
+    return result.stdout
+  }
+  return await fs.promises.readFile(filePath, 'utf8')
+}
+
+async function writeTextForCron(
+  ctx: ToolContext,
+  filePath: string,
+  content: string
+): Promise<void> {
+  if (ctx.sshConnectionId) {
+    const encoded = Buffer.from(content, 'utf8').toString('base64')
+    const command =
+      `mkdir -p ${shellEscape(path.posix.dirname(filePath))} && ` +
+      `printf %s ${shellEscape(encoded)} | base64 -d > ${shellEscape(filePath)}`
+    const result = await sshExecForCron(ctx.sshConnectionId, command)
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr || `Remote write failed: ${filePath}`)
+    }
+    return
+  }
+  await fs.promises.mkdir(path.dirname(filePath), { recursive: true })
+  await fs.promises.writeFile(filePath, content, 'utf8')
 }
 
 function countOccurrences(content: string, value: string): number {
@@ -3147,8 +3222,12 @@ function buildToolHandlers(): Record<string, ToolHandler> {
       }
     },
     execute: async (input, ctx) => {
-      const resolvedPath = resolveToolPath(input.file_path, ctx.workingFolder)
-      const content = await fs.promises.readFile(resolvedPath, 'utf8')
+      const resolvedPath = resolveToolPath(
+        input.file_path,
+        ctx.workingFolder,
+        !!ctx.sshConnectionId
+      )
+      const content = await readTextForCron(ctx, resolvedPath)
       if (input.offset !== undefined || input.limit !== undefined) {
         const lines = content.split('\n')
         const start = (Number(input.offset ?? 1) || 1) - 1
@@ -3180,13 +3259,24 @@ function buildToolHandlers(): Record<string, ToolHandler> {
       }
     },
     execute: async (input, ctx) => {
-      const resolvedPath = resolveToolPath(input.file_path, ctx.workingFolder)
-      const beforeExists = await fs.promises
-        .access(resolvedPath)
-        .then(() => true)
-        .catch(() => false)
-      await fs.promises.mkdir(path.dirname(resolvedPath), { recursive: true })
-      await fs.promises.writeFile(resolvedPath, String(input.content ?? ''), 'utf8')
+      const resolvedPath = resolveToolPath(
+        input.file_path,
+        ctx.workingFolder,
+        !!ctx.sshConnectionId
+      )
+      const beforeExists = ctx.sshConnectionId
+        ? (
+            await sshExecForCron(
+              ctx.sshConnectionId,
+              `test -e ${shellEscape(resolvedPath)}`,
+              15_000
+            )
+          ).exitCode === 0
+        : await fs.promises
+            .access(resolvedPath)
+            .then(() => true)
+            .catch(() => false)
+      await writeTextForCron(ctx, resolvedPath, String(input.content ?? ''))
       return encodeStructuredToolResult({
         success: true,
         path: resolvedPath,
@@ -3214,8 +3304,12 @@ function buildToolHandlers(): Record<string, ToolHandler> {
       }
     },
     execute: async (input, ctx) => {
-      const resolvedPath = resolveToolPath(input.file_path, ctx.workingFolder)
-      const content = await fs.promises.readFile(resolvedPath, 'utf8')
+      const resolvedPath = resolveToolPath(
+        input.file_path,
+        ctx.workingFolder,
+        !!ctx.sshConnectionId
+      )
+      const content = await readTextForCron(ctx, resolvedPath)
       const oldStr = String(input.old_string ?? '')
       const newStr = String(input.new_string ?? '')
       const replaceAll = Boolean(input.replace_all)
@@ -3238,7 +3332,7 @@ function buildToolHandlers(): Record<string, ToolHandler> {
         ? content.split(oldStr).join(newStr)
         : content.replace(oldStr, newStr)
 
-      await fs.promises.writeFile(resolvedPath, updated, 'utf8')
+      await writeTextForCron(ctx, resolvedPath, updated)
       return encodeStructuredToolResult({
         success: true,
         path: resolvedPath,
@@ -3264,7 +3358,40 @@ function buildToolHandlers(): Record<string, ToolHandler> {
       }
     },
     execute: async (input, ctx) => {
-      const targetPath = resolveToolPath(input.path ?? '.', ctx.workingFolder)
+      const targetPath = resolveToolPath(
+        input.path ?? '.',
+        ctx.workingFolder,
+        !!ctx.sshConnectionId
+      )
+      if (ctx.sshConnectionId) {
+        const result = await sshExecForCron(
+          ctx.sshConnectionId,
+          `find ${shellEscape(targetPath)} -mindepth 1 -maxdepth 1 ` +
+            `\\( -type f -o -type d \\) -printf '%f\\t%y\\t%p\\n' | head -1000`,
+          60_000
+        )
+        if (result.exitCode !== 0) {
+          return encodeToolError(result.stderr || `Remote LS failed: ${targetPath}`)
+        }
+        const ignore = Array.isArray(input.ignore)
+          ? input.ignore.filter((item): item is string => typeof item === 'string')
+          : []
+        const items = result.stdout
+          .split(/\r?\n/)
+          .filter(Boolean)
+          .map((line) => {
+            const [name, type, entryPath] = line.split('\t')
+            return {
+              name,
+              type: type === 'd' ? 'directory' : 'file',
+              path: entryPath
+            }
+          })
+          .filter(
+            (entry) => !ignore.some((pattern) => entry.name.includes(pattern.replace(/[*?]/g, '')))
+          )
+        return encodeStructuredToolResult(items)
+      }
       const entries = await fs.promises.readdir(targetPath, { withFileTypes: true })
       const ignore = Array.isArray(input.ignore)
         ? input.ignore.filter((item): item is string => typeof item === 'string')
@@ -3297,8 +3424,32 @@ function buildToolHandlers(): Record<string, ToolHandler> {
       }
     },
     execute: async (input, ctx) => {
-      const cwd = resolveToolPath(input.path ?? '.', ctx.workingFolder)
+      const cwd = resolveToolPath(input.path ?? '.', ctx.workingFolder, !!ctx.sshConnectionId)
       const pattern = String(input.pattern ?? '')
+      if (ctx.sshConnectionId) {
+        const nameOrPath = pattern.includes('/') ? '-path' : '-name'
+        const remotePattern = pattern.includes('/')
+          ? `./${pattern.startsWith('./') ? pattern.slice(2) : pattern}`
+          : pattern
+        const result = await sshExecForCron(
+          ctx.sshConnectionId,
+          `cd ${shellEscape(cwd)} && find . -type f ${nameOrPath} ${shellEscape(remotePattern)} -print | head -1000`,
+          60_000
+        )
+        if (result.exitCode !== 0) {
+          return formatGlobToolResult({
+            matches: [],
+            error: result.stderr || `Remote glob failed: ${pattern}`
+          })
+        }
+        return formatGlobToolResult({
+          matches: result.stdout
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .map((line) => path.posix.join(cwd, line.replace(/^\.\//, '')))
+        })
+      }
       try {
         const matches = await glob(pattern, {
           cwd,
@@ -3332,7 +3483,11 @@ function buildToolHandlers(): Record<string, ToolHandler> {
       }
     },
     execute: async (input, ctx) => {
-      const searchRoot = resolveToolPath(input.path ?? '.', ctx.workingFolder)
+      const searchRoot = resolveToolPath(
+        input.path ?? '.',
+        ctx.workingFolder,
+        !!ctx.sshConnectionId
+      )
       const pattern = String(input.pattern ?? '')
       const include =
         typeof input.include === 'string' && input.include.trim() ? input.include.trim() : '**/*'
@@ -3348,6 +3503,34 @@ function buildToolHandlers(): Record<string, ToolHandler> {
       }
 
       try {
+        if (ctx.sshConnectionId) {
+          const result = await sshExecForCron(
+            ctx.sshConnectionId,
+            `cd ${shellEscape(searchRoot)} && grep -RIn --include=${shellEscape(include)} ${shellEscape(pattern)} . 2>/dev/null | head -200`,
+            60_000
+          )
+          if (result.exitCode !== 0 && result.exitCode !== 1) {
+            return formatGrepToolResult({
+              matches: [],
+              error: result.stderr || `Remote grep failed: ${pattern}`
+            })
+          }
+          return formatGrepToolResult({
+            matches: result.stdout
+              .split(/\r?\n/)
+              .filter(Boolean)
+              .map((line) => {
+                const match = line.match(/^(.+?):(\d+):(.*)$/)
+                if (!match) return null
+                return {
+                  file: path.posix.join(searchRoot, match[1].replace(/^\.\//, '')),
+                  line: Number(match[2]),
+                  text: match[3]
+                }
+              })
+              .filter((item): item is { file: string; line: number; text: string } => !!item)
+          })
+        }
         const files = await glob(include, {
           cwd: searchRoot,
           nodir: true,
@@ -3408,6 +3591,14 @@ function buildToolHandlers(): Record<string, ToolHandler> {
       const command = String(input.command ?? '').trim()
       if (!command) return encodeStructuredToolResult({ exitCode: 1, stderr: 'Missing command' })
       const timeout = Number(input.timeout ?? DEFAULT_BASH_TIMEOUT_MS)
+      if (ctx.sshConnectionId) {
+        const remoteCommand = ctx.workingFolder
+          ? `cd ${shellEscape(ctx.workingFolder)} && ${command}`
+          : command
+        return encodeStructuredToolResult(
+          await sshExecForCron(ctx.sshConnectionId, remoteCommand, timeout)
+        )
+      }
       return await new Promise<string>((resolve) => {
         const child = spawn(command, {
           cwd: ctx.workingFolder || process.cwd(),
@@ -4215,6 +4406,7 @@ async function runCronAgentInternal(
     model: modelOverride,
     sourceProviderId,
     workingFolder,
+    sshConnectionId,
     firedAt,
     deliveryMode = 'desktop',
     deliveryTarget,
@@ -4341,6 +4533,7 @@ async function runCronAgentInternal(
   const toolCtx: ToolContext = {
     sessionId: deliveryTarget ?? undefined,
     workingFolder: workingFolder ?? undefined,
+    sshConnectionId: sshConnectionId ?? undefined,
     signal: controller.signal,
     callerAgent: 'CronAgent',
     pluginId: pluginId ?? undefined,
